@@ -165,56 +165,67 @@ fn validate_guardian_candidates(
     Ok(())
 }
 
-fn prepare_recovery_setup(
+struct SetupServiceSnapshot {
+    session: crate::session::SessionToken,
+    contacts: Vec<FrontendContact>,
+    my_identity: human_money_core::UserIdentity,
+    my_profile_name: String,
+    old_owner_state: Option<RecoveryOwnerState>,
+    owner_account_id: String,
+    master_payload: RecoveryMasterPayload,
+}
+
+fn read_recovery_setup_from_service(
+    service: &mut human_money_core::app_service::AppService,
     password: &str,
     guardian_dids: &[String],
     state: &AppState,
     app: Option<&tauri::AppHandle>,
-) -> Result<PreparedRecoverySetup, FrontendError> {
-    let (
-        session,
-        phrase,
-        lang,
-        has_bip39_passphrase,
-        contacts,
-        my_identity,
-        my_prefix,
-        my_profile_name,
-        old_owner_state,
-    ) = {
-        let mut service =
-            state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(password))?;
-        let session = state.session_token_for_service(&service)?;
-        let exp = service
-            .export_mnemonic(password)
-            .map_err(FrontendError::from)?;
-        let (phrase, lang, has_bip39_passphrase) = exp.ok_or_else(|| {
-            FrontendError::from("Mnemonic phrase required to setup social recovery".to_string())
-        })?;
-        let contacts = state.load_contacts(&mut service, Some(password))?;
-        let (my_identity, my_prefix, my_profile_name) =
-            resolve_setup_profile_identity(&service, app)?;
-        validate_guardian_candidates(&service, guardian_dids, &my_identity.user_id, &contacts)?;
-        let old_owner_state = load_recovery_owner_state(&mut service, Some(password))?;
-        (
-            session,
-            phrase,
-            lang,
-            has_bip39_passphrase,
-            contacts,
-            my_identity,
-            my_prefix,
-            my_profile_name,
-            old_owner_state,
-        )
-    };
+) -> Result<SetupServiceSnapshot, FrontendError> {
+    let session = state.session_token_for_service(service)?;
+    let exp = service
+        .export_mnemonic(password)
+        .map_err(FrontendError::from)?;
+    let (phrase, lang, has_bip39_passphrase) = exp.ok_or_else(|| {
+        FrontendError::from("Mnemonic phrase required to setup social recovery".to_string())
+    })?;
+    let contacts = state.load_contacts(service, Some(password))?;
+    let (my_identity, my_prefix, my_profile_name) = resolve_setup_profile_identity(service, app)?;
+    validate_guardian_candidates(service, guardian_dids, &my_identity.user_id, &contacts)?;
+    let old_owner_state = load_recovery_owner_state(service, Some(password))?;
 
     let entropy = zeroize::Zeroizing::new(
         human_money_core::services::mnemonic::MnemonicProcessor::to_entropy(&phrase, lang)
             .map_err(|e| FrontendError::from(e.to_string()))?,
     );
+    let owner_account_id =
+        canonicalize_owner_account_id(&my_identity.user_id).map_err(FrontendError::from)?;
+    let master_payload = RecoveryMasterPayload::new(
+        &owner_account_id,
+        entropy.to_vec(),
+        lang,
+        my_prefix,
+        has_bip39_passphrase,
+    );
 
-    let old_epoch = old_owner_state
+    Ok(SetupServiceSnapshot {
+        session,
+        contacts,
+        my_identity,
+        my_profile_name,
+        old_owner_state,
+        owner_account_id,
+        master_payload,
+    })
+}
+
+fn build_prepared_recovery_setup(
+    state: &AppState,
+    password: &str,
+    snap: SetupServiceSnapshot,
+) -> Result<PreparedRecoverySetup, FrontendError> {
+    let old_epoch = snap
+        .old_owner_state
         .as_ref()
         .map(|s| s.rotation_epoch)
         .unwrap_or(0);
@@ -222,7 +233,7 @@ fn prepare_recovery_setup(
     let now_secs = crate::sync_client::current_unix_timestamp();
 
     let (security_policy, backup_descriptors) = state.with_session_required(
-        &session,
+        &snap.session,
         "Active wallet session changed during social recovery setup",
         |service| {
             let sp = state
@@ -239,33 +250,23 @@ fn prepare_recovery_setup(
     )?;
     let reply_drops: Vec<DropDescriptor> = collect_own_reply_syncs(
         &security_policy,
-        human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
+        human_money_core::crypto::get_prefix_from_user_id(&snap.my_identity.user_id),
     )
     .into_iter()
     .map(Into::into)
     .collect();
 
-    let owner_account_id =
-        canonicalize_owner_account_id(&my_identity.user_id).map_err(FrontendError::from)?;
-    let master_payload = RecoveryMasterPayload::new(
-        &owner_account_id,
-        entropy.to_vec(),
-        lang,
-        my_prefix,
-        has_bip39_passphrase,
-    );
-
     Ok(PreparedRecoverySetup {
-        session,
-        contacts,
-        my_identity,
-        my_profile_name,
-        old_owner_state,
+        session: snap.session,
+        contacts: snap.contacts,
+        my_identity: snap.my_identity,
+        my_profile_name: snap.my_profile_name,
+        old_owner_state: snap.old_owner_state,
         new_epoch,
         now_secs,
         reply_drops,
-        owner_account_id,
-        master_payload,
+        owner_account_id: snap.owner_account_id,
+        master_payload: snap.master_payload,
         backup_descriptors,
     })
 }
@@ -449,7 +450,12 @@ pub async fn setup_social_recovery_guardians_with_params(
     // Serialize concurrent setup/revocation operations under `recovery_op_lock` BEFORE reading epoch & committing.
     let (new_epoch, guardians_count, setup_session) = {
         let _recovery_guard = state.recovery_op_lock.lock().await;
-        let prepared = prepare_recovery_setup(&password, &guardian_dids, state, app)?;
+        let snap = {
+            let mut service =
+                state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
+            read_recovery_setup_from_service(&mut service, &password, &guardian_dids, state, app)?
+        };
+        let prepared = build_prepared_recovery_setup(state, &password, snap)?;
         let (entries, answer_verifiers) = derive_vault_entries_and_verifiers(
             &prepared,
             guardian_dids.len() as u8,
