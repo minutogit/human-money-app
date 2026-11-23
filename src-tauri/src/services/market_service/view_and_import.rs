@@ -3,8 +3,146 @@ use super::storage::*;
 use crate::models::{
     FrontendBoardItem, FrontendError, FrontendForwardCardExport, FrontendImportCardResult,
     FrontendMarketPerson, FrontendMarketSnapshot, FrontendResolvedCardRecipient, FrontendTrustTier,
+    StoredOwnMarketProfile,
 };
 use crate::state::{AppState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY};
+use human_money_core::app_service::AppService;
+
+fn auto_renew_own_card_if_needed(
+    state: &AppState,
+    service: &mut AppService,
+    stored_opt: &mut Option<StoredOwnMarketProfile>,
+    can_persist: bool,
+    pw: Option<&str>,
+    now: u64,
+) {
+    if !can_persist {
+        return;
+    }
+    let Some(ref mut stored) = stored_opt else {
+        return;
+    };
+    if !stored.published {
+        return;
+    }
+    let active_user_id = service
+        .with_wallet(|w| w.get_user_id().to_string())
+        .ok()
+        .unwrap_or_default();
+    let Some(ref last_card) = stored.last_card else {
+        return;
+    };
+    let active_ads_count = stored
+        .ads
+        .iter()
+        .filter(|a| a.is_published_active(now))
+        .count() as u8;
+    let time_left = last_card.payload.valid_until.saturating_sub(now);
+    let recipient_changed = !active_user_id.trim().is_empty()
+        && last_card.payload.recipient_id() != active_user_id.trim();
+    if time_left < humoco_market::CARD_AUTO_RENEW_THRESHOLD_SECS
+        || last_card.payload.ad_count != active_ads_count
+        || recipient_changed
+    {
+        if let Ok(()) = rebuild_and_sign_own_card(service, stored, now) {
+            let _ = save_own_market_profile_state(state, service, stored, pw);
+        }
+    }
+}
+
+fn load_known_contact_canonical_dids(
+    state: &AppState,
+    service: &mut AppService,
+    pw: Option<&str>,
+) -> Result<std::collections::HashSet<String>, FrontendError> {
+    let ab =
+        match state.cache_contacts() {
+            Some(ab) => ab,
+            None => crate::state::load_encrypted_json_or_default::<
+                crate::models::FrontendAddressBook,
+            >(service, CONTACTS_DATA_NAME, pw)
+            .map_err(FrontendError::from)?,
+        };
+    Ok(ab
+        .contacts
+        .keys()
+        .map(|k| crate::state::canonicalize_did(k).unwrap_or_else(|_| k.clone()))
+        .collect())
+}
+
+fn wallet_owner_display_name(prof: &human_money_core::models::profile::PublicProfile) -> String {
+    let name = [prof.first_name.as_deref(), prof.last_name.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !name.is_empty() {
+        name
+    } else if let Some(ref org) = prof.organization {
+        org.clone()
+    } else if let Some(ref com) = prof.community {
+        com.clone()
+    } else {
+        "Ich".to_string()
+    }
+}
+
+fn append_own_ads_and_sort_board(
+    board: &mut Vec<FrontendBoardItem>,
+    stored_opt: Option<&StoredOwnMarketProfile>,
+    canonical_own_did: &str,
+    own_did: &str,
+    wallet_owner_name: &str,
+    now: u64,
+) {
+    if let Some(stored) = stored_opt {
+        if stored.published {
+            for entry in &stored.ads {
+                if entry.is_published_active(now) {
+                    let days_left = entry.ad.expires_at.saturating_sub(now).div_ceil(86_400);
+                    board.push(FrontendBoardItem {
+                        owner_did: canonical_own_did.to_string(),
+                        recipient_did: own_did.to_string(),
+                        owner_name: wallet_owner_name.to_string(),
+                        trust: FrontendTrustTier::Trusted,
+                        ad: entry.ad.clone(),
+                        days_left,
+                        is_own: true,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort combined board vector descending by renewed_at / published_at
+    board.sort_by(|a, b| {
+        let time_a = a.ad.renewed_at.unwrap_or(a.ad.published_at);
+        let time_b = b.ad.renewed_at.unwrap_or(b.ad.published_at);
+        time_b.cmp(&time_a).then_with(|| a.ad.id.cmp(&b.ad.id))
+    });
+}
+
+fn attach_sync_sources_to_persons(
+    persons: &mut [FrontendMarketPerson],
+    sync_sources_by_did: &std::collections::BTreeMap<String, String>,
+) {
+    for person in persons.iter_mut() {
+        let can_did =
+            crate::state::canonicalize_did(&person.did).unwrap_or_else(|_| person.did.clone());
+        if let Some(read_url) = sync_sources_by_did
+            .get(&person.recipient_did)
+            .or_else(|| sync_sources_by_did.get(&person.did))
+            .or_else(|| sync_sources_by_did.get(&can_did))
+        {
+            let sync_src = crate::models::FrontendEntrySource::Sync {
+                read_url: read_url.clone(),
+            };
+            if !person.sources.contains(&sync_src) {
+                person.sources.push(sync_src);
+            }
+        }
+    }
+}
 
 pub fn get_market_view_impl(
     password: Option<String>,
@@ -21,46 +159,16 @@ pub fn get_market_view_impl(
 
     // Auto-renew own card if published and (validity < 30 days OR active ads count changed)
     let mut stored_opt = load_own_market_profile_state(state, &mut service, pw).ok();
-
-    if can_persist {
-        if let Some(ref mut stored) = stored_opt {
-            if stored.published {
-                let active_user_id = service
-                    .with_wallet(|w| w.get_user_id().to_string())
-                    .ok()
-                    .unwrap_or_default();
-                if let Some(ref last_card) = stored.last_card {
-                    let active_ads_count = stored
-                        .ads
-                        .iter()
-                        .filter(|a| a.is_published_active(now))
-                        .count() as u8;
-                    let time_left = last_card.payload.valid_until.saturating_sub(now);
-                    let recipient_changed = !active_user_id.trim().is_empty()
-                        && last_card.payload.recipient_id() != active_user_id.trim();
-                    if time_left < humoco_market::CARD_AUTO_RENEW_THRESHOLD_SECS
-                        || last_card.payload.ad_count != active_ads_count
-                        || recipient_changed
-                    {
-                        if let Ok(()) = rebuild_and_sign_own_card(&mut service, stored, now) {
-                            let _ = save_own_market_profile_state(state, &mut service, stored, pw);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    auto_renew_own_card_if_needed(state, &mut service, &mut stored_opt, can_persist, pw, now);
 
     let ui_prefs = state
         .get_or_load_ui_preferences(&mut service, pw)
         .map_err(FrontendError::from)?;
-
     let reg = state.get_or_load_wot_register(&mut service, pw).ok();
 
     let mut store = state
         .load_card_store_or_cached(&mut service, pw)
         .map_err(FrontendError::from)?;
-
     let before_count = store.cards.len();
     store.cards.retain(|_, c| c.card.payload.valid_until > now);
     if store.cards.len() != before_count && can_persist {
@@ -70,45 +178,16 @@ pub fn get_market_view_impl(
     }
 
     let cards_vec: Vec<humoco_market::StoredCard> = store.cards.values().cloned().collect();
-
     let sync_state = state
         .load_sync_state_or_cached(&mut service, pw)
         .map_err(FrontendError::from)?;
-
-    let known_contact_dids: std::collections::HashSet<String> = {
-        let cached = state.cache_contacts();
-        let ab = match cached {
-            Some(ab) => ab,
-            None => crate::state::load_encrypted_json_or_default::<
-                crate::models::FrontendAddressBook,
-            >(&mut service, CONTACTS_DATA_NAME, pw)
-            .map_err(FrontendError::from)?,
-        };
-        ab.contacts
-            .keys()
-            .map(|k| crate::state::canonicalize_did(k).unwrap_or_else(|_| k.clone()))
-            .collect()
-    };
+    let known_contact_dids = load_known_contact_canonical_dids(state, &mut service, pw)?;
 
     let (raw_persons, own_did, wallet_owner_name) = service
         .with_wallet(|wallet| {
             let own_did = wallet.get_user_id().to_string();
             let prof = wallet.profile.to_public_profile();
-            let name = [prof.first_name.as_deref(), prof.last_name.as_deref()]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let owner_name = if !name.is_empty() {
-                name
-            } else if let Some(ref org) = prof.organization {
-                org.clone()
-            } else if let Some(ref com) = prof.community {
-                com.clone()
-            } else {
-                "Ich".to_string()
-            };
-
+            let owner_name = wallet_owner_display_name(&prof);
             let vouchers: Vec<&human_money_core::Voucher> = wallet
                 .voucher_store
                 .vouchers
@@ -147,39 +226,19 @@ pub fn get_market_view_impl(
     let canonical_own_did =
         crate::state::canonicalize_did(&own_did).unwrap_or_else(|_| own_did.clone());
 
-    let raw_board = humoco_market::build_ad_board(&raw_persons);
-
-    let mut board: Vec<FrontendBoardItem> = raw_board
+    let mut board: Vec<FrontendBoardItem> = humoco_market::build_ad_board(&raw_persons)
         .into_iter()
         .filter(|bi| ui_prefs.market_show_unknown || bi.trust == humoco_market::TrustTier::Trusted)
         .map(|bi| FrontendBoardItem::from_board_item(bi, now))
         .collect();
-
-    if let Some(ref stored) = stored_opt {
-        if stored.published {
-            for entry in &stored.ads {
-                if entry.is_published_active(now) {
-                    let days_left = entry.ad.expires_at.saturating_sub(now).div_ceil(86_400);
-                    board.push(FrontendBoardItem {
-                        owner_did: canonical_own_did.clone(),
-                        recipient_did: own_did.clone(),
-                        owner_name: wallet_owner_name.clone(),
-                        trust: FrontendTrustTier::Trusted,
-                        ad: entry.ad.clone(),
-                        days_left,
-                        is_own: true,
-                    });
-                }
-            }
-        }
-    }
-
-    // Sort combined board vector descending by renewed_at / published_at
-    board.sort_by(|a, b| {
-        let time_a = a.ad.renewed_at.unwrap_or(a.ad.published_at);
-        let time_b = b.ad.renewed_at.unwrap_or(b.ad.published_at);
-        time_b.cmp(&time_a).then_with(|| a.ad.id.cmp(&b.ad.id))
-    });
+    append_own_ads_and_sort_board(
+        &mut board,
+        stored_opt.as_ref(),
+        &canonical_own_did,
+        &own_did,
+        &wallet_owner_name,
+        now,
+    );
 
     let mut persons: Vec<FrontendMarketPerson> = raw_persons
         .into_iter()
@@ -195,24 +254,7 @@ pub fn get_market_view_impl(
         })
         .map(FrontendMarketPerson::from)
         .collect();
-
-    for person in persons.iter_mut() {
-        let can_did =
-            crate::state::canonicalize_did(&person.did).unwrap_or_else(|_| person.did.clone());
-        if let Some(read_url) = sync_state
-            .sync_sources_by_did
-            .get(&person.recipient_did)
-            .or_else(|| sync_state.sync_sources_by_did.get(&person.did))
-            .or_else(|| sync_state.sync_sources_by_did.get(&can_did))
-        {
-            let sync_src = crate::models::FrontendEntrySource::Sync {
-                read_url: read_url.clone(),
-            };
-            if !person.sources.contains(&sync_src) {
-                person.sources.push(sync_src);
-            }
-        }
-    }
+    attach_sync_sources_to_persons(&mut persons, &sync_state.sync_sources_by_did);
 
     Ok(FrontendMarketSnapshot {
         board,

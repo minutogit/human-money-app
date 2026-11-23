@@ -281,6 +281,162 @@ pub fn rebuild_and_sign_own_card_with_drops(
     rebuild_and_sign_own_card_with_drops_and_profile(service, stored, now, override_drops, None)
 }
 
+fn audience_distance(aud: FieldAudience, max_hops: u8) -> Option<u8> {
+    match aud {
+        FieldAudience::Everyone => Some(max_hops),
+        FieldAudience::Contacts => Some(1),
+        FieldAudience::Nobody => None,
+    }
+}
+
+fn push_optional_trimmed_card_item(
+    items: &mut Vec<(humoco_market::CardItem, u8)>,
+    value: Option<&String>,
+    aud: FieldAudience,
+    max_hops: u8,
+    build: impl FnOnce(String) -> humoco_market::CardItem,
+) {
+    let Some(raw) = value else {
+        return;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if let Some(dist) = audience_distance(aud, max_hops) {
+        items.push((build(trimmed.to_string()), dist));
+    }
+}
+
+fn append_profile_address_card_items(
+    items: &mut Vec<(humoco_market::CardItem, u8)>,
+    addr: &human_money_core::Address,
+    visibility: &crate::models::CardFieldVisibility,
+    max_hops: u8,
+) {
+    let zip = (!addr.zip_code.trim().is_empty()).then(|| addr.zip_code.trim().to_string());
+    let city = (!addr.city.trim().is_empty()).then(|| addr.city.trim().to_string());
+    let country = (!addr.country.trim().is_empty()).then(|| addr.country.trim().to_string());
+    if zip.is_some() || city.is_some() || country.is_some() {
+        if let Some(dist) = audience_distance(visibility.city, max_hops) {
+            items.push((
+                humoco_market::CardItem::City {
+                    zip_code: zip,
+                    city,
+                    country,
+                },
+                dist,
+            ));
+        }
+    }
+    let street_trimmed = addr.street.trim();
+    if !street_trimmed.is_empty() {
+        if let Some(dist) = audience_distance(visibility.street, max_hops) {
+            let house_num = (!addr.house_number.trim().is_empty())
+                .then(|| addr.house_number.trim().to_string());
+            items.push((
+                humoco_market::CardItem::Street {
+                    street: street_trimmed.to_string(),
+                    house_number: house_num,
+                },
+                dist,
+            ));
+        }
+    }
+}
+
+fn collect_profile_card_items(
+    profile: &human_money_core::models::profile::PublicProfile,
+    stored: &StoredOwnMarketProfile,
+    max_hops: u8,
+) -> Vec<(humoco_market::CardItem, u8)> {
+    let mut items = Vec::new();
+
+    let first_name = profile
+        .first_name
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let last_name = profile
+        .last_name
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if first_name.is_some() || last_name.is_some() {
+        if let Some(dist) = audience_distance(stored.visibility.name, max_hops) {
+            items.push((
+                humoco_market::CardItem::Name {
+                    first_name,
+                    last_name,
+                },
+                dist,
+            ));
+        }
+    }
+
+    push_optional_trimmed_card_item(
+        &mut items,
+        profile.organization.as_ref(),
+        stored.visibility.organization,
+        max_hops,
+        humoco_market::CardItem::Organization,
+    );
+    push_optional_trimmed_card_item(
+        &mut items,
+        profile.community.as_ref(),
+        stored.visibility.community,
+        max_hops,
+        humoco_market::CardItem::Community,
+    );
+    if let Some(ref addr) = profile.address {
+        append_profile_address_card_items(&mut items, addr, &stored.visibility, max_hops);
+    }
+    push_optional_trimmed_card_item(
+        &mut items,
+        profile.coordinates.as_ref(),
+        stored.visibility.coordinates,
+        max_hops,
+        humoco_market::CardItem::Coordinates,
+    );
+    push_optional_trimmed_card_item(
+        &mut items,
+        profile.email.as_ref(),
+        stored.visibility.email,
+        max_hops,
+        humoco_market::CardItem::Email,
+    );
+    push_optional_trimmed_card_item(
+        &mut items,
+        profile.phone.as_ref(),
+        stored.visibility.phone,
+        max_hops,
+        humoco_market::CardItem::Phone,
+    );
+    push_optional_trimmed_card_item(
+        &mut items,
+        profile.url.as_ref(),
+        stored.visibility.url,
+        max_hops,
+        humoco_market::CardItem::Url,
+    );
+    push_optional_trimmed_card_item(
+        &mut items,
+        profile.picture_url.as_ref(),
+        stored.visibility.picture,
+        max_hops,
+        humoco_market::CardItem::Picture,
+    );
+    push_optional_trimmed_card_item(
+        &mut items,
+        profile.gender.as_ref(),
+        stored.visibility.gender,
+        max_hops,
+        humoco_market::CardItem::Gender,
+    );
+
+    items
+}
+
 pub(crate) fn rebuild_and_sign_own_card_with_drops_and_profile(
     service: &mut AppService,
     stored: &mut StoredOwnMarketProfile,
@@ -307,183 +463,10 @@ pub(crate) fn rebuild_and_sign_own_card_with_drops_and_profile(
     } else {
         max_hops
     };
-    let audience_dist = |aud: FieldAudience| -> Option<u8> {
-        match aud {
-            FieldAudience::Everyone => Some(max_hops),
-            FieldAudience::Contacts => Some(1),
-            FieldAudience::Nobody => None,
-        }
-    };
-
-    let mut items: Vec<(humoco_market::CardItem, u8)> = Vec::new();
-
-    // Name
-    let first_name = profile
-        .first_name
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let last_name = profile
-        .last_name
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    if first_name.is_some() || last_name.is_some() {
-        if let Some(dist) = audience_dist(stored.visibility.name) {
-            items.push((
-                humoco_market::CardItem::Name {
-                    first_name,
-                    last_name,
-                },
-                dist,
-            ));
-        }
-    }
-
-    // Organization
-    if let Some(ref org) = profile.organization {
-        if !org.trim().is_empty() {
-            if let Some(dist) = audience_dist(stored.visibility.organization) {
-                items.push((
-                    humoco_market::CardItem::Organization(org.trim().to_string()),
-                    dist,
-                ));
-            }
-        }
-    }
-
-    // Community
-    if let Some(ref comm) = profile.community {
-        if !comm.trim().is_empty() {
-            if let Some(dist) = audience_dist(stored.visibility.community) {
-                items.push((
-                    humoco_market::CardItem::Community(comm.trim().to_string()),
-                    dist,
-                ));
-            }
-        }
-    }
-
-    // Address -> City & Street
-    if let Some(ref addr) = profile.address {
-        let zip = if addr.zip_code.trim().is_empty() {
-            None
-        } else {
-            Some(addr.zip_code.trim().to_string())
-        };
-        let city = if addr.city.trim().is_empty() {
-            None
-        } else {
-            Some(addr.city.trim().to_string())
-        };
-        let country = if addr.country.trim().is_empty() {
-            None
-        } else {
-            Some(addr.country.trim().to_string())
-        };
-        if zip.is_some() || city.is_some() || country.is_some() {
-            if let Some(dist) = audience_dist(stored.visibility.city) {
-                items.push((
-                    humoco_market::CardItem::City {
-                        zip_code: zip,
-                        city,
-                        country,
-                    },
-                    dist,
-                ));
-            }
-        }
-        let street_trimmed = addr.street.trim();
-        if !street_trimmed.is_empty() {
-            if let Some(dist) = audience_dist(stored.visibility.street) {
-                let house_num = if addr.house_number.trim().is_empty() {
-                    None
-                } else {
-                    Some(addr.house_number.trim().to_string())
-                };
-                items.push((
-                    humoco_market::CardItem::Street {
-                        street: street_trimmed.to_string(),
-                        house_number: house_num,
-                    },
-                    dist,
-                ));
-            }
-        }
-    }
-
-    // Coordinates
-    if let Some(ref coords) = profile.coordinates {
-        if !coords.trim().is_empty() {
-            if let Some(dist) = audience_dist(stored.visibility.coordinates) {
-                items.push((
-                    humoco_market::CardItem::Coordinates(coords.trim().to_string()),
-                    dist,
-                ));
-            }
-        }
-    }
-
-    // Email
-    if let Some(ref email) = profile.email {
-        if !email.trim().is_empty() {
-            if let Some(dist) = audience_dist(stored.visibility.email) {
-                items.push((
-                    humoco_market::CardItem::Email(email.trim().to_string()),
-                    dist,
-                ));
-            }
-        }
-    }
-
-    // Phone
-    if let Some(ref phone) = profile.phone {
-        if !phone.trim().is_empty() {
-            if let Some(dist) = audience_dist(stored.visibility.phone) {
-                items.push((
-                    humoco_market::CardItem::Phone(phone.trim().to_string()),
-                    dist,
-                ));
-            }
-        }
-    }
-
-    // Url
-    if let Some(ref url) = profile.url {
-        if !url.trim().is_empty() {
-            if let Some(dist) = audience_dist(stored.visibility.url) {
-                items.push((humoco_market::CardItem::Url(url.trim().to_string()), dist));
-            }
-        }
-    }
-
-    // Picture
-    if let Some(ref pic) = profile.picture_url {
-        if !pic.trim().is_empty() {
-            if let Some(dist) = audience_dist(stored.visibility.picture) {
-                items.push((
-                    humoco_market::CardItem::Picture(pic.trim().to_string()),
-                    dist,
-                ));
-            }
-        }
-    }
-
-    // Gender
-    if let Some(ref gender) = profile.gender {
-        if !gender.trim().is_empty() {
-            if let Some(dist) = audience_dist(stored.visibility.gender) {
-                items.push((
-                    humoco_market::CardItem::Gender(gender.trim().to_string()),
-                    dist,
-                ));
-            }
-        }
-    }
 
     // Maintainer Decision 7 & Rule 2: DO NOT include service_offer or needs as CardItem!
+    let mut items = collect_profile_card_items(&profile, stored, max_hops);
 
-    // Skills
     for skill in &stored.skills {
         items.push((humoco_market::CardItem::Skill(skill.clone()), max_hops));
     }
