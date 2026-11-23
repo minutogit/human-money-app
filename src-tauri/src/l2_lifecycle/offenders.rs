@@ -113,20 +113,8 @@ fn record_equivocation_proof_inner(
         delegation: delegation_opt,
         recorded_at: now,
     };
-    if record.proof.receipt_a.child_lock != record.proof.receipt_b.child_lock {
-        list.insert_verified(record, now)
-            .map_err(|e| lifecycle_err(format!("Invalid equivocation proof: {}", e)))?;
-    } else {
-        // Note: upstream humoco-wot `WotEquivocationProof::verify` currently only permits distinct
-        // `child_lock` (follow-up alignment to also permit distinct `entry_hash`). Both
-        // `humoco_proto::EquivocationProof::verify()` and `WotLockReceipt::verify_signature()`
-        // plus `WotLockDelegation::verify()` have already been verified above.
-        list.revoked_lock_pubs.insert(offending_lock);
-        if let Some(ref del) = record.delegation {
-            list.revoked_admin_pubs.insert(del.admin_pub);
-        }
-        list.records.push(record);
-    }
+    list.insert_verified(record, now)
+        .map_err(|e| lifecycle_err(format!("Invalid equivocation proof: {}", e)))?;
     save_server_offender_list(service, &list, password)?;
     Ok((true, list))
 }
