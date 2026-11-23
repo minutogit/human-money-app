@@ -143,6 +143,101 @@ pub fn verify_lock_probe_response(
     verify_ed25519_hex_strict(&lock_lower, &resp.sig, msg.as_bytes())
 }
 
+fn evaluate_probe_delegation(
+    lock_pub: &str,
+    delegation: Option<&SyncLockDelegationDto>,
+    expected_admin_pub: Option<&str>,
+    norm_probe_write: &str,
+    norm_probe_read: &str,
+) -> (bool, String, Option<SyncLockDelegationDto>) {
+    let Some(d) = delegation else {
+        return (false, String::new(), None);
+    };
+    let d_write = d.write_url.trim();
+    let d_read = d.read_url.trim();
+    let valid = verify_lock_delegation(lock_pub, d, expected_admin_pub)
+        && validate_sync_url(d_write).is_ok()
+        && validate_sync_read_url(d_read).is_ok()
+        && crate::services::common::normalize_sync_url(d_write) == norm_probe_write
+        && crate::services::common::normalize_sync_url(d_read) == norm_probe_read;
+    if valid {
+        (
+            true,
+            d.admin_pub.trim().to_ascii_lowercase(),
+            Some(d.clone()),
+        )
+    } else {
+        (false, String::new(), None)
+    }
+}
+
+async fn run_waf_lock_probe(client: &reqwest::Client, write_url: &str, lock_pub: &str) -> bool {
+    let Ok(lock_url) = append_sync_query(write_url, "lock") else {
+        return false;
+    };
+    let client_nonce = generate_lock_probe_nonce();
+    let probe_body = serde_json::json!({
+        "probe": true,
+        "client_nonce": client_nonce,
+    });
+    let Ok(resp) = client.post(&lock_url).json(&probe_body).send().await else {
+        return false;
+    };
+    if !resp.status().is_success() {
+        return false;
+    }
+    let Ok(parsed) = read_response_json_bounded::<SyncLockProbeResponseDto>(
+        resp,
+        MAX_JSON_META_BODY_BYTES,
+        "probing lock server",
+        "Failed to parse lock probe response",
+    )
+    .await
+    else {
+        return false;
+    };
+    verify_lock_probe_response(lock_pub, &client_nonce, &parsed)
+}
+
+async fn run_selftest_probe(
+    client: &reqwest::Client,
+    write_url: &str,
+    lock_pub: &str,
+    cached_report: Option<&SyncLockSelftestReportDto>,
+) -> bool {
+    if let Ok(selftest_url) = append_sync_query(write_url, "lock_selftest") {
+        if let Ok(resp) = client.get(&selftest_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(report) = read_response_json_bounded::<SyncLockSelftestReportDto>(
+                    resp,
+                    MAX_JSON_META_BODY_BYTES,
+                    "fetching lock selftest",
+                    "Failed to parse lock selftest report",
+                )
+                .await
+                {
+                    if verify_lock_selftest(lock_pub, &report) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    cached_report
+        .map(|cached| verify_lock_selftest(lock_pub, cached))
+        .unwrap_or(false)
+}
+
+async fn run_key_leak_probe(client: &reqwest::Client, read_url: &str) -> bool {
+    let base_read = normalize_lock_read_base(read_url);
+    let key_probe_url = format!("{}/.lock_key.php", base_read);
+    let Ok(resp) = client.get(&key_probe_url).send().await else {
+        return false;
+    };
+    let code = resp.status().as_u16();
+    code == 403 || code == 404
+}
+
 pub async fn probe_lock_server(
     client: &reqwest::Client,
     write_url: &str,
@@ -254,77 +349,30 @@ pub async fn probe_lock_server(
 
     let norm_probe_write = crate::services::common::normalize_sync_url(&clean_write_url);
     let norm_probe_read = crate::services::common::normalize_sync_url(&failed.read_url);
-    failed.delegation_valid = lock_info
-        .delegation
-        .as_ref()
-        .map(|d| {
-            let d_write = d.write_url.trim();
-            let d_read = d.read_url.trim();
-            let valid = verify_lock_delegation(&lock_pub, d, expected_admin_pub)
-                && validate_sync_url(d_write).is_ok()
-                && validate_sync_read_url(d_read).is_ok()
-                && crate::services::common::normalize_sync_url(d_write) == norm_probe_write
-                && crate::services::common::normalize_sync_url(d_read) == norm_probe_read;
-            if valid {
-                failed.admin_pub = d.admin_pub.trim().to_ascii_lowercase();
-                failed.delegation = Some(d.clone());
-            }
-            valid
-        })
-        .unwrap_or(false);
-
-    if let Ok(lock_url) = append_sync_query(&clean_write_url, "lock") {
-        let client_nonce = generate_lock_probe_nonce();
-        let probe_body = serde_json::json!({
-            "probe": true,
-            "client_nonce": client_nonce,
-        });
-        if let Ok(resp) = client.post(&lock_url).json(&probe_body).send().await {
-            if resp.status().is_success() {
-                if let Ok(parsed) = read_response_json_bounded::<SyncLockProbeResponseDto>(
-                    resp,
-                    MAX_JSON_META_BODY_BYTES,
-                    "probing lock server",
-                    "Failed to parse lock probe response",
-                )
-                .await
-                {
-                    failed.waf_probe_passed =
-                        verify_lock_probe_response(&lock_pub, &client_nonce, &parsed);
-                }
-            }
-        }
+    let (delegation_valid, admin_pub, delegation) = evaluate_probe_delegation(
+        &lock_pub,
+        lock_info.delegation.as_ref(),
+        expected_admin_pub,
+        &norm_probe_write,
+        &norm_probe_read,
+    );
+    failed.delegation_valid = delegation_valid;
+    if delegation_valid {
+        failed.admin_pub = admin_pub;
+        failed.delegation = delegation;
     }
 
-    if let Ok(selftest_url) = append_sync_query(&clean_write_url, "lock_selftest") {
-        if let Ok(resp) = client.get(&selftest_url).send().await {
-            if resp.status().is_success() {
-                if let Ok(report) = read_response_json_bounded::<SyncLockSelftestReportDto>(
-                    resp,
-                    MAX_JSON_META_BODY_BYTES,
-                    "fetching lock selftest",
-                    "Failed to parse lock selftest report",
-                )
-                .await
-                {
-                    failed.selftest_passed = verify_lock_selftest(&lock_pub, &report);
-                }
-            }
-        }
-    }
-    if !failed.selftest_passed {
-        if let Some(ref cached_report) = lock_info.selftest {
-            failed.selftest_passed = verify_lock_selftest(&lock_pub, cached_report);
-        }
-    }
+    failed.waf_probe_passed = run_waf_lock_probe(client, &clean_write_url, &lock_pub).await;
+    failed.selftest_passed = run_selftest_probe(
+        client,
+        &clean_write_url,
+        &lock_pub,
+        lock_info.selftest.as_ref(),
+    )
+    .await;
 
     if failed.delegation_valid {
-        let base_read = normalize_lock_read_base(&failed.read_url);
-        let key_probe_url = format!("{}/.lock_key.php", base_read);
-        if let Ok(resp) = client.get(&key_probe_url).send().await {
-            let code = resp.status().as_u16();
-            failed.key_leak_safe = code == 403 || code == 404;
-        }
+        failed.key_leak_safe = run_key_leak_probe(client, &failed.read_url).await;
     }
 
     failed.passed = failed.delegation_valid
