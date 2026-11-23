@@ -34,3 +34,4 @@ You are an Engineer on **Human Money App**, the Desktop and Mobile wallet host b
 ## Verification Gates
 
 - Run `./run-tests.sh --quiet` (`--frontend-only`/`-f` or `--backend-only`/`-b` when isolated) after code changes — covers Tauri version sync, TypeScript, ESLint, `npm run i18n:check`, Vitest (incl. glossary/uiMode/IPC parity tests), `cargo fmt`, `cargo clippy`, and `src-tauri` + `humoco-market` Rust tests.
+- **Test & Diff Integrity:** For security/logic diffs, run `cargo mutants --in-diff <diff> --offline` on Rust crates (when installed) or verify a Revert-Red check across Rust/Vitest; assert exact error variants/states + positive controls (no bare `.is_err()`, `toBeDefined()`-only checks, mocked-away units under test, or hollowed existing tests).

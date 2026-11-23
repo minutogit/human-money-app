@@ -9,7 +9,7 @@
 ## 📋 Prompt to Run with Any AI Agent
 
 ```markdown
-You are a Principal Full-Stack Security, Tauri/Rust Systems & React/TypeScript Engineer running a systematic, open-ended quality and security audit on `human-money-app`.
+You are a Principal Full-Stack Security, Tauri/Rust Systems & React/TypeScript Engineer running a systematic, bounded, evidence-based quality and security audit on `human-money-app`.
 
 **Mode Selection:** Default is **`INTERACTIVE`** unless the caller explicitly requests **`AUTONOMOUS`** (or target Slice ID(s)).
 **Language & Style:** Follow `AGENTS.md` (German in user chat, idiomatic English in code/comments/docs; neutral, evidence-based technical analysis).
@@ -22,11 +22,11 @@ You are a Principal Full-Stack Security, Tauri/Rust Systems & React/TypeScript E
    - Remove any explicit path or empty glob that no longer matches files on disk, and verify no file matches more than one slice.
 4. **Select ONE slice** (unless caller names specific slice ID(s)):
    - **Priority 1:** Any slice with `Last_Run == never` or `⚪ Pending` (`P1 > P2 > P3`, then lower Slice ID).
-   - **Priority 2:** Any slice marked `🟡 ReCheck` (`P1 > P2 > P3`, oldest `Last_Run`, lower Slice ID).
-   - **Priority 3:** Remaining slices NOT marked `🔴 Fix_Open`, ordered by **lowest `Clean_Streak`**, then **highest `Total_Finds`** (hotspot focus), then oldest `Last_Run`, then `P1 > P2 > P3`, then lower Slice ID.
+   - **Priority 2:** Any slice marked `🟡 ReCheck` (`P1 > P2 > P3`, oldest `Last_Run`, lower Slice ID; on ReCheck passes, fix **only** code-verified `CRITICAL`/`HIGH` security, correctness, or regression defects—zero cosmetic micro-nits).
+   - **Priority 3 (Stop Rule):** Remaining slices marked neither `🔴 Fix_Open` nor `🟢 Clean`, ordered by **lowest `Clean_Streak`**, then **highest `Total_Finds`** (hotspot focus), then oldest `Last_Run`, then `P1 > P2 > P3`, then lower Slice ID. **Never re-audit `🟢 Clean` slices** unless their code, schema, or upstream crate contracts changed since `Last_Run` (max **1 Baseline Pass + 1 targeted ReCheck Pass** per scope).
    - If **`S21`** is selected, pick the next unreviewed end-to-end flow (`F1`–`F5`, rotating based on `Notes`) and inspect its cross-slice IPC/DTO/event seams plus `src/locales/*.json`, `scripts/`, and associated Rust/Vitest tests.
 
-### Step 2: Open-Ended Read-Only Audit + Deterministic Signals
+### Step 2: Bounded Read-Only Audit + Deterministic Signals
 Do NOT modify production/test files in this step. Inspect every file in the selected slice (and direct cross-module, IPC, or DTO boundaries) without checklist tunnel vision through two lenses:
 1. **Adversarial / Worst-Case Thinking:** Malicious/corrupted remote Sync/PoST/L2 responses, untrusted QR/URI/deep-link/dropped files (`.transfer`, `.ask`, `.sig`, `.wot`, `.hmcard`, `.hmcbackup`, `.hmcproof`, `.standard`), SSRF/DNS rebinding, crash/partial writes, replay, TOCTOU races, clock skew, logout/profile-switch/re-login async races (`SessionToken` / React generation & mount guards), DOM/XSS/data-URI/CSV injection, authorization bypass (`AccessMode`: `public`/`unlocked`/`dailyPay`/`full` + `OneShotPinGrant` step-up), RAM-cache vs. encrypted-storage/Core/L2/UI desync, secret leaks (PIN/password/mnemonic/recovery answers in logs/errors/DOM/clipboard), panics on untrusted input, or CPU/memory DoS (zip-bombs, unbounded Argon2id/decodes).
 2. **Engineering Hygiene & App Invariants:** Thin-bridge discipline (no Core business logic duplicated in App), 1:1 `camelCase` DTO & `COMMAND_ACCESS_POLICY` parity, `#[serde(deny_unknown_fields)]` on untrusted adapters, exact DID matching (`isExactSameUserId`), exact `BigInt`/decimal math (no float rounding on amounts), panic-free `Result` handling & `Zeroize`/`Zeroizing` in Rust, no lock guards across `.await`, atomic persistence & rollback, React error handling/rollback (no swallowed errors or stale modals), Simple/Expert (`uiMode`) & `UX_GLOSSARY.md`/5-locale i18n discipline, Tailwind v4 rules (no `postcss.config.js`), `zero-compat` hygiene (no dead commands, legacy aliases, or fallback shims), and whether existing Rust/Vitest tests actually verify failure paths (not just happy paths).
@@ -34,9 +34,10 @@ Do NOT modify production/test files in this step. Inspect every file in the sele
 
 ### Step 2.5: Falsifier & Design-Intent Gate (Anti-False-Positive Filter)
 Before counting any candidate finding:
-1. **Actively try to disprove it:** Trace callers, `COMMAND_ACCESS_POLICY`, `SessionToken`/generation guards, Core/WoT/Market invariants, and data flows to confirm reachability and real impact. Discard speculative or unreachable issues.
-2. **Check `docs/security/DESIGN_INTENT_TRIAGE.md`:** Discard intentional offline-first desktop wallet, thin-bridge, Quick-PIN/Cashier, Zero-Config Sync-Lock, Social Recovery, Simple/Expert UX, `UX_GLOSSARY.md`, or `dragDropEnabled: false` design requirements.
-3. Keep **ONLY concrete, code-verified findings** backed by exact `file:line` references.
+1. **Code-First Reality Check:** Treat current working code and canonical wire crates (`humoco-proto`, `human-money-core`, `humoco-wot`) as primary truth over potentially outdated ADRs or older docs; flag doc drift as an Open Question rather than breaking working code.
+2. **Actively try to disprove it:** Trace callers, `COMMAND_ACCESS_POLICY`, `SessionToken`/generation guards, Core/WoT/Market invariants, and data flows to confirm reachability and real impact. Discard speculative or unreachable issues.
+3. **Check `docs/security/DESIGN_INTENT_TRIAGE.md`:** Discard intentional offline-first desktop wallet, thin-bridge, Quick-PIN/Cashier, Zero-Config Sync-Lock, Social Recovery, Simple/Expert UX, `UX_GLOSSARY.md`, or `dragDropEnabled: false` design requirements.
+4. Keep **ONLY concrete, code-verified findings** backed by exact `file:line` references.
 
 ### Step 3: Update Ledger (`prompts/AUDIT_STATE.md`)
 Update the reviewed slice's row (and any drift-guard path updates; for `S21`, record the inspected flow `F1`–`F5` in `Notes`):
@@ -73,14 +74,20 @@ Do NOT pause; execute ONLY **Unambiguous Safe Fixes** (skip all **Uncertainties*
 
 ### Step 6: Evidence-Based Implementation & Double Verification
 *(Executed after human approval in `INTERACTIVE`, or directly for safe fixes in `AUTONOMOUS`.)*
-1. **Fail-First Proof:** Write deterministic regression test(s) (Rust unit/integration test, `proptest` in `humoco-market`, or Vitest/RTL test) asserting the expected safe invariant and confirm they **FAIL** before patching production code.
+1. **Fail-First Proof:** Write deterministic regression test(s) (Rust unit/integration test, `proptest` in `humoco-market`, or Vitest/RTL test) asserting the expected safe invariant and confirm they **FAIL on the target assertion itself** (not a compile, setup, or unrelated gate error) before patching production code:
+   - Target **1 focused invariant per test** (no 3–5-in-1 mega-tests).
+   - Assert **exact error variants/reasons or states** (forbid bare `.is_err()`, wildcard `Err(_)`, `.is_some()`, or `toBeDefined()`-only assertions on multi-gate APIs; forbid `if let Ok` / `if exists()` around assertions; never mock away the unit under test; wrap any test bypass or mock clock in an RAII drop guard).
+   - Include a **positive baseline / control** proving the guarded branch actually executes, and never hollow out existing tests.
 2. **Minimal Fix:** Implement the approved minimal fix (and only approved removals).
 3. **Full Verification Gate:**
    - Run `./run-tests.sh --quiet` *(covers `check-versions`, `tsc --noEmit`, `tsc -p tsconfig.node.json --noEmit`, `eslint src --max-warnings 0`, full Vitest suite incl. QS parity/glossary/uiMode guardrails, `npm run i18n:check`, `crates/humoco-market` Clippy & tests, and `src-tauri` Clippy & tests)*
    - Run `cargo clippy --all-targets --offline -- -D warnings` in `src-tauri` *(catches test-target warnings beyond `run-tests.sh`)* and `cargo fmt --all -- --check` in `crates/humoco-market` and `src-tauri` when Rust files changed
    - Run `npm run build` (`tsc && vite build`) when frontend files (`src/`) changed
-4. **Immediate Self-Audit:** Compare the resulting diff against the KISS plan (no unintended edits, no unapproved deletions, no new warnings, no `[patch]` regressions in `Cargo.toml`).
-5. **Final Ledger Update (`prompts/AUDIT_STATE.md`):**
+4. **Diff-Mutation & Revert-Red Gate:** Verify the new/updated tests actually die when the fixed logic is mutated or reverted:
+   - On Rust diffs (`crates/humoco-market`, `src-tauri`) when `cargo-mutants` is installed: export the diff (`git diff HEAD > /tmp/audit.diff`), run `cargo mutants --in-diff /tmp/audit.diff --offline` inside the changed Rust crate (remove `/tmp/audit.diff` afterward), and triage every `MISSED` mutant (weak test → strengthen invariant test; unreachable defensive branch → delete dead code or defer to Planned Removals).
+   - On TypeScript/React diffs (or when `cargo-mutants` is unavailable): run an explicit **Revert-Red & Test-Slop Check** on every `CRITICAL`/`HIGH` fix in the diff, verifying that reverting the fix fails the Vitest/Rust test on the exact expected assertion (no `toBeDefined()`-only assertions or mocked-away units under test).
+5. **Immediate Self-Audit:** Compare the resulting diff against the KISS plan (no unintended edits, no unapproved deletions, no hollowed-out existing tests, no new warnings, no `[patch]` regressions in `Cargo.toml`).
+6. **Final Ledger Update (`prompts/AUDIT_STATE.md`):**
    - If **>= 1 fix was implemented and verified:** Set `Status` to `🟡 ReCheck` (keep `Clean_Streak` at `0`) so the next independent audit pass verifies the new code. If `AUTONOMOUS` deferred open questions/removals, link the report in `Notes` (e.g., `Open items: prompts/reports/...`).
    - If **0 fixes were implemented** (all deferred): Keep `Status` as `🔴 Fix_Open` and link the report in `Notes`.
 ```
