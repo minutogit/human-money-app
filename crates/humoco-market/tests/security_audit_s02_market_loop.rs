@@ -24,6 +24,57 @@ fn make_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&[seed; 32])
 }
 
+#[track_caller]
+fn assert_validation_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    match res {
+        Err(MarketError::Validation(msg)) => assert!(
+            msg.contains(expected_substr),
+            "expected Validation error containing {:?}, got {:?}",
+            expected_substr,
+            msg
+        ),
+        other => panic!(
+            "expected MarketError::Validation containing {:?}, got {:?}",
+            expected_substr, other
+        ),
+    }
+}
+
+#[track_caller]
+fn assert_invalid_jws_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    match res {
+        Err(MarketError::InvalidJws(msg)) => assert!(
+            msg.contains(expected_substr),
+            "expected InvalidJws error containing {:?}, got {:?}",
+            expected_substr,
+            msg
+        ),
+        other => panic!(
+            "expected MarketError::InvalidJws containing {:?}, got {:?}",
+            expected_substr, other
+        ),
+    }
+}
+
+#[track_caller]
+fn assert_unknown_field_err<T: std::fmt::Debug>(res: Result<T, serde_json::Error>, field: &str) {
+    match res {
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("unknown field") && msg.contains(field),
+                "expected serde unknown field {:?}, got {:?}",
+                field,
+                msg
+            );
+        }
+        other => panic!(
+            "expected serde unknown field error for {:?}, got {:?}",
+            field, other
+        ),
+    }
+}
+
 fn sign_raw_card_jws(header_json: &str, payload_json: &str, sk: &SigningKey) -> String {
     let header_b64 = URL_SAFE_NO_PAD.encode(header_json.as_bytes());
     let payload_b64 = URL_SAFE_NO_PAD.encode(payload_json.as_bytes());
@@ -143,10 +194,29 @@ fn s02_f6_drop_urls_and_loopback_validation() {
         assert!(!is_loopback_http(bad), "expected reject for {}", bad);
     }
 
-    // 3. sign_sd_card and verify_sd_card reject malformed DropDescriptor URLs
+    // 3. Positive baseline: valid HTTPS DropDescriptor signs and verifies cleanly
     let sk = make_key(61);
     let did = create_user_id(&sk.verifying_key(), None).unwrap();
     let valid_drop_pub = hex::encode(make_key(62).verifying_key().as_bytes());
+    let valid_payload = CardPayloadInput {
+        did: did.clone(),
+        v: 100,
+        valid_until: 1_800_000_000,
+        max_hops: 2,
+        ad_count: 0,
+        allow_inquiries: true,
+        drops: vec![DropDescriptor {
+            write_url: "https://sync.example.com/write".to_string(),
+            read_url: "https://sync.example.com/read".to_string(),
+            slot_id: None,
+            drop_pub: valid_drop_pub.clone(),
+        }],
+    };
+    let valid_card = sign_sd_card(valid_payload, vec![], &sk).unwrap();
+    let valid_wire = render_wire(&valid_card, 1, WireFilter::Full).unwrap();
+    assert_eq!(verify_sd_card(&valid_wire).unwrap().payload.drops.len(), 1);
+
+    // 4. sign_sd_card and verify_sd_card reject malformed DropDescriptor URLs
     let too_long_https = format!("https://example.com/{}", "a".repeat(500));
 
     for bad_url in [
@@ -172,25 +242,14 @@ fn s02_f6_drop_urls_and_loopback_validation() {
                 drop_pub: valid_drop_pub.clone(),
             }],
         };
-        assert!(
-            matches!(
-                sign_sd_card(payload.clone(), vec![], &sk),
-                Err(MarketError::Validation(_))
-            ),
-            "sign_sd_card must reject bad write_url '{}'",
-            bad_url
+        assert_validation_err(
+            sign_sd_card(payload.clone(), vec![], &sk),
+            "drop[0] write_url",
         );
 
         payload.drops[0].write_url = "https://sync.example.com/write".to_string();
         payload.drops[0].read_url = bad_url.to_string();
-        assert!(
-            matches!(
-                sign_sd_card(payload, vec![], &sk),
-                Err(MarketError::Validation(_))
-            ),
-            "sign_sd_card must reject bad read_url '{}'",
-            bad_url
-        );
+        assert_validation_err(sign_sd_card(payload, vec![], &sk), "drop[0] read_url");
 
         // Also check verify_sd_card on a manually signed JWS containing the bad DropDescriptor
         let bad_payload_struct = CardPayload {
@@ -218,50 +277,102 @@ fn s02_f6_drop_urls_and_loopback_validation() {
         .unwrap();
         let payload_json = serde_json::to_string(&bad_payload_struct).unwrap();
         let wire = format!("{}~", sign_raw_card_jws(&header_json, &payload_json, &sk));
-        assert!(
-            verify_sd_card(&wire).is_err(),
-            "verify_sd_card must reject bad drop URL '{}'",
-            bad_url
-        );
+        assert_validation_err(verify_sd_card(&wire), "drop[0] write_url");
     }
 }
 
 #[test]
-fn s02_f7_sd_card_schema_digests_url_lengths_and_wire_framing() {
+fn s02_f7_sd_card_rejects_unknown_json_fields() {
+    // Positive baselines parse cleanly
+    let ok_hdr =
+        serde_json::from_str::<CardJwsHeader>(r#"{"alg":"EdDSA","typ":"humoco-card+sd-jwt"}"#)
+            .unwrap();
+    assert_eq!(ok_hdr.alg, "EdDSA");
+    serde_json::from_str::<CardPayload>(
+        r#"{"did":"did:key:z1","v":1,"valid_until":2,"max_hops":1,"ad_count":0,"_sd":[]}"#,
+    )
+    .unwrap();
+    serde_json::from_str::<CardItem>(r#"{"k":"email","v":"a@b.org"}"#).unwrap();
+    serde_json::from_str::<CardItem>(r#"{"k":"name","v":{"first_name":"Alice"}}"#).unwrap();
+    serde_json::from_str::<CardItem>(r#"{"k":"city","v":{"city":"Berlin"}}"#).unwrap();
+    serde_json::from_str::<CardItem>(r#"{"k":"street","v":{"street":"Main"}}"#).unwrap();
+
+    // Unknown JSON fields rejected on CardJwsHeader, CardPayload, and CardItem
+    assert_unknown_field_err(
+        serde_json::from_str::<CardJwsHeader>(
+            r#"{"alg":"EdDSA","typ":"humoco-card+sd-jwt","crit":["exp"]}"#,
+        ),
+        "crit",
+    );
+    assert_unknown_field_err(
+        serde_json::from_str::<CardPayload>(
+            r#"{"did":"did:key:z1","v":1,"valid_until":2,"max_hops":1,"ad_count":0,"_sd":[],"extra":1}"#,
+        ),
+        "extra",
+    );
+    let extra_item_err =
+        serde_json::from_str::<CardItem>(r#"{"k":"email","v":"a@b.org","extra":1}"#).unwrap_err();
+    assert!(
+        extra_item_err
+            .to_string()
+            .contains("expected \"k\" or \"v\""),
+        "expected serde unknown tag/content key error for CardItem, got {}",
+        extra_item_err
+    );
+    assert_unknown_field_err(
+        serde_json::from_str::<CardItem>(r#"{"k":"name","v":{"first_name":"Alice","extra":1}}"#),
+        "extra",
+    );
+    assert_unknown_field_err(
+        serde_json::from_str::<CardItem>(r#"{"k":"city","v":{"city":"Berlin","extra":1}}"#),
+        "extra",
+    );
+    assert_unknown_field_err(
+        serde_json::from_str::<CardItem>(r#"{"k":"street","v":{"street":"Main","extra":1}}"#),
+        "extra",
+    );
+}
+
+#[test]
+fn s02_f7_sd_card_rejects_malformed_sd_digest_length() {
     let sk = make_key(71);
     let did = create_user_id(&sk.verifying_key(), None).unwrap();
+    let hdr = serde_json::to_string(&CardJwsHeader {
+        alg: SD_CARD_ALG.to_string(),
+        typ: SD_CARD_TYP.to_string(),
+    })
+    .unwrap();
 
-    // 1. Unknown JSON fields rejected on CardJwsHeader, CardPayload, and CardItem
-    assert!(serde_json::from_str::<CardJwsHeader>(
-        r#"{"alg":"EdDSA","typ":"humoco-card+sd-jwt","crit":["exp"]}"#
-    )
-    .is_err());
-    assert!(serde_json::from_str::<CardPayload>(
-        r#"{"did":"did:key:z1","v":1,"valid_until":2,"max_hops":1,"ad_count":0,"_sd":[],"extra":1}"#
-    )
-    .is_err());
-    assert!(serde_json::from_str::<CardItem>(r#"{"k":"email","v":"a@b.org","extra":1}"#).is_err());
-    assert!(serde_json::from_str::<CardItem>(
-        r#"{"k":"name","v":{"first_name":"Alice","extra":1}}"#
-    )
-    .is_err());
-    assert!(
-        serde_json::from_str::<CardItem>(r#"{"k":"city","v":{"city":"Berlin","extra":1}}"#)
-            .is_err()
-    );
-    assert!(
-        serde_json::from_str::<CardItem>(r#"{"k":"street","v":{"street":"Main","extra":1}}"#)
-            .is_err()
-    );
-
-    // 2. _sd digests must be strict 22-char base64url decoding to 16 bytes
-    let mut bad_sd: Vec<String> = (0..CARD_SD_PADDED_LEN)
+    // Positive baseline: 32 sorted 22-char 16-byte digests verify cleanly
+    let mut valid_sd: Vec<String> = (0..CARD_SD_PADDED_LEN)
         .map(|i| URL_SAFE_NO_PAD.encode([i as u8; 16]))
         .collect();
+    valid_sd.sort();
+    let ok_payload = CardPayload {
+        did: did.clone(),
+        recipient_did: None,
+        v: 100,
+        valid_until: 1_800_000_000,
+        max_hops: 2,
+        ad_count: 0,
+        allow_inquiries: false,
+        drops: vec![],
+        _sd: valid_sd.clone(),
+    };
+    let ok_wire = format!(
+        "{}~",
+        sign_raw_card_jws(&hdr, &serde_json::to_string(&ok_payload).unwrap(), &sk)
+    );
+    let verified_ok = verify_sd_card(&ok_wire).unwrap();
+    assert_eq!(verified_ok.payload._sd.len(), CARD_SD_PADDED_LEN);
+    validate_sd_card(&verified_ok, ok_wire.len()).unwrap();
+
+    // _sd digests must be strict 22-char base64url decoding to 16 bytes
+    let mut bad_sd = valid_sd;
     bad_sd[0] = "0000_not_16_bytes".to_string(); // invalid length / padding
     bad_sd.sort();
     let bad_sd_payload = CardPayload {
-        did: did.clone(),
+        did,
         recipient_did: None,
         v: 100,
         valid_until: 1_800_000_000,
@@ -271,25 +382,27 @@ fn s02_f7_sd_card_schema_digests_url_lengths_and_wire_framing() {
         drops: vec![],
         _sd: bad_sd,
     };
-    let hdr = serde_json::to_string(&CardJwsHeader {
-        alg: SD_CARD_ALG.to_string(),
-        typ: SD_CARD_TYP.to_string(),
-    })
-    .unwrap();
     let pl = serde_json::to_string(&bad_sd_payload).unwrap();
     let jws_bad_sd = sign_raw_card_jws(&hdr, &pl, &sk);
     let wire_bad_sd = format!("{}~", jws_bad_sd);
-    assert!(verify_sd_card(&wire_bad_sd).is_err());
+    assert_validation_err(verify_sd_card(&wire_bad_sd), "Invalid 128-bit digest in _sd");
     let parsed_bad_sd = SdCard {
         jws: jws_bad_sd,
         payload: bad_sd_payload,
         disclosures: Default::default(),
     };
-    assert!(validate_sd_card(&parsed_bad_sd, wire_bad_sd.len()).is_err());
+    assert_validation_err(
+        validate_sd_card(&parsed_bad_sd, wire_bad_sd.len()),
+        "Invalid 128-bit digest in _sd",
+    );
+}
 
-    // 3. CardItem::Url validation: reject dangerous schemes/userinfo/port0/whitespace, accept valid web URLs
+#[test]
+fn s02_f7_sd_card_validates_profile_url_and_raw_field_lengths() {
+    let sk = make_key(71);
+    let did = create_user_id(&sk.verifying_key(), None).unwrap();
     let base_input = CardPayloadInput {
-        did: did.clone(),
+        did,
         v: 100,
         valid_until: 1_800_000_000,
         max_hops: 2,
@@ -297,25 +410,34 @@ fn s02_f7_sd_card_schema_digests_url_lengths_and_wire_framing() {
         allow_inquiries: true,
         drops: vec![],
     };
-    for bad_profile_url in [
-        "javascript:alert(1)",
-        "file:///etc/passwd",
-        "data:text/html,<script>",
-        "ftp://example.com",
-        "https://user:pass@example.com",
-        "https://example.com:0",
-        "https://example.com/with space",
-        "https://example.com/\n",
+
+    // CardItem::Url validation: reject dangerous schemes/userinfo/port0/whitespace, accept valid web URLs
+    for (bad_profile_url, expected_err) in [
+        ("javascript:alert(1)", "must not specify a non-http scheme"),
+        ("data:text/html,<script>", "must not specify a non-http scheme"),
+        ("file:///etc/passwd", "Url scheme must be http:// or https://"),
+        ("ftp://example.com", "Url scheme must be http:// or https://"),
+        (
+            "https://user:pass@example.com",
+            "Url must not contain userinfo credentials",
+        ),
+        ("https://example.com:0", "without userinfo or port 0"),
+        (
+            "https://example.com/with space",
+            "invalid control, whitespace, or backslash",
+        ),
+        (
+            "https://example.com/\n",
+            "invalid control, whitespace, or backslash",
+        ),
     ] {
-        assert!(
+        assert_validation_err(
             sign_sd_card(
                 base_input.clone(),
                 vec![(CardItem::Url(bad_profile_url.to_string()), 1)],
-                &sk
-            )
-            .is_err(),
-            "CardItem::Url must reject '{}'",
-            bad_profile_url
+                &sk,
+            ),
+            expected_err,
         );
     }
     for good_profile_url in [
@@ -325,73 +447,113 @@ fn s02_f7_sd_card_schema_digests_url_lengths_and_wire_framing() {
         "example.org:8080/shop",
         "münchen.de/bäckerei",
     ] {
-        assert!(
-            sign_sd_card(
-                base_input.clone(),
-                vec![(CardItem::Url(good_profile_url.to_string()), 1)],
-                &sk
-            )
-            .is_ok(),
-            "CardItem::Url must accept '{}'",
-            good_profile_url
-        );
+        let card = sign_sd_card(
+            base_input.clone(),
+            vec![(CardItem::Url(good_profile_url.to_string()), 1)],
+            &sk,
+        )
+        .unwrap();
+        assert_eq!(card.disclosures.len(), 1);
     }
 
-    // 4. Raw length checks reject whitespace-padded strings exceeding field limits
+    // Raw length checks reject whitespace-padded strings exceeding field limits
     let pad = " ".repeat(150);
-    let padded_items: Vec<CardItem> = vec![
-        CardItem::Organization(format!("{}Org{}", pad, pad)),
-        CardItem::Community(format!("{}Com{}", pad, pad)),
-        CardItem::Street {
-            street: format!("{}Main{}", pad, pad),
-            house_number: None,
-        },
-        CardItem::Coordinates(format!("{}52.52,13.40{}", pad, pad)),
-        CardItem::Email(format!("{}a@b.org{}", pad, pad)),
-        CardItem::Phone(format!("{}+491234{}", pad, pad)),
-        CardItem::Url(format!("{}https://example.org{}", pad, pad)),
-        CardItem::Gender(format!("{}1{}", pad, pad)),
-        CardItem::Skill(Skill {
-            title: format!(
-                "{}{}{}",
-                " ".repeat(MAX_SKILL_TITLE_CHARS),
-                "Skill",
-                " ".repeat(10)
-            ),
-            text: None,
-            pricing: None,
-            is_remote: false,
-        }),
-        CardItem::Ad(Ad {
-            id: "0123456789abcdef".to_string(),
-            kind: AdKind::Offer,
-            title: format!(
-                "{}{}{}",
-                " ".repeat(MAX_AD_TITLE_CHARS),
-                "Ad",
-                " ".repeat(10)
-            ),
-            text: None,
-            pricing: None,
-            published_at: 1_700_000_000,
-            renewed_at: None,
-            expires_at: 1_700_000_000 + 86_400,
-            allow_inquiries: false,
-            is_remote: false,
-            image_token: None,
-            event_at: None,
-            event_all_day: false,
-        }),
+    let padded_cases: Vec<(CardItem, &str)> = vec![
+        (
+            CardItem::Organization(format!("{}Org{}", pad, pad)),
+            "Organization must be 1..=100",
+        ),
+        (
+            CardItem::Community(format!("{}Com{}", pad, pad)),
+            "Community must be 1..=100",
+        ),
+        (
+            CardItem::Street {
+                street: format!("{}Main{}", pad, pad),
+                house_number: None,
+            },
+            "street must be 1..=100",
+        ),
+        (
+            CardItem::Coordinates(format!("{}52.52,13.40{}", pad, pad)),
+            "Coordinates must be 1..=60",
+        ),
+        (
+            CardItem::Email(format!("{}a@b.org{}", pad, pad)),
+            "Email must be 1..=100",
+        ),
+        (
+            CardItem::Phone(format!("{}+491234{}", pad, pad)),
+            "Phone must be 1..=40",
+        ),
+        (
+            CardItem::Url(format!("{}https://example.org{}", pad, pad)),
+            "Url must be 1..=200",
+        ),
+        (
+            CardItem::Gender(format!("{}1{}", pad, pad)),
+            "Gender must be 1..=20",
+        ),
+        (
+            CardItem::Skill(Skill {
+                title: format!(
+                    "{}{}{}",
+                    " ".repeat(MAX_SKILL_TITLE_CHARS),
+                    "Skill",
+                    " ".repeat(10)
+                ),
+                text: None,
+                pricing: None,
+                is_remote: false,
+            }),
+            "Skill title length",
+        ),
+        (
+            CardItem::Ad(Ad {
+                id: "0123456789abcdef".to_string(),
+                kind: AdKind::Offer,
+                title: format!(
+                    "{}{}{}",
+                    " ".repeat(MAX_AD_TITLE_CHARS),
+                    "Ad",
+                    " ".repeat(10)
+                ),
+                text: None,
+                pricing: None,
+                published_at: 1_700_000_000,
+                renewed_at: None,
+                expires_at: 1_700_000_000 + 86_400,
+                allow_inquiries: false,
+                is_remote: false,
+                image_token: None,
+                event_at: None,
+                event_all_day: false,
+            }),
+            "Ad title length",
+        ),
     ];
-    for item in padded_items {
-        assert!(
-            sign_sd_card(base_input.clone(), vec![(item.clone(), 1)], &sk).is_err(),
-            "raw char limit must reject whitespace-padded item {:?}",
-            item
+    for (item, expected_err) in padded_cases {
+        assert_validation_err(
+            sign_sd_card(base_input.clone(), vec![(item, 1)], &sk),
+            expected_err,
         );
     }
+}
 
-    // 5. Strict SD-JWT wire framing: require trailing '~' and forbid empty interior segments
+#[test]
+fn s02_f7_sd_card_enforces_strict_wire_framing() {
+    let sk = make_key(71);
+    let did = create_user_id(&sk.verifying_key(), None).unwrap();
+    let base_input = CardPayloadInput {
+        did,
+        v: 100,
+        valid_until: 1_800_000_000,
+        max_hops: 2,
+        ad_count: 0,
+        allow_inquiries: true,
+        drops: vec![],
+    };
+
     let ok_card = sign_sd_card(
         base_input,
         vec![(CardItem::Email("alice@example.org".to_string()), 1)],
@@ -399,12 +561,24 @@ fn s02_f7_sd_card_schema_digests_url_lengths_and_wire_framing() {
     )
     .unwrap();
     let ok_wire = render_wire(&ok_card, 1, WireFilter::Full).unwrap();
+    let verified = verify_sd_card(&ok_wire).unwrap();
+    assert_eq!(verified.disclosures.len(), 1);
+
     let without_trailing_tilde = ok_wire.strip_suffix('~').unwrap();
-    assert!(verify_sd_card(without_trailing_tilde).is_err());
-    assert!(verify_sd_card(&ok_card.jws).is_err());
+    assert_invalid_jws_err(
+        verify_sd_card(without_trailing_tilde),
+        "SD-card wire must end with '~'",
+    );
+    assert_invalid_jws_err(verify_sd_card(&ok_card.jws), "SD-card wire must end with '~'");
     let disc = ok_card.disclosures.values().next().unwrap();
-    assert!(verify_sd_card(&format!("{}~~{}~", ok_card.jws, disc)).is_err());
-    assert!(verify_sd_card(&format!("{}~~", ok_card.jws)).is_err());
+    assert_invalid_jws_err(
+        verify_sd_card(&format!("{}~~{}~", ok_card.jws, disc)),
+        "Empty disclosure token",
+    );
+    assert_invalid_jws_err(
+        verify_sd_card(&format!("{}~~", ok_card.jws)),
+        "Empty disclosure token",
+    );
 }
 
 fn build_split_signed_wires(
@@ -487,8 +661,99 @@ fn test_ad(id: &str, title: &str, now: u64) -> Ad {
     }
 }
 
+type SplitCardItems = Vec<(CardItem, u8)>;
+
+fn build_oversized_split_card_groups(now: u64) -> (SplitCardItems, SplitCardItems) {
+    let mut big_webp = vec![
+        b'R', b'I', b'F', b'F', 22, 0, 0, 0, b'W', b'E', b'B', b'P', b'V', b'P', b'8', b' ', 10, 0,
+        0, 0, 0x00, 0x00, 0x00, 0x9d, 0x01, 0x2a, 96, 0, 96, 0,
+    ];
+    big_webp.resize(2900, 0);
+    let pic_uri = format!("data:image/webp;base64,{}", STANDARD.encode(&big_webp));
+    assert!(pic_uri.len() <= 4096);
+
+    let mut big_group_1 = vec![
+        (CardItem::Picture(pic_uri), 2),
+        (
+            CardItem::Name {
+                first_name: Some("A".repeat(80)),
+                last_name: Some("B".repeat(80)),
+            },
+            2,
+        ),
+        (CardItem::Organization("O".repeat(100)), 2),
+        (CardItem::Community("C".repeat(100)), 2),
+        (
+            CardItem::City {
+                zip_code: Some("1".repeat(20)),
+                city: Some("Y".repeat(80)),
+                country: Some("Z".repeat(80)),
+            },
+            2,
+        ),
+        (
+            CardItem::Street {
+                street: "S".repeat(100),
+                house_number: Some("9".repeat(20)),
+            },
+            2,
+        ),
+    ];
+    for i in 0..4 {
+        big_group_1.push((
+            CardItem::Skill(Skill {
+                title: format!("Skill{} {}", i, "K".repeat(MAX_SKILL_TITLE_CHARS - 8)),
+                text: Some("T".repeat(MAX_SKILL_TEXT_CHARS)),
+                pricing: Some("P".repeat(40)),
+                is_remote: false,
+            }),
+            2,
+        ));
+    }
+    for i in 0..5 {
+        let mut ad = test_ad(
+            &format!("{:016x}", i + 10),
+            &"A".repeat(MAX_AD_TITLE_CHARS),
+            now,
+        );
+        ad.text = Some("D".repeat(MAX_AD_TEXT_CHARS));
+        ad.pricing = Some("P".repeat(40));
+        big_group_1.push((CardItem::Ad(ad), 2));
+    }
+
+    let mut big_group_2 = vec![
+        (CardItem::Email("E".repeat(100)), 2),
+        (
+            CardItem::Url(format!("https://example.org/{}", "u".repeat(180))),
+            2,
+        ),
+    ];
+    for i in 4..8 {
+        big_group_2.push((
+            CardItem::Skill(Skill {
+                title: format!("Skill{} {}", i, "K".repeat(MAX_SKILL_TITLE_CHARS - 8)),
+                text: Some("T".repeat(MAX_SKILL_TEXT_CHARS)),
+                pricing: Some("P".repeat(40)),
+                is_remote: false,
+            }),
+            2,
+        ));
+    }
+    for i in 5..10 {
+        let mut ad = test_ad(
+            &format!("{:016x}", i + 10),
+            &"A".repeat(MAX_AD_TITLE_CHARS),
+            now,
+        );
+        ad.text = Some("D".repeat(MAX_AD_TEXT_CHARS));
+        ad.pricing = Some("P".repeat(40));
+        big_group_2.push((CardItem::Ad(ad), 2));
+    }
+    (big_group_1, big_group_2)
+}
+
 #[test]
-fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
+fn s02_f3_merge_rejects_invariant_violations_without_mutating_stored_card() {
     let now = 1_700_000_000u64;
     let valid_until = now + 30 * 86_400;
     let sk = make_key(81);
@@ -560,92 +825,7 @@ fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
     let dup_ad_b = vec![(CardItem::Ad(test_ad("aaaaaaaaaaaaaaaa", "Second", now)), 2)];
 
     // Case (e): > MAX_CARD_WIRE_BYTES (16,384) combined wire across 2 wires <= 16,384 B each
-    let mut big_webp = vec![
-        b'R', b'I', b'F', b'F', 22, 0, 0, 0, b'W', b'E', b'B', b'P', b'V', b'P', b'8', b' ', 10, 0,
-        0, 0, 0x00, 0x00, 0x00, 0x9d, 0x01, 0x2a, 96, 0, 96, 0,
-    ];
-    big_webp.resize(2900, 0);
-    let pic_uri = format!(
-        "data:image/webp;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(&big_webp)
-    );
-    assert!(pic_uri.len() <= 4096);
-    let mut big_group_1 = vec![
-        (CardItem::Picture(pic_uri), 2),
-        (
-            CardItem::Name {
-                first_name: Some("A".repeat(80)),
-                last_name: Some("B".repeat(80)),
-            },
-            2,
-        ),
-        (CardItem::Organization("O".repeat(100)), 2),
-        (CardItem::Community("C".repeat(100)), 2),
-        (
-            CardItem::City {
-                zip_code: Some("1".repeat(20)),
-                city: Some("Y".repeat(80)),
-                country: Some("Z".repeat(80)),
-            },
-            2,
-        ),
-        (
-            CardItem::Street {
-                street: "S".repeat(100),
-                house_number: Some("9".repeat(20)),
-            },
-            2,
-        ),
-    ];
-    for i in 0..4 {
-        big_group_1.push((
-            CardItem::Skill(Skill {
-                title: format!("Skill{} {}", i, "K".repeat(MAX_SKILL_TITLE_CHARS - 8)),
-                text: Some("T".repeat(MAX_SKILL_TEXT_CHARS)),
-                pricing: Some("P".repeat(40)),
-                is_remote: false,
-            }),
-            2,
-        ));
-    }
-    for i in 0..5 {
-        let mut ad = test_ad(
-            &format!("{:016x}", i + 10),
-            &"A".repeat(MAX_AD_TITLE_CHARS),
-            now,
-        );
-        ad.text = Some("D".repeat(MAX_AD_TEXT_CHARS));
-        ad.pricing = Some("P".repeat(40));
-        big_group_1.push((CardItem::Ad(ad), 2));
-    }
-    let mut big_group_2 = vec![
-        (CardItem::Email("E".repeat(100)), 2),
-        (
-            CardItem::Url(format!("https://example.org/{}", "u".repeat(180))),
-            2,
-        ),
-    ];
-    for i in 4..8 {
-        big_group_2.push((
-            CardItem::Skill(Skill {
-                title: format!("Skill{} {}", i, "K".repeat(MAX_SKILL_TITLE_CHARS - 8)),
-                text: Some("T".repeat(MAX_SKILL_TEXT_CHARS)),
-                pricing: Some("P".repeat(40)),
-                is_remote: false,
-            }),
-            2,
-        ));
-    }
-    for i in 5..10 {
-        let mut ad = test_ad(
-            &format!("{:016x}", i + 10),
-            &"A".repeat(MAX_AD_TITLE_CHARS),
-            now,
-        );
-        ad.text = Some("D".repeat(MAX_AD_TEXT_CHARS));
-        ad.pricing = Some("P".repeat(40));
-        big_group_2.push((CardItem::Ad(ad), 2));
-    }
+    let (big_group_1, big_group_2) = build_oversized_split_card_groups(now);
 
     for (label, g1, g2) in [
         ("11-ads", ads_a, ads_b),
@@ -670,7 +850,6 @@ fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
             label
         );
 
-        // Same check through CardStore::accept_envelope
         let mut store = CardStore::default();
         assert!(matches!(
             accept_envelope(
@@ -699,16 +878,21 @@ fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
             None,
             &|_| false,
         );
-        assert!(
-            matches!(out2, AcceptOutcome::Invalid(_)),
-            "accept_envelope must return Invalid on merged violation ({}), got {:?}",
-            label,
-            out2
+        assert_eq!(
+            out2,
+            AcceptOutcome::Invalid("Merged SD card violates card invariants".to_string()),
+            "accept_envelope must return Invalid on merged violation ({})",
+            label
         );
         assert_eq!(store.cards.get(&card_key).unwrap(), &stored_before);
     }
+}
 
-    // Recovery of pre-existing corrupted hops == 0 during valid same-JWS merge
+#[test]
+fn s02_f3_same_jws_merge_recovers_corrupted_zero_hops() {
+    let now = 1_700_000_000u64;
+    let valid_until = now + 30 * 86_400;
+    let sk = make_key(81);
     let valid_wires = build_split_signed_wires(
         &sk,
         200,
@@ -754,11 +938,10 @@ fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
 }
 
 #[test]
-fn s02_f4_evicted_incoming_card_returns_ignored_stale_and_preserves_tombstone() {
+fn s02_f4_global_eviction_returns_ignored_stale_and_preserves_tombstone() {
     let now = 1_700_000_000u64;
     let valid_until = now + 30 * 86_400;
 
-    // 1. Global max_stored_cards eviction preserves incoming card's deletion tombstone
     let mut store = CardStore::default();
     for seed in [91u8, 92u8] {
         let sk = make_key(seed);
@@ -838,8 +1021,13 @@ fn s02_f4_evicted_incoming_card_returns_ignored_stale_and_preserves_tombstone() 
     assert_eq!(out_global, AcceptOutcome::IgnoredStale);
     assert!(!store.cards.contains_key(&did_c));
     assert_eq!(store.deleted_card_versions.get(&did_c), Some(&50));
+}
 
-    // 2. Per-pubkey MAX_CARDS_PER_PUBKEY eviction preserves incoming card's deletion tombstone
+#[test]
+fn s02_f4_per_pubkey_eviction_returns_ignored_stale_and_preserves_tombstone() {
+    let now = 1_700_000_000u64;
+    let valid_until = now + 30 * 86_400;
+
     let mut pk_store = CardStore::default();
     let sk_multi = make_key(94);
     let vk_multi = sk_multi.verifying_key();
@@ -1174,8 +1362,7 @@ fn make_subchunk(fourcc: &[u8; 4], payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn s02_f8_jpeg_webp_png_parser_and_avatar_uri_hardening() {
-    // 1. JPEG parser strict validation
+fn s02_f8_jpeg_parser_strict_validation() {
     assert_eq!(
         parse_jpeg_dimensions(&make_jpeg_with_sof(0xC0, 96, 96)).unwrap(),
         (96, 96)
@@ -1189,35 +1376,53 @@ fn s02_f8_jpeg_webp_png_parser_and_avatar_uri_hardening() {
     let short_sof_len2 = vec![
         0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x02, 0x08, 0x00, 0x60, 0x00, 0x60,
     ];
-    assert!(parse_jpeg_dimensions(&short_sof_len2).is_err());
+    assert_validation_err(
+        parse_jpeg_dimensions(&short_sof_len2),
+        "SOF marker length too short in JPEG",
+    );
 
     let short_sof_len7 = vec![
         0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x07, 0x08, 0x00, 0x60, 0x00, 0x60,
     ];
-    assert!(parse_jpeg_dimensions(&short_sof_len7).is_err());
+    assert_validation_err(
+        parse_jpeg_dimensions(&short_sof_len7),
+        "SOF marker length too short in JPEG",
+    );
 
     let mut bad_ncomp = make_jpeg_with_sof(0xC0, 96, 96);
     bad_ncomp[17] = 2; // length=11 expects ncomp=1, not 2
-    assert!(parse_jpeg_dimensions(&bad_ncomp).is_err());
+    assert_validation_err(
+        parse_jpeg_dimensions(&bad_ncomp),
+        "SOF marker length does not match component count",
+    );
 
     // Truncated SOF (pos + length > len)
     let trunc_sof = vec![
         0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x20, 0x08, 0x00, 0x60, 0x00, 0x60, 0x01, 0x01, 0x11, 0x00,
     ];
-    assert!(parse_jpeg_dimensions(&trunc_sof).is_err());
+    assert_validation_err(
+        parse_jpeg_dimensions(&trunc_sof),
+        "Invalid or truncated marker length in JPEG",
+    );
 
     // Non-0xFF header garbage and 0xFF 0x00 in header
     let garbage_hdr = vec![
         0xFF, 0xD8, 0x41, 0x42, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x60, 0x00, 0x60, 0x01, 0x01,
         0x11, 0x00, 0xFF, 0xD9,
     ];
-    assert!(parse_jpeg_dimensions(&garbage_hdr).is_err());
+    assert_validation_err(
+        parse_jpeg_dimensions(&garbage_hdr),
+        "Invalid non-marker byte in JPEG header",
+    );
 
     let ff00_hdr = vec![
         0xFF, 0xD8, 0xFF, 0x00, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x60, 0x00, 0x60, 0x01, 0x01,
         0x11, 0x00, 0xFF, 0xD9,
     ];
-    assert!(parse_jpeg_dimensions(&ff00_hdr).is_err());
+    assert_validation_err(
+        parse_jpeg_dimensions(&ff00_hdr),
+        "Unexpected byte-stuffed or nested SOI marker",
+    );
 
     // Duplicate SOF
     let mut dup_sof = vec![0xFF, 0xD8];
@@ -1228,7 +1433,10 @@ fn s02_f8_jpeg_webp_png_parser_and_avatar_uri_hardening() {
         0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x08, 0x00, 0x08, 0x00, 0x01, 0x01, 0x11, 0x00,
     ]);
     dup_sof.extend_from_slice(&[0xFF, 0xD9]);
-    assert!(parse_jpeg_dimensions(&dup_sof).is_err());
+    assert_validation_err(
+        parse_jpeg_dimensions(&dup_sof),
+        "Duplicate SOF marker in JPEG stream",
+    );
 
     // DHP (0xDE), DNL (0xDC), nested SOI (0xD8)
     for bad_marker in [0xDEu8, 0xDCu8] {
@@ -1237,47 +1445,86 @@ fn s02_f8_jpeg_webp_png_parser_and_avatar_uri_hardening() {
             0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x60, 0x00, 0x60, 0x01, 0x01, 0x11, 0x00, 0xFF,
             0xD9,
         ]);
-        assert!(parse_jpeg_dimensions(&with_bad).is_err());
+        assert_validation_err(
+            parse_jpeg_dimensions(&with_bad),
+            "Unsupported DNL/DHP marker in JPEG",
+        );
     }
     let nested_soi = vec![
         0xFF, 0xD8, 0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x60, 0x00, 0x60, 0x01, 0x01,
         0x11, 0x00, 0xFF, 0xD9,
     ];
-    assert!(parse_jpeg_dimensions(&nested_soi).is_err());
+    assert_validation_err(
+        parse_jpeg_dimensions(&nested_soi),
+        "Unexpected byte-stuffed or nested SOI marker",
+    );
+}
 
-    // 2. WebP parser strict chunk sizes and VP8X sub-chunk validation
+#[test]
+fn s02_f8_webp_parser_strict_chunk_and_vp8x_validation() {
     let bad_vp8_size = wrap_riff_webp(b"VP8 ", 9, &make_vp8_chunk(96, 96), &[]);
-    assert!(parse_webp_dimensions(&bad_vp8_size).is_err());
+    assert_validation_err(
+        parse_webp_dimensions(&bad_vp8_size),
+        "Invalid VP8 chunk size: 9 < 10",
+    );
 
-    let bad_vp8l_size = wrap_riff_webp(b"VP8L", 4, &make_vp8l_chunk(96, 96), &[]);
-    assert!(parse_webp_dimensions(&bad_vp8l_size).is_err());
+    // Positive VP8L baseline + minimum 30-byte length + chunk_size < 5 boundary
+    let valid_vp8l = wrap_riff_webp(b"VP8L", 10, &make_vp8l_chunk(96, 96), &[0u8; 5]);
+    assert_eq!(parse_webp_dimensions(&valid_vp8l).unwrap(), (96, 96));
+
+    let short_vp8l = wrap_riff_webp(b"VP8L", 5, &make_vp8l_chunk(96, 96), &[]);
+    assert_validation_err(
+        parse_webp_dimensions(&short_vp8l),
+        "WebP bytes too short: 25 < 30",
+    );
+
+    let bad_vp8l_size = wrap_riff_webp(b"VP8L", 4, &make_vp8l_chunk(96, 96), &[0u8; 5]);
+    assert_validation_err(
+        parse_webp_dimensions(&bad_vp8l_size),
+        "Invalid VP8L chunk size: 4 < 5",
+    );
 
     let mut vp8x_payload_96 = vec![0u8; 4]; // flags
     vp8x_payload_96.extend_from_slice(&[95, 0, 0, 95, 0, 0]);
     let bad_vp8x_size = wrap_riff_webp(b"VP8X", 12, &vp8x_payload_96, &[]);
-    assert!(parse_webp_dimensions(&bad_vp8x_size).is_err());
+    assert_validation_err(
+        parse_webp_dimensions(&bad_vp8x_size),
+        "Invalid VP8X chunk size: 12 != 10",
+    );
 
     // VP8X (96x96) containing oversized VP8, VP8L, or ANMF sub-chunk
     let sub_big_vp8 = make_subchunk(b"VP8 ", &make_vp8_chunk(2048, 2048));
     let bomb_vp8x_vp8 = wrap_riff_webp(b"VP8X", 10, &vp8x_payload_96, &sub_big_vp8);
-    assert!(parse_webp_dimensions(&bomb_vp8x_vp8).is_err());
+    assert_validation_err(
+        parse_webp_dimensions(&bomb_vp8x_vp8),
+        "VP8 frame 2048x2048 exceeds VP8X canvas 96x96",
+    );
 
     let sub_big_vp8l = make_subchunk(b"VP8L", &make_vp8l_chunk(2048, 2048));
     let bomb_vp8x_vp8l = wrap_riff_webp(b"VP8X", 10, &vp8x_payload_96, &sub_big_vp8l);
-    assert!(parse_webp_dimensions(&bomb_vp8x_vp8l).is_err());
+    assert_validation_err(
+        parse_webp_dimensions(&bomb_vp8x_vp8l),
+        "VP8L frame 2048x2048 exceeds VP8X canvas 96x96",
+    );
 
     let mut anmf_big = vec![0u8; 16];
     anmf_big[6..9].copy_from_slice(&2047u32.to_le_bytes()[..3]);
     anmf_big[9..12].copy_from_slice(&2047u32.to_le_bytes()[..3]);
     let sub_big_anmf = make_subchunk(b"ANMF", &anmf_big);
     let bomb_vp8x_anmf = wrap_riff_webp(b"VP8X", 10, &vp8x_payload_96, &sub_big_anmf);
-    assert!(parse_webp_dimensions(&bomb_vp8x_anmf).is_err());
+    assert_validation_err(
+        parse_webp_dimensions(&bomb_vp8x_anmf),
+        "ANMF frame dimensions exceed VP8X canvas 96x96",
+    );
 
     // Truncated VP8X sub-chunk
     let mut trunc_sub = make_subchunk(b"ALPH", &[1, 2, 3, 4]);
     trunc_sub.pop();
     let bad_trunc_vp8x = wrap_riff_webp(b"VP8X", 10, &vp8x_payload_96, &trunc_sub);
-    assert!(parse_webp_dimensions(&bad_trunc_vp8x).is_err());
+    assert_validation_err(
+        parse_webp_dimensions(&bad_trunc_vp8x),
+        "Truncated VP8X sub-chunk payload",
+    );
 
     // Valid VP8X with ALPH (odd-sized -> padded) + VP8L + ANMF within 96x96 canvas
     let mut valid_subs = make_subchunk(b"ALPH", &[0u8; 3]);
@@ -1288,8 +1535,11 @@ fn s02_f8_jpeg_webp_png_parser_and_avatar_uri_hardening() {
     valid_subs.extend_from_slice(&make_subchunk(b"ANMF", &anmf_ok));
     let valid_vp8x = wrap_riff_webp(b"VP8X", 10, &vp8x_payload_96, &valid_subs);
     assert_eq!(parse_webp_dimensions(&valid_vp8x).unwrap(), (96, 96));
+}
 
-    // 3. PNG parser strict IHDR length (13) and minimum 33-byte length
+#[test]
+fn s02_f8_png_parser_and_avatar_uri_whitespace_hardening() {
+    // PNG parser strict IHDR length (13) and minimum 33-byte length
     let mut valid_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     valid_png.extend_from_slice(&13u32.to_be_bytes());
     valid_png.extend_from_slice(b"IHDR");
@@ -1300,17 +1550,30 @@ fn s02_f8_jpeg_webp_png_parser_and_avatar_uri_hardening() {
     assert_eq!(valid_png.len(), 33);
     assert_eq!(parse_png_dimensions(&valid_png).unwrap(), (96, 96));
 
-    assert!(parse_png_dimensions(&valid_png[..28]).is_err());
+    assert_validation_err(
+        parse_png_dimensions(&valid_png[..28]),
+        "PNG bytes too short: 28 < 33",
+    );
     let mut bad_ihdr_len = valid_png.clone();
     bad_ihdr_len[8..12].copy_from_slice(&12u32.to_be_bytes());
-    assert!(parse_png_dimensions(&bad_ihdr_len).is_err());
+    assert_validation_err(
+        parse_png_dimensions(&bad_ihdr_len),
+        "Invalid IHDR chunk length in PNG header: 12 != 13",
+    );
 
-    // 4. Avatar data URI forbids leading/internal/trailing whitespace
+    // Avatar data URI forbids leading/internal/trailing whitespace
     let good_webp = wrap_riff_webp(b"VP8 ", 10, &make_vp8_chunk(96, 96), &[]);
     let b64 = STANDARD.encode(&good_webp);
     let good_uri = format!("{}{}", MEDIA_DATA_URI_PREFIX, b64);
-    assert!(validate_avatar_data_uri(&good_uri).is_ok());
-    assert!(validate_avatar_data_uri(&format!(" {}", good_uri)).is_err());
-    assert!(validate_avatar_data_uri(&format!("{} {}", MEDIA_DATA_URI_PREFIX, b64)).is_err());
-    assert!(validate_avatar_data_uri(&format!("{}\n", good_uri)).is_err());
+    assert_eq!(validate_avatar_data_uri(&good_uri), Ok(()));
+    for bad_uri in [
+        format!(" {}", good_uri),
+        format!("{} {}", MEDIA_DATA_URI_PREFIX, b64),
+        format!("{}\n", good_uri),
+    ] {
+        assert_validation_err(
+            validate_avatar_data_uri(&bad_uri),
+            "Avatar data URI must not contain whitespace or control characters",
+        );
+    }
 }

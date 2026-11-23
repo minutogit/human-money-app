@@ -13,7 +13,7 @@ use humoco_market::{
     unseal_recovery_master_payload, validate_and_canonicalize_answers, validate_kdf_params,
     verify_guardian_vault_entry, verify_rehearsal_answers, DropDescriptor, EmergencyKitData,
     GuardianLocatorUpdate, GuardianReleasePayload, GuardianRevoke, GuardianVaultAck,
-    GuardianVaultEntry, GuardianVaultStore, MarketError, RecoveryKdfParams, RecoveryMasterPayload,
+    GuardianVaultStore, MarketError, RecoveryKdfParams, RecoveryMasterPayload,
     ShamirShare, KDF_M_KIB_MAX, KDF_M_KIB_MIN, KDF_M_KIB_PRODUCTION, KDF_P_COST_MAX,
     KDF_P_COST_MIN, KDF_P_COST_PRODUCTION, KDF_T_COST_MAX, KDF_T_COST_MIN, KDF_T_COST_PRODUCTION,
     MAX_GUARDIAN_WARDS, PAYLOAD_GUARDIAN_ACK_V1, PAYLOAD_GUARDIAN_ASSIGN_V1,
@@ -26,6 +26,38 @@ use rand::RngCore;
 
 fn make_signing_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&[seed; 32])
+}
+
+#[track_caller]
+fn assert_validation_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    match res {
+        Err(MarketError::Validation(msg)) => assert!(
+            msg.contains(expected_substr),
+            "expected Validation error containing {:?}, got {:?}",
+            expected_substr,
+            msg
+        ),
+        other => panic!(
+            "expected MarketError::Validation containing {:?}, got {:?}",
+            expected_substr, other
+        ),
+    }
+}
+
+#[track_caller]
+fn assert_crypto_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    match res {
+        Err(MarketError::Crypto(msg)) => assert!(
+            msg.contains(expected_substr),
+            "expected Crypto error containing {:?}, got {:?}",
+            expected_substr,
+            msg
+        ),
+        other => panic!(
+            "expected MarketError::Crypto containing {:?}, got {:?}",
+            expected_substr, other
+        ),
+    }
 }
 
 fn sample_drop_descriptor(id: &str) -> DropDescriptor {
@@ -69,17 +101,27 @@ fn test_recovery_wire_constants_and_types() {
     let deser: GuardianVaultAck = serde_json::from_str(&json).unwrap();
     assert_eq!(deser, ack);
 
+    let owner_a = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    let owner_b = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
     let dummy_share = ShamirShare {
         index: 1,
         y: [42u8; 32],
     };
-    let commit = compute_share_commitment(
-        "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
-        1,
-        &dummy_share,
-    );
+    let commit = compute_share_commitment(owner_a, 1, &dummy_share);
+    let commit2 = compute_share_commitment(owner_a, 1, &dummy_share);
+    assert_eq!(commit, commit2);
     assert_ne!(commit, [0u8; 16]);
-    assert!(std::mem::size_of::<GuardianVaultEntry>() > 0);
+    assert_ne!(commit, compute_share_commitment(owner_b, 1, &dummy_share));
+    assert_ne!(commit, compute_share_commitment(owner_a, 2, &dummy_share));
+    let mut diff_idx_share = dummy_share.clone();
+    diff_idx_share.index = 2;
+    assert_ne!(
+        commit,
+        compute_share_commitment(owner_a, 1, &diff_idx_share)
+    );
+    let mut diff_y_share = dummy_share;
+    diff_y_share.y[0] ^= 0x01;
+    assert_ne!(commit, compute_share_commitment(owner_a, 1, &diff_y_share));
 }
 
 #[test]
@@ -104,7 +146,7 @@ fn test_gf256_field_invariants() {
     }
 
     // Zero cannot be inverted
-    assert!(gf256_inv(0).is_err());
+    assert_crypto_err(gf256_inv(0), "Cannot invert zero in GF(256)");
 }
 
 #[test]
@@ -162,25 +204,58 @@ fn test_shamir_rejections_and_failures() {
     let secret = [42u8; 32];
     let shares = split_secret_32(&secret, 3, 5).unwrap();
 
+    // Positive baseline: 3 valid distinct shares reconstruct secret
+    assert_eq!(
+        *combine_shares_32(
+            &[shares[0].clone(), shares[1].clone(), shares[2].clone()],
+            3
+        )
+        .unwrap(),
+        secret
+    );
+
     // Insufficient shares (2 when 3 required)
-    assert!(combine_shares_32(&[shares[0].clone(), shares[1].clone()], 3).is_err());
+    assert_validation_err(
+        combine_shares_32(&[shares[0].clone(), shares[1].clone()], 3),
+        "Insufficient shares",
+    );
 
     // Duplicate share index rejected
-    assert!(combine_shares_32(
-        &[shares[0].clone(), shares[0].clone(), shares[1].clone(),],
-        3
-    )
-    .is_err());
+    assert_validation_err(
+        combine_shares_32(
+            &[shares[0].clone(), shares[0].clone(), shares[1].clone()],
+            3,
+        ),
+        "Duplicate Shamir share index",
+    );
 
     // Share index 0 rejected
     let mut bad_share = shares[0].clone();
     bad_share.index = 0;
-    assert!(combine_shares_32(&[bad_share, shares[1].clone(), shares[2].clone()], 3).is_err());
+    assert_validation_err(
+        combine_shares_32(&[bad_share, shares[1].clone(), shares[2].clone()], 3),
+        "Shamir share index 0 is invalid",
+    );
+
+    // Threshold < 2 in combine_shares_32 rejected
+    assert_validation_err(
+        combine_shares_32(&[shares[0].clone(), shares[1].clone()], 1),
+        "Threshold m must be at least 2",
+    );
 
     // Invalid parameters in split_secret_32
-    assert!(split_secret_32(&secret, 1, 3).is_err()); // m < 2
-    assert!(split_secret_32(&secret, 4, 3).is_err()); // m > n
-    assert!(split_secret_32(&secret, 2, 17).is_err()); // n > 16
+    assert_validation_err(
+        split_secret_32(&secret, 1, 3),
+        "Invalid Shamir threshold parameters",
+    ); // m < 2
+    assert_validation_err(
+        split_secret_32(&secret, 4, 3),
+        "Invalid Shamir threshold parameters",
+    ); // m > n
+    assert_validation_err(
+        split_secret_32(&secret, 2, 17),
+        "Invalid Shamir threshold parameters",
+    ); // n > 16
 }
 
 proptest! {
@@ -241,20 +316,38 @@ fn test_validate_and_canonicalize_answers_rules() {
     );
 
     // Duplicate question IDs rejected
-    assert!(validate_and_canonicalize_answers(&[1, 1, 3], &answers).is_err());
-    assert!(validate_and_canonicalize_answers(&[1, 2, 2], &answers).is_err());
+    assert_validation_err(
+        validate_and_canonicalize_answers(&[1, 1, 3], &answers),
+        "Question IDs must be pairwise distinct",
+    );
+    assert_validation_err(
+        validate_and_canonicalize_answers(&[1, 2, 2], &answers),
+        "Question IDs must be pairwise distinct",
+    );
 
     // Question IDs out of 1..=12 range
-    assert!(validate_and_canonicalize_answers(&[0, 1, 2], &answers).is_err());
-    assert!(validate_and_canonicalize_answers(&[1, 2, 13], &answers).is_err());
+    assert_validation_err(
+        validate_and_canonicalize_answers(&[0, 1, 2], &answers),
+        "Invalid question ID",
+    );
+    assert_validation_err(
+        validate_and_canonicalize_answers(&[1, 2, 13], &answers),
+        "Invalid question ID",
+    );
 
     // Individual answer too short (< 2 characters)
     let short_answer = ["a", "Erna", "Schulzentrum"];
-    assert!(validate_and_canonicalize_answers(&q_ids, &short_answer).is_err());
+    assert_validation_err(
+        validate_and_canonicalize_answers(&q_ids, &short_answer),
+        "Each answer must be at least",
+    );
 
     // Total length too short (< 12 characters)
     let too_short_total = ["ab", "cd", "ef"]; // total 6 chars < 12
-    assert!(validate_and_canonicalize_answers(&q_ids, &too_short_total).is_err());
+    assert_validation_err(
+        validate_and_canonicalize_answers(&q_ids, &too_short_total),
+        "Total answer length must be at least",
+    );
 }
 
 // ============================================================================
@@ -264,27 +357,43 @@ fn test_validate_and_canonicalize_answers_rules() {
 #[test]
 fn test_kdf_params_bounds_checks() {
     let mut params = RecoveryKdfParams::new_fast_test();
-    assert!(validate_kdf_params(&params).is_ok());
+    assert_eq!(validate_kdf_params(&params), Ok(()));
 
-    // m_kib bomb checks
+    // m_kib inclusive bounds & bomb checks
+    params.m_kib = KDF_M_KIB_MIN;
+    assert_eq!(validate_kdf_params(&params), Ok(()));
+    params.m_kib = KDF_M_KIB_MAX;
+    assert_eq!(validate_kdf_params(&params), Ok(()));
     params.m_kib = KDF_M_KIB_MIN - 1;
-    assert!(validate_kdf_params(&params).is_err());
+    assert_validation_err(validate_kdf_params(&params), "m_kib out of bounds");
     params.m_kib = KDF_M_KIB_MAX + 1;
-    assert!(validate_kdf_params(&params).is_err());
+    assert_validation_err(validate_kdf_params(&params), "m_kib out of bounds");
     params.m_kib = 64;
 
-    // t_cost bounds
+    // t_cost inclusive & out-of-range bounds
+    params.t_cost = KDF_T_COST_MAX;
+    assert_eq!(validate_kdf_params(&params), Ok(()));
     params.t_cost = 0;
-    assert!(validate_kdf_params(&params).is_err());
+    assert_validation_err(validate_kdf_params(&params), "t_cost out of bounds");
     params.t_cost = KDF_T_COST_MAX + 1;
-    assert!(validate_kdf_params(&params).is_err());
+    assert_validation_err(validate_kdf_params(&params), "t_cost out of bounds");
     params.t_cost = 1;
 
-    // p_cost bounds
+    // p_cost inclusive & out-of-range bounds
+    params.p_cost = KDF_P_COST_MAX;
+    assert_eq!(validate_kdf_params(&params), Ok(()));
     params.p_cost = 0;
-    assert!(validate_kdf_params(&params).is_err());
+    assert_validation_err(validate_kdf_params(&params), "p_cost out of bounds");
     params.p_cost = KDF_P_COST_MAX + 1;
-    assert!(validate_kdf_params(&params).is_err());
+    assert_validation_err(validate_kdf_params(&params), "p_cost out of bounds");
+
+    // Argon2 invariant: exact m_kib == 8 * p_cost passes; below fails
+    params.m_kib = 16;
+    params.t_cost = 1;
+    params.p_cost = 2;
+    assert_eq!(validate_kdf_params(&params), Ok(()));
+    params.m_kib = 8;
+    assert_validation_err(validate_kdf_params(&params), "must be at least 8 * p_cost");
 }
 
 #[test]
@@ -321,7 +430,16 @@ fn test_derive_recovery_key_production_vector() {
     let key = derive_recovery_key(&q_ids, &answers, &params).expect("Production KDF must succeed");
     let elapsed = start.elapsed();
 
+    let fast_params = RecoveryKdfParams {
+        m_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+        salt: [42u8; 16],
+    };
+    let fast_key = derive_recovery_key(&q_ids, &answers, &fast_params).unwrap();
+
     assert_ne!(*key, [0u8; 32]);
+    assert_ne!(*key, *fast_key);
     println!(
         "Production Argon2id (64 MiB, t=12, p=1) completed in {:.2?}",
         elapsed
@@ -341,7 +459,10 @@ fn test_extended_12_question_catalog_and_rehearsal_verifiers() {
     assert_ne!(*key, [0u8; 32]);
 
     // Question ID 13 must be rejected
-    assert!(derive_recovery_key(&[7, 10, 13], &answers, &params).is_err());
+    assert_validation_err(
+        derive_recovery_key(&[7, 10, 13], &answers, &params),
+        "Invalid question ID 13",
+    );
 
     let verifiers = compute_rehearsal_verifiers(owner_did, 1, &q_ids, &answers, &params).unwrap();
 
@@ -407,9 +528,18 @@ fn test_mnemonic_language_bijective_mapping() {
     assert_eq!(seen_codes.len(), 11);
 
     // Invalid codes
-    assert!(code_to_mnemonic_language(0).is_err());
-    assert!(code_to_mnemonic_language(12).is_err());
-    assert!(code_to_mnemonic_language(255).is_err());
+    assert_validation_err(
+        code_to_mnemonic_language(0),
+        "Unknown mnemonic language code: 0",
+    );
+    assert_validation_err(
+        code_to_mnemonic_language(12),
+        "Unknown mnemonic language code: 12",
+    );
+    assert_validation_err(
+        code_to_mnemonic_language(255),
+        "Unknown mnemonic language code: 255",
+    );
 }
 
 // ============================================================================
@@ -438,13 +568,19 @@ fn test_master_payload_sealing_roundtrip_and_tampering() {
 
     // Wrong key fails
     let wrong_s = [99u8; 32];
-    assert!(unseal_recovery_master_payload(&r_enc, &wrong_s).is_err());
+    assert_crypto_err(
+        unseal_recovery_master_payload(&r_enc, &wrong_s),
+        "AEAD master unsealing failed",
+    );
 
     // Tampered ciphertext fails Poly1305 AEAD
     let mut tampered = r_enc.clone();
     let last = tampered.len() - 1;
     tampered[last] ^= 0x01;
-    assert!(unseal_recovery_master_payload(&tampered, &s).is_err());
+    assert_crypto_err(
+        unseal_recovery_master_payload(&tampered, &s),
+        "AEAD master unsealing failed",
+    );
 }
 
 // ============================================================================
@@ -493,26 +629,31 @@ fn test_guardian_vault_entry_verification_and_tamper_detection() {
     // Tamper with share.y -> triggers share commitment mismatch
     let mut poisoned_entry = entries[0].clone();
     poisoned_entry.share.y[0] ^= 0x01;
-    let err = verify_guardian_vault_entry(&poisoned_entry).unwrap_err();
-    assert!(matches!(err, MarketError::Validation(_)));
+    assert_validation_err(
+        verify_guardian_vault_entry(&poisoned_entry),
+        "Share commitment mismatch",
+    );
 
     // Tamper with r_enc -> triggers owner_sig failure
     let mut tampered_r_enc = entries[0].clone();
     tampered_r_enc.r_enc[10] ^= 0x01;
-    let err = verify_guardian_vault_entry(&tampered_r_enc).unwrap_err();
-    assert!(matches!(err, MarketError::Crypto(_)));
+    assert_crypto_err(
+        verify_guardian_vault_entry(&tampered_r_enc),
+        "Invalid owner signature",
+    );
 
     // Tamper with rotation_epoch -> triggers owner_sig failure
     let mut tampered_epoch = entries[0].clone();
     tampered_epoch.rotation_epoch += 1;
-    let err = verify_guardian_vault_entry(&tampered_epoch).unwrap_err();
-    assert!(matches!(err, MarketError::Crypto(_)));
+    assert_crypto_err(
+        verify_guardian_vault_entry(&tampered_epoch),
+        "Invalid owner signature",
+    );
 
     // Tamper with kdf_params to exceed ceiling -> triggers validation error
     let mut bomb_entry = entries[0].clone();
     bomb_entry.kdf_params.m_kib = 1_000_000;
-    let err = verify_guardian_vault_entry(&bomb_entry).unwrap_err();
-    assert!(matches!(err, MarketError::Validation(_)));
+    assert_validation_err(verify_guardian_vault_entry(&bomb_entry), "m_kib out of bounds");
 }
 
 // ============================================================================
@@ -580,8 +721,10 @@ fn test_guardian_vault_store_capacity_and_lifecycle() {
     )
     .unwrap();
 
-    let err = store.upsert_ward(bundle_65[0].clone()).unwrap_err();
-    assert!(matches!(err, MarketError::Validation(_)));
+    assert_validation_err(
+        store.upsert_ward(bundle_65[0].clone()),
+        "Guardian vault capacity reached",
+    );
     assert_eq!(store.len(), MAX_GUARDIAN_WARDS);
 
     // Updating existing ward with higher rotation_epoch succeeds without exceeding capacity
@@ -625,7 +768,10 @@ fn test_guardian_vault_store_capacity_and_lifecycle() {
         1700000200,
     )
     .unwrap();
-    assert!(store.upsert_ward(bundle_1_stale[0].clone()).is_err());
+    assert_validation_err(
+        store.upsert_ward(bundle_1_stale[0].clone()),
+        "Stale rotation epoch",
+    );
 
     // Locator update
     let locator_update = GuardianLocatorUpdate {
@@ -709,19 +855,26 @@ fn h3_guardian_vault_blocks_replay_and_out_of_order_assign_after_revoke() {
     assert!(store.get_ward(&did_a).is_none());
 
     // Replaying assign at epoch 1 or same revoked epoch 2 must fail
-    assert!(store.upsert_ward(ep1).is_err());
-    assert!(store.upsert_ward(ep2).is_err());
+    assert_validation_err(
+        store.upsert_ward(ep1),
+        "Rejected revoked or stale rotation epoch",
+    );
+    assert_validation_err(
+        store.upsert_ward(ep2),
+        "Rejected revoked or stale rotation epoch",
+    );
     assert!(store.get_ward(&did_a).is_none());
 
     // Stale locator update at epoch 2 after revoke is rejected
-    assert!(store
-        .update_locator(&GuardianLocatorUpdate {
+    assert_validation_err(
+        store.update_locator(&GuardianLocatorUpdate {
             owner_did: did_a.clone(),
             rotation_epoch: 2,
             backup_sync_descriptors: vec![sample_drop_descriptor("stale")],
             updated_at: 1_700_000_500,
-        })
-        .is_err());
+        }),
+        "Rejected locator update for revoked epoch",
+    );
 
     // Strictly newer epoch 3 succeeds
     store.upsert_ward(ep3).unwrap();
@@ -755,12 +908,14 @@ fn h3_guardian_vault_blocks_replay_and_out_of_order_assign_after_revoke() {
         })
         .unwrap());
 
-    assert!(store_ooo
-        .upsert_ward(make_entry(&sk_b, &did_b, &payload_b, 1))
-        .is_err());
-    assert!(store_ooo
-        .upsert_ward(make_entry(&sk_b, &did_b, &payload_b, 2))
-        .is_err());
+    assert_validation_err(
+        store_ooo.upsert_ward(make_entry(&sk_b, &did_b, &payload_b, 1)),
+        "Rejected revoked or stale rotation epoch",
+    );
+    assert_validation_err(
+        store_ooo.upsert_ward(make_entry(&sk_b, &did_b, &payload_b, 2)),
+        "Rejected revoked or stale rotation epoch",
+    );
     store_ooo
         .upsert_ward(make_entry(&sk_b, &did_b, &payload_b, 3))
         .unwrap();
@@ -875,7 +1030,10 @@ fn test_guardian_release_reply_sealing_and_verification() {
 
     // Wrong sk_temp fails
     let wrong_sk = [99u8; 32];
-    assert!(open_and_verify_guardian_release_reply(&wrong_sk, &reply_uri).is_err());
+    assert_crypto_err(
+        open_and_verify_guardian_release_reply(&wrong_sk, &reply_uri),
+        "Failed to decrypt recovery reply",
+    );
 
     // Chat message wrapping around both request and reply URIs
     let req_uri = build_recovery_request_uri(&pk_temp, 1700000000, None);
@@ -951,17 +1109,25 @@ fn test_end_to_end_social_recovery_success_and_failures() {
 
     // Failure with wrong answers: Poly1305 AEAD fails
     let wrong_answers = ["Blumenstrasse", "Berufsschule", "Mallorca"]; // 3rd wrong
-    let err = recover_master_payload_from_shares(&collected_entries, &wrong_answers).unwrap_err();
-    assert!(matches!(err, MarketError::Crypto(_)));
+    assert_crypto_err(
+        recover_master_payload_from_shares(&collected_entries, &wrong_answers),
+        "AEAD master unsealing failed",
+    );
 
     // Failure with insufficient shares (2 when 3 required)
     let too_few = vec![bundle[0].clone(), bundle[1].clone()];
-    assert!(recover_master_payload_from_shares(&too_few, &correct_answers).is_err());
+    assert_validation_err(
+        recover_master_payload_from_shares(&too_few, &correct_answers),
+        "Insufficient guardian entries",
+    );
 
     // Failure if a guardian gave a poisoned share: caught by entry verification
     let mut poisoned = collected_entries.clone();
     poisoned[0].share.y[5] ^= 0xFF;
-    assert!(recover_master_payload_from_shares(&poisoned, &correct_answers).is_err());
+    assert_validation_err(
+        recover_master_payload_from_shares(&poisoned, &correct_answers),
+        "Share commitment mismatch",
+    );
 }
 
 // ============================================================================
@@ -1017,12 +1183,18 @@ fn test_emergency_kit_uri_roundtrip_12_and_24_words() {
     // Invalid entropy lengths rejected
     let mut bad_kit = kit_12.clone();
     bad_kit.entropy_hex = hex::encode(vec![0x00; 10]); // 10 bytes invalid
-    assert!(build_emergency_kit_uri(&bad_kit).is_err());
+    assert_validation_err(
+        build_emergency_kit_uri(&bad_kit),
+        "Emergency kit entropy must be 16 or 32 bytes",
+    );
 
     // Invalid language code rejected
     bad_kit.entropy_hex = hex::encode(vec![0x00; 16]);
     bad_kit.language_code = 15;
-    assert!(build_emergency_kit_uri(&bad_kit).is_err());
+    assert_validation_err(
+        build_emergency_kit_uri(&bad_kit),
+        "Invalid language code: 15",
+    );
 }
 
 #[test]
@@ -1204,13 +1376,19 @@ fn test_sloppy_kit_uri_and_prefixed_vault_lookup() {
         })
         .unwrap());
     assert_eq!(store.len(), 1);
-    assert!(store.get_ward(&shop_did).is_some());
+    assert_eq!(
+        store.get_ward(&shop_did).unwrap().owner_display_name,
+        "Laden"
+    );
     assert!(store.get_ward(&phone_did).is_none());
 
     // F6 Zero-Compat: short recovery URI without `humoco://` scheme must be rejected.
     let canonical = build_recovery_request_uri(&[7u8; 32], 1700000500, Some("Alice"));
     let legacy_short = canonical.strip_prefix("humoco://").unwrap();
-    assert!(parse_recovery_request_uri(legacy_short).is_err());
+    assert_validation_err(
+        parse_recovery_request_uri(legacy_short),
+        "missing 'recovery-req?'",
+    );
 }
 
 #[test]
@@ -1226,7 +1404,12 @@ fn test_f2_guardian_vault_store_rejects_missing_epoch_watermarks() {
         "wards": {},
         "highest_epoch_by_owner": {}
     });
-    assert!(serde_json::from_value::<GuardianVaultStore>(missing_revoked).is_err());
+    let err_revoked = serde_json::from_value::<GuardianVaultStore>(missing_revoked).unwrap_err();
+    assert!(
+        err_revoked.to_string().contains("revoked_epoch_by_owner"),
+        "expected missing field revoked_epoch_by_owner, got {}",
+        err_revoked
+    );
 
     let store = GuardianVaultStore::new();
     let encoded = serde_json::to_string(&store).unwrap();
