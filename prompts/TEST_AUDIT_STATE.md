@@ -1,17 +1,17 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `a5f8e0c`
-- **Total Test Files:** 165 | **Total Test Functions:** 1227
+- **Updated at HEAD:** `cd3d0dc`
+- **Total Test Files:** 165 | **Total Test Functions:** 1233
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
 | `src-tauri/src/checkout/tests.rs` | P1 | 19 | 0/0/0 | 🟢 Verified | `a5f8e0c` | 19/19 pass; cargo-mutants precommit.rs collect_verified_precommit_conflicts 5/6 viable caught (2 unviable, 1 missed); Revert-Red trusted_keys.rs:176 S04-F8 confirmed |
 | `crates/humoco-market/tests/recovery_tests.rs` | P1 | 23 | 0/0/0 | 🟢 Verified | `a5f8e0c` | 23/23 pass; cargo-mutants recovery.rs pass1 42/46 viable caught (1 unviable) + pass2 validate_kdf_params 25/25 caught after inclusive KDF bounds |
 | `crates/humoco-market/tests/security_audit_s02_market_loop.rs` | P1 | 16 | 0/0/0 | 🟢 Verified | `a5f8e0c` | 16/16 pass; fixed wrong-gate VP8L chunk-size placebo; cargo-mutants media.rs 19/28 caught, sd_card.rs 19/27 caught |
-| `crates/humoco-market/tests/slot_tests.rs` | P1 | 18 | 0/23/3 | ⚪ Pending | — | — |
-| `src-tauri/src/services/market_service/tests.rs` | P1 | 24 | 0/22/16 | ⚪ Pending | — | — |
-| `crates/humoco-market/tests/post_tests.rs` | P1 | 12 | 0/18/1 | ⚪ Pending | — | — |
+| `crates/humoco-market/tests/slot_tests.rs` | P1 | 18 | 0/0/0 | 🟢 Verified | `cd3d0dc` | 18/18 pass; cargo-mutants slot.rs verify_card_bundle/target_recipient_bucket/unpad_backup_slot_bytes 27/28 viable caught (1 unviable, 1 missed) |
+| `src-tauri/src/services/market_service/tests.rs` | P1 | 30 | 0/0/0 | 🟢 Verified | `cd3d0dc` | 30/30 pass (nextest 351/351); fixed h5 wrong-gate JWS signature tamper placebo; cargo-mutants ads.rs compute_event_expiry/validate_ad_input 22/35 caught |
+| `crates/humoco-market/tests/post_tests.rs` | P1 | 12 | 0/0/0 | 🟢 Verified | `cd3d0dc` | 12/12 pass; cargo-mutants post.rs 81/140 viable caught (1 unviable, 59 missed) |
 | `crates/humoco-market/tests/sync_access_tests.rs` | P1 | 11 | 0/16/0 | ⚪ Pending | — | — |
 | `crates/humoco-market/tests/card_tests.rs` | P1 | 24 | 0/11/0 | ⚪ Pending | — | — |
 | `crates/humoco-market/tests/audit_wave1_regressions.rs` | P1 | 4 | 0/10/0 | ⚪ Pending | — | — |
