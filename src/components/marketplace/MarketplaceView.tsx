@@ -1,68 +1,37 @@
 // src/components/marketplace/MarketplaceView.tsx
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-    Plus,
-    Edit3,
-    Users,
-    User,
-    LayoutGrid,
-    SlidersHorizontal,
-    ChevronUp,
     ChevronDown,
+    ChevronUp,
+    Edit3,
+    LayoutGrid,
+    Plus,
     RefreshCw,
+    SlidersHorizontal,
+    User,
+    Users,
 } from 'lucide-react';
-import {
-    Contact,
-    FrontendMarketSnapshot,
-    FrontendMyMarketProfile,
-    FrontendMyAd,
-    FrontendAdInput,
-    FrontendSaveMyMarketProfileRequest,
-    FrontendPostInboxSummary,
-    Ad,
-} from '../../types';
-import { useNavigation } from '../../context/NavigationContext';
-import { useSession } from '../../context/SessionContext';
-import { marketService } from '../../services/marketService';
-import { postService } from '../../services/postService';
-import { APP_EVENTS } from '../../utils/appEvents';
-import { settingsService } from '../../services/settingsService';
-import { contactService } from '../../services/contactService';
-import ContactDialog from '../contacts/ContactDialog';
-import { PageLayout } from '../ui/PageLayout';
-import { Button } from '../ui/Button';
-import { PageLoadingState } from '../ui/PageState';
-import { ConfirmationModal } from '../ui/ConfirmationModal';
-import { BoardTab } from './BoardTab';
-import { PeopleTab } from './PeopleTab';
-import { MineTab } from './MineTab';
-import { MarketPersonView } from './MarketPersonView';
-import { AdEditorModal } from './AdEditorModal';
-import { RenewAdModal } from './RenewAdModal';
-import { ProfileCardEditor } from './ProfileCardEditor';
-import { ShareCardModal } from './ShareCardModal';
-import { ImportCardModal } from './ImportCardModal';
-import { MarketplaceOptionsPanel } from './MarketplaceOptionsPanel';
-import { translateError, stringifyError } from '../../utils/errorHelper';
-import { isExactSameUserId, isSameRootIdentity } from '../../utils/userIdHelper';
-import {
-    SYNC_STATUS_UPDATED_EVENT,
-    MY_PROFILE_UPDATED_EVENT,
-    APP_NOTICES_UPDATED_EVENT,
-    showTransientSyncToast,
-} from '../../utils/syncEvents';
 import { formatLastSyncLabel } from '../../utils/appNotices';
-import { logger } from '../../utils/log';
+import { isExactSameUserId } from '../../utils/userIdHelper';
+import { Button } from '../ui/Button';
+import { PageLayout } from '../ui/PageLayout';
+import { PageLoadingState } from '../ui/PageState';
+import { BoardTab } from './BoardTab';
+import { MarketplaceModals } from './MarketplaceModals';
+import { MarketplaceOptionsPanel } from './MarketplaceOptionsPanel';
+import { MarketPersonView } from './MarketPersonView';
+import { MineTab } from './MineTab';
+import { PeopleTab } from './PeopleTab';
+import { useMarketplaceView, type MarketplaceTab } from './useMarketplaceView';
+
+export type { MarketplaceTab } from './useMarketplaceView';
 
 export interface MarketplaceViewProps {
     onBack?: () => void;
     initialSelectedDid?: string;
-    initialTab?: 'board' | 'people' | 'mine';
+    initialTab?: MarketplaceTab;
     initialOpenEditor?: boolean;
 }
-
-export type MarketplaceTab = 'board' | 'people' | 'mine';
 
 export function MarketplaceView({
     onBack,
@@ -71,508 +40,18 @@ export function MarketplaceView({
     initialOpenEditor = false,
 }: MarketplaceViewProps) {
     const { t } = useTranslation();
-    const { navigate, goBack, appState, navigateToSettingsSection } = useNavigation();
-    const { protectAction } = useSession();
-    const handleBack = onBack || goBack;
+    const view = useMarketplaceView({
+        onBack,
+        initialSelectedDid,
+        initialTab,
+        initialOpenEditor,
+    });
 
-    const [activeTab, setActiveTab] = useState<MarketplaceTab>(initialTab || 'board');
-    const [snapshot, setSnapshot] = useState<FrontendMarketSnapshot | null>(null);
-    const [myProfile, setMyProfile] = useState<FrontendMyMarketProfile | null>(null);
-    const [inboxSummary, setInboxSummary] = useState<FrontendPostInboxSummary | null>(null);
-    const [contacts, setContacts] = useState<Contact[]>([]);
-    const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
-    const [addContactTarget, setAddContactTarget] = useState<{ did: string; suggestedName?: string | null } | null>(null);
-    const [isLoading, setIsLoading] = useState<boolean>(true);
-    const [isSyncing, setIsSyncing] = useState<boolean>(false);
-    const [error, setError] = useState<string | null>(null);
-
-    // Selected person DID for detail view
-    const didFromNav = appState.view === 'marketplace' ? appState.selectedDid : undefined;
-    const [selectedPersonDid, setSelectedPersonDid] = useState<string | null>(
-        initialSelectedDid || didFromNav || null
-    );
-
-    // Modals
-    const [isCreateAdOpen, setIsCreateAdOpen] = useState(false);
-    const [editingAd, setEditingAd] = useState<Ad | FrontendMyAd | null>(null);
-    const [inquiryTargetAd, setInquiryTargetAd] = useState<Ad | null>(null);
-    const [renewingAd, setRenewingAd] = useState<FrontendMyAd | null>(null);
-    const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(initialOpenEditor);
-    const [isShareModalOpen, setIsShareModalOpen] = useState(false);
-    const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-    const [isPublishPromptOpen, setIsPublishPromptOpen] = useState(false);
-    const [pendingPublishAdId, setPendingPublishAdId] = useState<string | null>(null);
-    const [isOptionsOpen, setIsOptionsOpen] = useState(false);
-    const [maxDistanceKm, setMaxDistanceKm] = useState<number | null>(null);
-
-    // Sync status & reader image settings
-    const [connectedSyncCount, setConnectedSyncCount] = useState<number | null>(null);
-    const [mediaAutoLoadMaxHops, setMediaAutoLoadMaxHops] = useState<number>(2);
-    const [marketPollWifiOnly, setMarketPollWifiOnly] = useState<boolean>(false);
-
-    const mountedRef = useRef(true);
-    const syncStatusSeqRef = useRef(0);
-    const inboxSeqRef = useRef(0);
-    const refreshSeqRef = useRef(0);
-    const noticesSeqRef = useRef(0);
-
-    useEffect(() => {
-        mountedRef.current = true;
-        return () => {
-            mountedRef.current = false;
-        };
-    }, []);
-
-    // React to navigation state changes
-    useEffect(() => {
-        if (appState.view === 'marketplace') {
-            if (appState.initialTab) {
-                setActiveTab(appState.initialTab);
-                if (appState.initialTab === 'mine' && !appState.selectedDid) {
-                    setSelectedPersonDid(null);
-                    setInquiryTargetAd(null);
-                }
-            }
-            if (appState.selectedDid) {
-                setSelectedPersonDid(appState.selectedDid);
-            }
-            if (appState.initialOpenEditor) {
-                setIsProfileEditorOpen(true);
-            }
-        }
-    }, [appState]);
-
-    const refreshSyncStatus = useCallback(async () => {
-        const seq = ++syncStatusSeqRef.current;
-        try {
-            const [config, overview] = await Promise.all([
-                settingsService.getConfig(),
-                typeof marketService?.getSyncOverviewStatus === 'function'
-                    ? marketService.getSyncOverviewStatus().catch(() => null)
-                    : Promise.resolve(null),
-            ]);
-            if (!mountedRef.current || seq !== syncStatusSeqRef.current) return;
-            const count = overview
-                ? overview.connectedCount
-                : (config.securityPolicy.marketSelectedSyncs || []).length;
-            setConnectedSyncCount(count);
-            setMediaAutoLoadMaxHops(config.uiPreferences.mediaAutoLoadMaxHops ?? 2);
-            setMarketPollWifiOnly(Boolean(config.uiPreferences.marketPollWifiOnly));
-        } catch (err) {
-            if (!mountedRef.current || seq !== syncStatusSeqRef.current) return;
-            logger.debug('Failed to check sync settings in marketplace: ' + stringifyError(err));
-            setConnectedSyncCount(0);
-        }
-    }, []);
-
-    const refreshInbox = useCallback(async () => {
-        const seq = ++inboxSeqRef.current;
-        try {
-            const inbox = await postService.getPostInboxSummary();
-            if (!mountedRef.current || seq !== inboxSeqRef.current) return;
-            setInboxSummary(inbox);
-            if (typeof contactService?.getContacts === 'function') {
-                contactService.getContacts().then((list) => {
-                    if (mountedRef.current && seq === inboxSeqRef.current) {
-                        setContacts(list || []);
-                    }
-                }).catch(() => {});
-            }
-            if (typeof marketService?.getAppNotices === 'function') {
-                marketService.getAppNotices().then((res) => {
-                    if (mountedRef.current && seq === inboxSeqRef.current) {
-                        setLastSyncAt(res?.lastSyncAt ?? null);
-                    }
-                }).catch(() => {});
-            }
-        } catch (err) {
-            logger.debug('Failed to load post inbox in marketplace: ' + stringifyError(err));
-        }
-    }, []);
-
-    const refreshData = useCallback(async (isInitial = false) => {
-        const seq = ++refreshSeqRef.current;
-        if (isInitial) setIsLoading(true);
-        setError(null);
-        try {
-            const [snap, profile] = await Promise.all([
-                marketService.getMarketView(),
-                marketService.getMyMarketProfile(),
-            ]);
-            if (!mountedRef.current || seq !== refreshSeqRef.current) return;
-            setSnapshot(snap);
-            setMyProfile(profile);
-            await Promise.all([refreshInbox(), refreshSyncStatus()]);
-        } catch (err) {
-            if (!mountedRef.current || seq !== refreshSeqRef.current) return;
-            logger.error('Failed to load market snapshot: ' + stringifyError(err));
-            setError(translateError(err, t));
-        } finally {
-            if (isInitial && mountedRef.current && seq === refreshSeqRef.current) {
-                setIsLoading(false);
-            }
-        }
-    }, [refreshInbox, refreshSyncStatus, t]);
-
-    useEffect(() => {
-        refreshData(true);
-    }, [refreshData]);
-
-    // Listen to background updates
-    useEffect(() => {
-        const handleInboxUpdate = () => {
-            refreshInbox();
-        };
-        const handleSyncUpdate = () => {
-            refreshSyncStatus();
-            refreshData(false);
-        };
-
-        const handleProfileUpdate = (e: Event) => {
-            const detail = (e as CustomEvent<FrontendMyMarketProfile | undefined>).detail;
-            if (detail?.profile) {
-                setMyProfile(detail);
-            } else {
-                refreshData(false);
-            }
-        };
-        const handleNoticesUpdate = () => {
-            const seq = ++noticesSeqRef.current;
-            if (typeof marketService?.getAppNotices === 'function') {
-                marketService.getAppNotices().then((res) => {
-                    if (mountedRef.current && seq === noticesSeqRef.current) {
-                        setLastSyncAt(res?.lastSyncAt ?? null);
-                    }
-                }).catch(() => {});
-            }
-        };
-        const handleMarketCardUpdate = () => {
-            refreshData(false);
-        };
-
-        window.addEventListener(APP_EVENTS.POST_INBOX_UPDATED, handleInboxUpdate);
-        window.addEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdate);
-        window.addEventListener(MY_PROFILE_UPDATED_EVENT, handleProfileUpdate);
-        window.addEventListener(APP_NOTICES_UPDATED_EVENT, handleNoticesUpdate);
-        window.addEventListener(APP_EVENTS.MARKET_CARD_UPDATED, handleMarketCardUpdate);
-
-        return () => {
-            window.removeEventListener(APP_EVENTS.POST_INBOX_UPDATED, handleInboxUpdate);
-            window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdate);
-            window.removeEventListener(MY_PROFILE_UPDATED_EVENT, handleProfileUpdate);
-            window.removeEventListener(APP_NOTICES_UPDATED_EVENT, handleNoticesUpdate);
-            window.removeEventListener(APP_EVENTS.MARKET_CARD_UPDATED, handleMarketCardUpdate);
-        };
-    }, [refreshInbox, refreshSyncStatus, refreshData]);
-
-    // Handle "Inserat aufgeben" click: drafts can always be created locally
-    const handleCreateAdClick = useCallback(() => {
-        if (!myProfile) return;
-        setEditingAd(null);
-        setIsCreateAdOpen(true);
-    }, [myProfile]);
-
-    const handleToggleAdPublished = async (ad: FrontendMyAd, published: boolean) => {
-        if (published && !myProfile?.published) {
-            setPendingPublishAdId(ad.id);
-            setIsPublishPromptOpen(true);
-            return;
-        }
-        try {
-            await protectAction(async (pwd) => {
-                await marketService.setAdPublished(ad.id, published, pwd || undefined);
-            });
-            await refreshData(false);
-        } catch (err) {
-            logger.error('Failed to toggle ad published status: ' + stringifyError(err));
-            setError(translateError(err, t));
-        }
-    };
-
-    const handleConfirmPublishAndAd = async () => {
-        if (!pendingPublishAdId) return;
-        try {
-            await protectAction(async (pwd) => {
-                await marketService.setAdPublished(pendingPublishAdId, true, pwd || undefined, true);
-            });
-            setIsPublishPromptOpen(false);
-            setPendingPublishAdId(null);
-            await refreshData(false);
-        } catch (err) {
-            logger.error('Failed to publish business card and ad: ' + stringifyError(err));
-            setError(translateError(err, t));
-        }
-    };
-
-    const handleTogglePublished = async (published: boolean) => {
-        try {
-            const updated = await protectAction(async (pwd) => {
-                return await marketService.setCardPublished(published, pwd || undefined);
-            });
-            if (updated) {
-                setMyProfile(updated);
-            }
-        } catch (err) {
-            logger.error('Failed to toggle published status: ' + stringifyError(err));
-            setError(translateError(err, t));
-        }
-    };
-
-    const handleSaveAd = async (input: FrontendAdInput) => {
-        try {
-            await protectAction(async (pwd) => {
-                await marketService.upsertAd(input, pwd || undefined);
-            });
-            setIsCreateAdOpen(false);
-            setEditingAd(null);
-            if (!input.id && !input.published) {
-                setActiveTab('mine');
-            }
-            await refreshData(false);
-        } catch (err) {
-            logger.error('Failed to save ad: ' + stringifyError(err));
-            setError(translateError(err, t));
-            throw err;
-        }
-    };
-
-    const handleRenewAd = async (id: string, durationDays: number) => {
-        try {
-            await protectAction(async (pwd) => {
-                await marketService.renewAd(id, durationDays, pwd || undefined);
-            });
-            setRenewingAd(null);
-            await refreshData(false);
-        } catch (err) {
-            logger.error('Failed to renew ad: ' + stringifyError(err));
-            setError(translateError(err, t));
-            throw err;
-        }
-    };
-
-    const handleDeleteAd = async (id: string) => {
-        try {
-            await protectAction(async (pwd) => {
-                await marketService.deleteAd(id, pwd || undefined);
-            });
-            await refreshData(false);
-        } catch (err) {
-            logger.error('Failed to delete ad: ' + stringifyError(err));
-            setError(translateError(err, t));
-        }
-    };
-
-    const handleSaveProfile = async (req: FrontendSaveMyMarketProfileRequest) => {
-        if (!myProfile) return;
-        try {
-            const updated = await protectAction(
-                async (pwd) => {
-                    return await marketService.saveMyMarketProfile(req, pwd || undefined);
-                },
-                { requireFullAccess: true },
-            );
-            if (updated) {
-                setMyProfile(updated);
-            }
-            setIsProfileEditorOpen(false);
-            await refreshData(false);
-        } catch (err) {
-            logger.error('Failed to save profile: ' + stringifyError(err));
-            setError(translateError(err, t));
-            throw err;
-        }
-    };
-
-    const handleUpdateMyProfileOptions = async (patch: { maxHops?: number; validityYears?: number; allowInquiries?: boolean }) => {
-        if (!myProfile) return;
-        try {
-            const req: FrontendSaveMyMarketProfileRequest = {
-                profile: myProfile.profile,
-                visibility: myProfile.visibility,
-                skills: myProfile.skills,
-                maxHops: patch.maxHops ?? myProfile.maxHops,
-                validityYears: patch.validityYears ?? myProfile.validityYears ?? 2,
-                allowInquiries: patch.allowInquiries ?? myProfile.allowInquiries,
-                published: myProfile.published,
-            };
-            const updated = await protectAction(
-                async (pwd) => {
-                    return await marketService.saveMyMarketProfile(req, pwd || undefined);
-                },
-                { requireFullAccess: true },
-            );
-            if (updated) {
-                setMyProfile(updated);
-            }
-            await refreshData(false);
-        } catch (err) {
-            logger.error('Failed to update profile options: ' + stringifyError(err));
-            setError(translateError(err, t));
-            throw err;
-        }
-    };
-
-    const handleSendInquiryMessage = async (
-        inquiryId: string,
-        options: { text?: string; decision?: 'confirm' | 'decline' }
-    ) => {
-        try {
-            await protectAction(async (pwd) => {
-                await postService.sendMarketInquiryMessageViaPost(
-                    inquiryId,
-                    {
-                        text: options.text,
-                        decision: options.decision,
-                    },
-                    pwd || undefined
-                );
-            });
-            await refreshInbox();
-        } catch (err) {
-            logger.error('Failed to send inquiry message: ' + stringifyError(err));
-            setError(translateError(err, t));
-            throw err;
-        }
-    };
-
-    const handleMarkInquiryRead = async (inquiryId: string) => {
-        const target = inboxSummary?.inquiries.find((i) => i.inquiryId === inquiryId);
-        if (target && !target.unread) {
-            return;
-        }
-        try {
-            if (typeof postService?.markInquiryRead === 'function') {
-                await protectAction(async (pwd) => {
-                    await postService.markInquiryRead(inquiryId, pwd || undefined);
-                });
-                await refreshInbox();
-            }
-        } catch (err) {
-            logger.debug('Failed to mark inquiry read: ' + stringifyError(err));
-        }
-    };
-
-    const handleDismissInquiry = async (inquiryId: string) => {
-        try {
-            await protectAction(async (pwd) => {
-                await postService.dismissPendingPostItem('inquiry', inquiryId, pwd || undefined);
-            });
-            await refreshInbox();
-        } catch (err) {
-            logger.error('Failed to dismiss inquiry: ' + stringifyError(err));
-            setError(translateError(err, t));
-        }
-    };
-
-    const handleSaveContactFromInquiry = async (contact: Contact) => {
-        await protectAction(async (pwd) => {
-            await contactService.saveContact(contact, pwd || undefined);
-        });
-        setAddContactTarget(null);
-        await refreshInbox();
-    };
-
-    const handlePayInquiry = (counterpartyDid: string, paymentUri?: string | null) => {
-        navigate({
-            view: 'send_vouchers',
-            initialRecipientId: counterpartyDid,
-            ...(paymentUri ? { initialPaymentUri: paymentUri } : {}),
-        });
-    };
-
-    const handleManualSync = async () => {
-        if (isSyncing) return;
-        setIsSyncing(true);
-        setError(null);
-        try {
-            const results = await Promise.allSettled([
-                marketService.syncMarketChannels(),
-                postService.syncPostChannels(),
-            ]);
-            const syncErrors: string[] = [];
-            for (const res of results) {
-                if (res.status === 'rejected') {
-                    syncErrors.push(translateError(res.reason, t));
-                } else if (res.value) {
-                    if (res.value.retryAfterSecs && res.value.retryAfterSecs > 0) {
-                        syncErrors.push(
-                            t('marketplace.syncRateLimited', {
-                                seconds: res.value.retryAfterSecs,
-                            })
-                        );
-                    }
-                    if (Array.isArray(res.value.errors) && res.value.errors.length > 0) {
-                        syncErrors.push(...res.value.errors);
-                    }
-                }
-            }
-            const mktRes = results[0].status === 'fulfilled' ? results[0].value : null;
-            const postRes = results[1].status === 'fulfilled' ? results[1].value : null;
-            const hasNewItems =
-                (mktRes?.importedCards ?? 0) > 0 ||
-                (mktRes?.newAds ?? 0) > 0 ||
-                (postRes?.importedPayments ?? 0) > 0 ||
-                (postRes?.newInquiries ?? 0) > 0 ||
-                (postRes?.newInquiryMessages ?? 0) > 0 ||
-                (postRes?.newWotHandshakes ?? 0) > 0 ||
-                (postRes?.importedWotLists ?? 0) > 0 ||
-                (postRes?.newSignRequests ?? 0) > 0 ||
-                (postRes?.importedSignatures ?? 0) > 0;
-
-            await refreshData(false);
-            if (syncErrors.length > 0) {
-                setError(syncErrors.join(' · '));
-            } else if (mktRes?.status === 'skippedWifiOnly') {
-                showTransientSyncToast({
-                    message: t('marketplace.syncSkippedWifi', 'Synchronisation übersprungen (nur im WLAN aktiv)'),
-                    variant: 'info',
-                });
-            } else if (mktRes?.status === 'skippedCooldown') {
-                showTransientSyncToast({
-                    message: t('marketplace.syncSkippedCooldown', 'Synchronisation kürzlich durchgeführt – bitte später erneut prüfen.'),
-                    variant: 'info',
-                });
-            } else if (!hasNewItems && mktRes?.status !== 'sessionSuperseded') {
-                showTransientSyncToast({
-                    message: t('common.syncUpToDateToast', 'Alles aktuell – keine neuen Einträge.'),
-                    variant: 'info',
-                });
-            }
-        } catch (err) {
-            logger.error('Failed to sync marketplace manually: ' + stringifyError(err));
-            setError(translateError(err, t));
-        } finally {
-            setIsSyncing(false);
-        }
-    };
-
-    const handleBoardInquire = (ad: Ad, ownerDid: string, _ownerName: string) => {
-        setInquiryTargetAd(ad);
-        setSelectedPersonDid(ownerDid);
-    };
-
-    const handleBoardPay = (ownerDid: string) => {
-        navigate({ view: 'send_vouchers', initialRecipientId: ownerDid });
-    };
-
-    // If person detail view is active
-    const selectedPerson = useMemo(() => {
-        if (!selectedPersonDid || !snapshot) return null;
-        return (
-            snapshot.people.find((p) => isExactSameUserId(p.recipientDid || p.did, selectedPersonDid)) ||
-            snapshot.people.find((p) => isExactSameUserId(p.did, selectedPersonDid)) ||
-            (!selectedPersonDid.includes('@')
-                ? snapshot.people.find((p) => isSameRootIdentity(p.did, selectedPersonDid))
-                : undefined) ||
-            null
-        );
-    }, [selectedPersonDid, snapshot]);
-
-    if (isLoading) {
+    if (view.isLoading) {
         return (
             <PageLayout
                 title={t('marketplace.title', 'Marktplatz')}
-                onBack={handleBack}
+                onBack={view.handleBack}
                 description={t('marketplace.subtitle', 'Angebote & Gesuche im Netzwerk')}
             >
                 <PageLoadingState message={t('common.loading', 'Laden...')} />
@@ -580,78 +59,37 @@ export function MarketplaceView({
         );
     }
 
-    if (selectedPerson) {
+    if (view.selectedPerson) {
         return (
             <MarketPersonView
-                key={selectedPerson.recipientDid || selectedPerson.did}
-                person={selectedPerson}
-                initialInquiryAd={inquiryTargetAd}
-                mediaAutoLoadMaxHops={mediaAutoLoadMaxHops}
-                wifiOnly={marketPollWifiOnly}
+                key={view.selectedPerson.recipientDid || view.selectedPerson.did}
+                person={view.selectedPerson}
+                initialInquiryAd={view.inquiryTargetAd}
+                mediaAutoLoadMaxHops={view.mediaAutoLoadMaxHops}
+                wifiOnly={view.marketPollWifiOnly}
                 onBack={() => {
-                    setSelectedPersonDid(null);
-                    setInquiryTargetAd(null);
+                    view.setSelectedPersonDid(null);
+                    view.setInquiryTargetAd(null);
                 }}
             />
         );
     }
 
-    const defaultEmptyInbox: FrontendPostInboxSummary = {
-        pendingSignRequests: [],
-        pendingWotHandshakes: [],
-        inquiries: [],
-        unacknowledgedPayments: [],
-        unsupportedMessages: [],
-    };
-
-    const defaultEmptyProfile: FrontendMyMarketProfile = {
-        profile: { id: '' },
-        visibility: {
-            name: 'everyone',
-            organization: 'everyone',
-            community: 'everyone',
-            city: 'everyone',
-            url: 'everyone',
-            picture: 'everyone',
-            street: 'contacts',
-            email: 'contacts',
-            phone: 'contacts',
-            coordinates: 'everyone',
-            gender: 'nobody',
-        },
-        skills: [],
-        ads: [],
-        maxHops: 2,
-        allowInquiries: true,
-        published: false,
-        qrIsPartial: false,
-    };
-
-    const currentProfile = myProfile || defaultEmptyProfile;
-
-    const activePublishedMyAdsCount = currentProfile.ads.filter(
-        (a) => a.published && a.status === 'active',
-    ).length;
-    const totalMineAdsCount = currentProfile.ads.filter(
-        (a) => !a.published || a.status === 'active',
-    ).length;
-    const unreadInquiriesCount = (inboxSummary?.inquiries || []).filter((i) => i.unread).length;
-
     return (
         <PageLayout
             title={t('marketplace.title', 'Marktplatz')}
-            onBack={handleBack}
+            onBack={view.handleBack}
             description={t('marketplace.subtitle', 'Angebote & Gesuche im Netzwerk')}
             optionsPanel={
-                isOptionsOpen ? (
+                view.isOptionsOpen ? (
                     <MarketplaceOptionsPanel
-                        myProfile={currentProfile}
-                        onUpdateMyProfile={handleUpdateMyProfileOptions}
-                        storedCardCount={snapshot?.storedCardCount}
-                        onSettingsChanged={() => refreshData(false)}
-                        onClose={() => setIsOptionsOpen(false)}
-                        hasSyncService={(connectedSyncCount ?? 0) > 0}
-                        onNavigateToSyncSettings={() => navigateToSettingsSection?.('sync')}
+                        myProfile={view.currentProfile}
+                        onUpdateMyProfile={view.handleUpdateMyProfileOptions}
+                        storedCardCount={view.snapshot?.storedCardCount}
+                        onSettingsChanged={() => view.refreshData(false)}
+                        onClose={() => view.setIsOptionsOpen(false)}
+                        hasSyncService={(view.connectedSyncCount ?? 0) > 0}
+                        onNavigateToSyncSettings={() => view.navigateToSettingsSection?.('sync')}
                     />
                 ) : null
             }
@@ -660,20 +98,22 @@ export function MarketplaceView({
                     <Button
                         size="sm"
                         variant="outline"
-                        onClick={handleManualSync}
-                        disabled={isSyncing}
+                        onClick={view.handleManualSync}
+                        disabled={view.isSyncing}
                         data-testid="refresh-marketplace-button"
                         title={t('marketplace.refresh')}
                         aria-label={t('marketplace.refresh')}
                         className="flex items-center gap-1.5"
                     >
-                        <RefreshCw size={15} className={isSyncing ? 'animate-spin' : ''} />
-                        <span className="hidden sm:inline text-xs font-bold">{t('marketplace.refresh')}</span>
+                        <RefreshCw size={15} className={view.isSyncing ? 'animate-spin' : ''} />
+                        <span className="hidden sm:inline text-xs font-bold">
+                            {t('marketplace.refresh')}
+                        </span>
                     </Button>
                     <Button
                         size="sm"
-                        variant={isOptionsOpen ? 'primary' : 'outline'}
-                        onClick={() => setIsOptionsOpen((prev) => !prev)}
+                        variant={view.isOptionsOpen ? 'primary' : 'outline'}
+                        onClick={() => view.setIsOptionsOpen((prev) => !prev)}
                         className="flex items-center gap-1.5"
                         data-testid="toggle-marketplace-options-button"
                         title={t('marketplace.optionsTitle', 'Marktplatz-Optionen & Reichweite')}
@@ -681,25 +121,27 @@ export function MarketplaceView({
                     >
                         <SlidersHorizontal size={15} />
                         <span>{t('marketplace.optionsBtn', 'Optionen')}</span>
-                        {isOptionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        {view.isOptionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                     </Button>
-                    {activeTab === 'mine' && (
+                    {view.activeTab === 'mine' && (
                         <Button
                             size="sm"
                             variant="outline"
                             onClick={() => {
-                                if (myProfile) setIsProfileEditorOpen(true);
+                                if (view.myProfile) view.setIsProfileEditorOpen(true);
                             }}
-                            disabled={!myProfile}
+                            disabled={!view.myProfile}
                             className="flex items-center gap-1.5"
                         >
                             <Edit3 size={15} />
-                            <span>{t('marketplace.editProfileCardBtn', 'Visitenkarte bearbeiten')}</span>
+                            <span>
+                                {t('marketplace.editProfileCardBtn', 'Visitenkarte bearbeiten')}
+                            </span>
                         </Button>
                     )}
                     <Button
                         size="sm"
-                        onClick={handleCreateAdClick}
+                        onClick={view.handleCreateAdClick}
                         className="flex items-center gap-1.5 shadow-sm"
                     >
                         <Plus size={15} />
@@ -709,14 +151,13 @@ export function MarketplaceView({
             }
         >
             <div className="space-y-6">
-                {/* Error Banner */}
-                {error && (
+                {view.error && (
                     <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between gap-3">
-                        <span>{error}</span>
+                        <span>{view.error}</span>
                         <Button
                             size="xs"
                             variant="outline"
-                            onClick={() => setError(null)}
+                            onClick={() => view.setError(null)}
                             className="text-rose-700 hover:text-rose-900 border-rose-300"
                         >
                             {t('common.dismiss', 'Ausblenden')}
@@ -729,48 +170,48 @@ export function MarketplaceView({
                     <div className="inline-flex p-1 bg-theme-subtle/40 rounded-2xl border border-theme-subtle/60 shadow-xs self-center sm:self-auto">
                         <button
                             type="button"
-                            onClick={() => setActiveTab('board')}
+                            onClick={() => view.setActiveTab('board')}
                             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                                activeTab === 'board'
+                                view.activeTab === 'board'
                                     ? 'bg-white text-theme-secondary shadow-xs font-black'
                                     : 'text-theme-light hover:text-theme-secondary'
                             }`}
                         >
                             <LayoutGrid size={15} />
                             <span>{t('marketplace.tabBoard', 'Pinnwand')}</span>
-                            {snapshot && snapshot.board.length > 0 && (
+                            {view.snapshot && view.snapshot.board.length > 0 && (
                                 <span
                                     className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                                        activeTab === 'board'
+                                        view.activeTab === 'board'
                                             ? 'bg-theme-primary/10 text-theme-primary font-bold'
                                             : 'bg-theme-subtle/50 text-theme-light'
                                     }`}
                                 >
-                                    {snapshot.board.length}
+                                    {view.snapshot.board.length}
                                 </span>
                             )}
                         </button>
 
                         <button
                             type="button"
-                            onClick={() => setActiveTab('people')}
+                            onClick={() => view.setActiveTab('people')}
                             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                                activeTab === 'people'
+                                view.activeTab === 'people'
                                     ? 'bg-white text-theme-secondary shadow-xs font-black'
                                     : 'text-theme-light hover:text-theme-secondary'
                             }`}
                         >
                             <Users size={15} />
                             <span>{t('marketplace.tabPeople', 'Menschen')}</span>
-                            {snapshot && snapshot.people.length > 0 && (
+                            {view.snapshot && view.snapshot.people.length > 0 && (
                                 <span
                                     className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                                        activeTab === 'people'
+                                        view.activeTab === 'people'
                                             ? 'bg-theme-primary/10 text-theme-primary font-bold'
                                             : 'bg-theme-subtle/50 text-theme-light'
                                     }`}
                                 >
-                                    {snapshot.people.length}
+                                    {view.snapshot.people.length}
                                 </span>
                             )}
                         </button>
@@ -778,120 +219,140 @@ export function MarketplaceView({
                         <button
                             type="button"
                             onClick={() => {
-                                setActiveTab('mine');
-                                setSelectedPersonDid(null);
-                                setInquiryTargetAd(null);
+                                view.setActiveTab('mine');
+                                view.setSelectedPersonDid(null);
+                                view.setInquiryTargetAd(null);
                             }}
                             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                                activeTab === 'mine'
+                                view.activeTab === 'mine'
                                     ? 'bg-white text-theme-secondary shadow-xs font-black'
                                     : 'text-theme-light hover:text-theme-secondary'
                             }`}
                         >
                             <User size={15} />
                             <span>{t('marketplace.tabMine', 'Meins')}</span>
-                            {unreadInquiriesCount > 0 && (
+                            {view.unreadInquiriesCount > 0 && (
                                 <span
                                     data-testid="marketplace-unread-inquiries-badge"
                                     className="px-1.5 py-0.2 rounded-full text-[10px] bg-rose-600 text-white font-bold"
                                 >
-                                    {unreadInquiriesCount}
+                                    {view.unreadInquiriesCount}
                                 </span>
                             )}
-                            {unreadInquiriesCount === 0 && totalMineAdsCount > 0 && (
+                            {view.unreadInquiriesCount === 0 && view.totalMineAdsCount > 0 && (
                                 <span
                                     className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                                        activeTab === 'mine'
+                                        view.activeTab === 'mine'
                                             ? 'bg-theme-primary/10 text-theme-primary font-bold'
                                             : 'bg-theme-subtle/50 text-theme-light'
                                     }`}
                                 >
-                                    {totalMineAdsCount}
+                                    {view.totalMineAdsCount}
                                 </span>
                             )}
                         </button>
                     </div>
-                    {lastSyncAt && (
-                        <span className="text-[11px] text-theme-light self-center sm:self-auto" data-testid="marketplace-last-sync">
-                            {t('common.lastUpdatedPrefix', 'Zuletzt aktualisiert:')} {formatLastSyncLabel(lastSyncAt, t)}
+                    {view.lastSyncAt && (
+                        <span
+                            className="text-[11px] text-theme-light self-center sm:self-auto"
+                            data-testid="marketplace-last-sync"
+                        >
+                            {t('common.lastUpdatedPrefix', 'Zuletzt aktualisiert:')}{' '}
+                            {formatLastSyncLabel(view.lastSyncAt, t)}
                         </span>
                     )}
                 </div>
 
                 {/* Tab content */}
                 <div>
-                    {activeTab === 'board' && (
+                    {view.activeTab === 'board' && (
                         <BoardTab
-                            items={snapshot?.board || []}
-                            people={snapshot?.people || []}
-                            myCoordinates={currentProfile.profile.coordinates}
-                            maxDistanceKm={maxDistanceKm}
-                            onMaxDistanceChange={setMaxDistanceKm}
-                            mediaAutoLoadMaxHops={mediaAutoLoadMaxHops}
-                            wifiOnly={marketPollWifiOnly}
-                            hasSyncService={connectedSyncCount !== null && connectedSyncCount > 0}
-                            onCreateAd={handleCreateAdClick}
-                            onImportCard={() => setIsImportModalOpen(true)}
-                            onNavigateToSyncSettings={() => navigateToSettingsSection('sync')}
-                            onInquire={handleBoardInquire}
-                            onPay={handleBoardPay}
+                            items={view.snapshot?.board || []}
+                            people={view.snapshot?.people || []}
+                            myCoordinates={view.currentProfile.profile.coordinates}
+                            maxDistanceKm={view.maxDistanceKm}
+                            onMaxDistanceChange={view.setMaxDistanceKm}
+                            mediaAutoLoadMaxHops={view.mediaAutoLoadMaxHops}
+                            wifiOnly={view.marketPollWifiOnly}
+                            hasSyncService={
+                                view.connectedSyncCount !== null && view.connectedSyncCount > 0
+                            }
+                            onCreateAd={view.handleCreateAdClick}
+                            onImportCard={() => view.setIsImportModalOpen(true)}
+                            onNavigateToSyncSettings={() =>
+                                view.navigateToSettingsSection('sync')
+                            }
+                            onInquire={view.handleBoardInquire}
+                            onPay={view.handleBoardPay}
                             onOwnerClick={(ownerDid, isOwn) => {
-                                if (isOwn || (currentProfile?.profile?.id && isExactSameUserId(ownerDid, currentProfile.profile.id))) {
-                                    setActiveTab('mine');
-                                    setSelectedPersonDid(null);
-                                    setInquiryTargetAd(null);
+                                if (
+                                    isOwn ||
+                                    (view.currentProfile?.profile?.id &&
+                                        isExactSameUserId(ownerDid, view.currentProfile.profile.id))
+                                ) {
+                                    view.setActiveTab('mine');
+                                    view.setSelectedPersonDid(null);
+                                    view.setInquiryTargetAd(null);
                                 } else {
-                                    setSelectedPersonDid(ownerDid);
+                                    view.setSelectedPersonDid(ownerDid);
                                 }
                             }}
                             onEditOwnAd={(ad) => {
-                                const found = currentProfile?.ads.find((a) => a.id === ad.id);
-                                setEditingAd(found || ad);
-                                setIsCreateAdOpen(true);
+                                const found = view.currentProfile?.ads.find((a) => a.id === ad.id);
+                                view.setEditingAd(found || ad);
+                                view.setIsCreateAdOpen(true);
                             }}
                         />
                     )}
 
-                    {activeTab === 'people' && (
+                    {view.activeTab === 'people' && (
                         <PeopleTab
-                            people={snapshot?.people || []}
-                            myCoordinates={currentProfile.profile.coordinates}
-                            maxDistanceKm={maxDistanceKm}
-                            onMaxDistanceChange={setMaxDistanceKm}
-                            onSelectPerson={(person) => setSelectedPersonDid(person.recipientDid || person.did)}
+                            people={view.snapshot?.people || []}
+                            myCoordinates={view.currentProfile.profile.coordinates}
+                            maxDistanceKm={view.maxDistanceKm}
+                            onMaxDistanceChange={view.setMaxDistanceKm}
+                            onSelectPerson={(person) =>
+                                view.setSelectedPersonDid(person.recipientDid || person.did)
+                            }
                         />
                     )}
 
-                    {activeTab === 'mine' && (
+                    {view.activeTab === 'mine' && (
                         <MineTab
-                            myProfile={currentProfile}
-                            inbox={inboxSummary || defaultEmptyInbox}
-                            contacts={contacts}
+                            myProfile={view.currentProfile}
+                            inbox={view.inboxSummary || view.defaultEmptyInbox}
+                            contacts={view.contacts}
                             onOpenProfileEditor={() => {
-                                if (myProfile) setIsProfileEditorOpen(true);
+                                if (view.myProfile) view.setIsProfileEditorOpen(true);
                             }}
-                            onOpenShareCard={() => setIsShareModalOpen(true)}
-                            onTogglePublished={handleTogglePublished}
-                            onCreateAd={handleCreateAdClick}
+                            onOpenShareCard={() => view.setIsShareModalOpen(true)}
+                            onTogglePublished={view.handleTogglePublished}
+                            onCreateAd={view.handleCreateAdClick}
                             onEditAd={(ad) => {
-                                setEditingAd(ad);
-                                setIsCreateAdOpen(true);
+                                view.setEditingAd(ad);
+                                view.setIsCreateAdOpen(true);
                             }}
-                            onToggleAdPublished={handleToggleAdPublished}
-                            onRenewAd={(ad) => setRenewingAd(ad)}
-                            onQuickRenewAd={(ad) => handleRenewAd(ad.id, 90)}
-                            onDeleteAd={handleDeleteAd}
-                            onSendInquiryMessage={handleSendInquiryMessage}
-                            onMarkInquiryRead={handleMarkInquiryRead}
-                            onPayInquiry={handlePayInquiry}
-                            onDismissInquiry={handleDismissInquiry}
-                            onAddContact={(did, suggestedName) => setAddContactTarget({ did, suggestedName })}
+                            onToggleAdPublished={view.handleToggleAdPublished}
+                            onRenewAd={(ad) => view.setRenewingAd(ad)}
+                            onQuickRenewAd={(ad) => view.handleRenewAd(ad.id, 90)}
+                            onDeleteAd={view.handleDeleteAd}
+                            onSendInquiryMessage={view.handleSendInquiryMessage}
+                            onMarkInquiryRead={view.handleMarkInquiryRead}
+                            onPayInquiry={view.handlePayInquiry}
+                            onDismissInquiry={view.handleDismissInquiry}
+                            onAddContact={(did, suggestedName) =>
+                                view.setAddContactTarget({ did, suggestedName })
+                            }
                             onViewCard={(did) => {
                                 const match =
-                                    snapshot?.people.find((p) => isExactSameUserId(p.recipientDid || p.did, did)) ||
-                                    snapshot?.people.find((p) => isExactSameUserId(p.did, did));
+                                    view.snapshot?.people.find((p) =>
+                                        isExactSameUserId(p.recipientDid || p.did, did),
+                                    ) ||
+                                    view.snapshot?.people.find((p) =>
+                                        isExactSameUserId(p.did, did),
+                                    );
                                 if (match) {
-                                    setSelectedPersonDid(match.recipientDid || match.did);
+                                    view.setSelectedPersonDid(match.recipientDid || match.did);
                                 }
                             }}
                         />
@@ -899,100 +360,43 @@ export function MarketplaceView({
                 </div>
             </div>
 
-            {/* Modals */}
-
-            {/* Ad Editor Modal */}
-            <AdEditorModal
-                isOpen={isCreateAdOpen || !!editingAd}
-                onClose={() => {
-                    setIsCreateAdOpen(false);
-                    setEditingAd(null);
+            <MarketplaceModals
+                myProfile={view.myProfile}
+                currentProfile={view.currentProfile}
+                activePublishedMyAdsCount={view.activePublishedMyAdsCount}
+                isCreateAdOpen={view.isCreateAdOpen}
+                editingAd={view.editingAd}
+                renewingAd={view.renewingAd}
+                isProfileEditorOpen={view.isProfileEditorOpen}
+                isShareModalOpen={view.isShareModalOpen}
+                isImportModalOpen={view.isImportModalOpen}
+                isPublishPromptOpen={view.isPublishPromptOpen}
+                addContactTarget={view.addContactTarget}
+                onCloseAdEditor={() => {
+                    view.setIsCreateAdOpen(false);
+                    view.setEditingAd(null);
                 }}
-                onSave={handleSaveAd}
-                editingAd={editingAd}
-                activeAdsCount={activePublishedMyAdsCount}
-                maxAds={currentProfile?.mediaMaxCount ?? 10}
-                cardPublished={currentProfile.published}
-                allowInquiries={currentProfile.allowInquiries}
-                ownerDid={currentProfile?.profile?.id}
-                mediaMaxBytes={currentProfile?.mediaMaxBytes}
-                mediaMaxCount={currentProfile?.mediaMaxCount}
-                mediaUsedCount={currentProfile?.mediaUsedCount}
-            />
-
-            {/* Renew Ad Modal */}
-            <RenewAdModal
-                isOpen={!!renewingAd}
-                onClose={() => setRenewingAd(null)}
-                ad={renewingAd}
-                onRenew={handleRenewAd}
-            />
-
-            {/* Profile & Business Card Editor */}
-            {myProfile && (
-                <ProfileCardEditor
-                    isOpen={isProfileEditorOpen}
-                    onClose={() => setIsProfileEditorOpen(false)}
-                    myProfile={myProfile}
-                    onSave={handleSaveProfile}
-                />
-            )}
-
-            {/* Share Card Modal */}
-            <ShareCardModal
-                isOpen={isShareModalOpen}
-                onClose={() => setIsShareModalOpen(false)}
-                title={t('marketplace.shareOwnCardTitle', 'Meine Visitenkarte teilen')}
-                subtitle={t('marketplace.shareOwnCardSubtitle', 'Sichere Datei oder QR-Code zum Austausch')}
-                fileWire={currentProfile.fileWire}
-                shareUri={currentProfile.shareUri}
-                qrSvg={currentProfile.qrSvg}
-                did={currentProfile.profile.id}
-                qrIsPartial={currentProfile.qrIsPartial}
-            />
-
-            {/* Import Card Modal */}
-            <ImportCardModal
-                isOpen={isImportModalOpen}
-                onClose={() => setIsImportModalOpen(false)}
+                onSaveAd={view.handleSaveAd}
+                onCloseRenewModal={() => view.setRenewingAd(null)}
+                onRenewAd={view.handleRenewAd}
+                onCloseProfileEditor={() => view.setIsProfileEditorOpen(false)}
+                onSaveProfile={view.handleSaveProfile}
+                onCloseShareModal={() => view.setIsShareModalOpen(false)}
+                onCloseImportModal={() => view.setIsImportModalOpen(false)}
                 onImportSuccess={(did) => {
-                    refreshData(false);
+                    view.refreshData(false);
                     if (did) {
-                        setSelectedPersonDid(did);
+                        view.setSelectedPersonDid(did);
                     }
                 }}
-            />
-
-            {/* Prompt to publish card before publishing a draft ad */}
-            <ConfirmationModal
-                isOpen={isPublishPromptOpen}
-                onCancel={() => {
-                    setIsPublishPromptOpen(false);
-                    setPendingPublishAdId(null);
+                onCancelPublishPrompt={() => {
+                    view.setIsPublishPromptOpen(false);
+                    view.setPendingPublishAdId(null);
                 }}
-                onConfirm={handleConfirmPublishAndAd}
-                title={t('marketplace.publishCardBeforeAdTitle', 'Visitenkarte veröffentlichen?')}
-                description={t(
-                    'marketplace.publishCardAndAdDesc',
-                    'Um dieses Inserat für andere sichtbar zu machen, muss auch deine Visitenkarte veröffentlicht sein. Möchtest du Visitenkarte und Inserat jetzt veröffentlichen?'
-                )}
-                confirmText={t('marketplace.publishCardAndAdBtn', 'Beides veröffentlichen')}
-                cancelText={t('common.cancel', 'Abbrechen')}
+                onConfirmPublishAndAd={view.handleConfirmPublishAndAd}
+                onCloseContactDialog={() => view.setAddContactTarget(null)}
+                onSaveContactFromInquiry={view.handleSaveContactFromInquiry}
             />
-
-            {addContactTarget && (
-                <ContactDialog
-                    isOpen={!!addContactTarget}
-                    onClose={() => setAddContactTarget(null)}
-                    onSave={handleSaveContactFromInquiry}
-                    initialDid={addContactTarget.did}
-                    initialProfile={
-                        addContactTarget.suggestedName
-                            ? { firstName: addContactTarget.suggestedName }
-                            : undefined
-                    }
-                />
-            )}
         </PageLayout>
     );
 }
