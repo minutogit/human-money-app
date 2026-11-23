@@ -644,6 +644,155 @@ pub(crate) async fn reconcile_restored_wallet_if_pending(
     Ok(updated.unwrap_or(false))
 }
 
+fn extract_voucher_static_probe_descriptor(
+    service: &human_money_core::app_service::AppService,
+    local_instance_id: &str,
+) -> Result<(Option<VoucherStaticProbeDescriptor>, bool), FrontendError> {
+    service
+        .with_wallet_and_identity(|wallet, identity| {
+            let instance = wallet
+                .voucher_store
+                .vouchers
+                .get(local_instance_id)
+                .ok_or_else(|| {
+                    human_money_core::Error::App(
+                        human_money_core::error::AppError::InvariantViolation {
+                            message: "Voucher not found".into(),
+                        },
+                    )
+                })?;
+            let is_archived = matches!(
+                instance.status,
+                human_money_core::wallet::instance::VoucherStatus::Archived
+            );
+            let Some(anchor_id) = instance.voucher.layer2_anchor else {
+                return Ok::<_, human_money_core::Error>((None, is_archived));
+            };
+            let anchor_hex = hex::encode(anchor_id);
+            let (reduced_protection, manifest_rev) = wallet
+                .profile
+                .l2_anchor_manifests
+                .get(&anchor_hex)
+                .map(|m| {
+                    (
+                        m.has_reduced_guarantor_protection().unwrap_or(false),
+                        Some(m.revision),
+                    )
+                })
+                .unwrap_or((false, None));
+            let creator_did = instance.voucher.creator_profile.id.clone();
+            let guarantor_dids: Vec<String> = instance
+                .voucher
+                .signatures
+                .iter()
+                .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
+                .map(|s| s.signer_id.clone())
+                .collect();
+            let target = wallet
+                .build_voucher_read_targets(identity, local_instance_id, None)
+                .ok();
+            Ok((
+                Some(VoucherStaticProbeDescriptor {
+                    local_id: local_instance_id.to_string(),
+                    anchor_id,
+                    manifest_rev,
+                    reduced_protection,
+                    creator_did,
+                    guarantor_dids,
+                    target,
+                }),
+                is_archived,
+            ))
+        })
+        .map_err(FrontendError::from)?
+        .map_err(FrontendError::from)
+}
+
+fn persist_learned_l2_probes(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    pw: Option<&str>,
+    learned_probes: Vec<FrontendLockServerProbeResult>,
+) {
+    if learned_probes.is_empty() {
+        return;
+    }
+    let _ = state.mutate_internal_lifecycle_for_session(session, pw, |lc| {
+        let mut changed = false;
+        for p in learned_probes {
+            if upsert_verified_locator_only(&mut lc.l2_probe_cache, p) {
+                changed = true;
+            }
+        }
+        changed
+    });
+}
+
+fn map_reconcile_outcome_to_status_dto(
+    outcome: StaticVoucherReconcileOutcome,
+    is_currently_archived: bool,
+    reduced_protection: bool,
+    manifest_rev: Option<u64>,
+) -> FrontendVoucherL2StatusDto {
+    match outcome {
+        StaticVoucherReconcileOutcome::Resolved(res) => match *res {
+            VoucherReconciliationResult::AlreadySpent { successor_t_id } => {
+                FrontendVoucherL2StatusDto {
+                    status: "spent".to_string(),
+                    archived: true,
+                    successor_t_id: Some(successor_t_id),
+                    reduced_guarantor_protection: reduced_protection,
+                    manifest_revision: manifest_rev,
+                }
+            }
+            VoucherReconciliationResult::ConflictDetected { conflicting_entry } => {
+                let successor_t_id = bs58::encode(conflicting_entry.child_lock).into_string();
+                FrontendVoucherL2StatusDto {
+                    status: "conflict".to_string(),
+                    archived: true,
+                    successor_t_id: Some(successor_t_id),
+                    reduced_guarantor_protection: reduced_protection,
+                    manifest_revision: manifest_rev,
+                }
+            }
+            VoucherReconciliationResult::UnspentSafe => FrontendVoucherL2StatusDto {
+                status: "unspent".to_string(),
+                archived: is_currently_archived,
+                successor_t_id: None,
+                reduced_guarantor_protection: reduced_protection,
+                manifest_revision: manifest_rev,
+            },
+            VoucherReconciliationResult::Inconclusive { .. } => FrontendVoucherL2StatusDto {
+                status: "inconclusive".to_string(),
+                archived: is_currently_archived,
+                successor_t_id: None,
+                reduced_guarantor_protection: reduced_protection,
+                manifest_revision: manifest_rev,
+            },
+        },
+        StaticVoucherReconcileOutcome::Inconclusive {
+            any_reachable: true,
+            ..
+        } => FrontendVoucherL2StatusDto {
+            status: "inconclusive".to_string(),
+            archived: is_currently_archived,
+            successor_t_id: None,
+            reduced_guarantor_protection: reduced_protection,
+            manifest_revision: manifest_rev,
+        },
+        StaticVoucherReconcileOutcome::Inconclusive {
+            any_reachable: false,
+            ..
+        } => FrontendVoucherL2StatusDto {
+            status: "offline".to_string(),
+            archived: is_currently_archived,
+            successor_t_id: None,
+            reduced_guarantor_protection: reduced_protection,
+            manifest_revision: manifest_rev,
+        },
+    }
+}
+
 pub(crate) async fn check_voucher_l2_status_impl(
     local_instance_id: String,
     password: Option<String>,
@@ -665,64 +814,8 @@ pub(crate) async fn check_voucher_l2_status_impl(
                     .map_err(FrontendError::from)?;
                 let probe_cache = lifecycle.l2_probe_cache.clone();
                 let offenders = state.get_or_load_server_offender_list(service, pw)?;
-                let (desc_opt, is_archived) = service
-                    .with_wallet_and_identity(|wallet, identity| {
-                        let instance = wallet
-                            .voucher_store
-                            .vouchers
-                            .get(&local_instance_id)
-                            .ok_or_else(|| {
-                                human_money_core::Error::App(
-                                    human_money_core::error::AppError::InvariantViolation {
-                                        message: "Voucher not found".into(),
-                                    },
-                                )
-                            })?;
-                        let is_archived = matches!(
-                            instance.status,
-                            human_money_core::wallet::instance::VoucherStatus::Archived
-                        );
-                        let Some(anchor_id) = instance.voucher.layer2_anchor else {
-                            return Ok::<_, human_money_core::Error>((None, is_archived));
-                        };
-                        let anchor_hex = hex::encode(anchor_id);
-                        let (reduced_protection, manifest_rev) = wallet
-                            .profile
-                            .l2_anchor_manifests
-                            .get(&anchor_hex)
-                            .map(|m| {
-                                (
-                                    m.has_reduced_guarantor_protection().unwrap_or(false),
-                                    Some(m.revision),
-                                )
-                            })
-                            .unwrap_or((false, None));
-                        let creator_did = instance.voucher.creator_profile.id.clone();
-                        let guarantor_dids: Vec<String> = instance
-                            .voucher
-                            .signatures
-                            .iter()
-                            .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
-                            .map(|s| s.signer_id.clone())
-                            .collect();
-                        let target = wallet
-                            .build_voucher_read_targets(identity, &local_instance_id, None)
-                            .ok();
-                        Ok((
-                            Some(VoucherStaticProbeDescriptor {
-                                local_id: local_instance_id.clone(),
-                                anchor_id,
-                                manifest_rev,
-                                reduced_protection,
-                                creator_did,
-                                guarantor_dids,
-                                target,
-                            }),
-                            is_archived,
-                        ))
-                    })
-                    .map_err(FrontendError::from)?
-                    .map_err(FrontendError::from)?;
+                let (desc_opt, is_archived) =
+                    extract_voucher_static_probe_descriptor(service, &local_instance_id)?;
                 Ok((desc_opt, probe_cache, offenders, is_archived))
             },
         )?;
@@ -750,17 +843,7 @@ pub(crate) async fn check_voucher_l2_status_impl(
         pw,
     )
     .await;
-    if !learned_probes.is_empty() {
-        let _ = state.mutate_internal_lifecycle_for_session(&session, pw, |lc| {
-            let mut changed = false;
-            for p in learned_probes {
-                if upsert_verified_locator_only(&mut lc.l2_probe_cache, p) {
-                    changed = true;
-                }
-            }
-            changed
-        });
-    }
+    persist_learned_l2_probes(state, &session, pw, learned_probes);
 
     let manifest_rev = probe_res.manifest_rev;
     let reduced_protection = probe_res.reduced_protection;
@@ -798,61 +881,10 @@ pub(crate) async fn check_voucher_l2_status_impl(
         },
     )?;
 
-    match outcome {
-        StaticVoucherReconcileOutcome::Resolved(res) => match *res {
-            VoucherReconciliationResult::AlreadySpent { successor_t_id } => {
-                Ok(FrontendVoucherL2StatusDto {
-                    status: "spent".to_string(),
-                    archived: true,
-                    successor_t_id: Some(successor_t_id),
-                    reduced_guarantor_protection: reduced_protection,
-                    manifest_revision: manifest_rev,
-                })
-            }
-            VoucherReconciliationResult::ConflictDetected { conflicting_entry } => {
-                let successor_t_id = bs58::encode(conflicting_entry.child_lock).into_string();
-                Ok(FrontendVoucherL2StatusDto {
-                    status: "conflict".to_string(),
-                    archived: true,
-                    successor_t_id: Some(successor_t_id),
-                    reduced_guarantor_protection: reduced_protection,
-                    manifest_revision: manifest_rev,
-                })
-            }
-            VoucherReconciliationResult::UnspentSafe => Ok(FrontendVoucherL2StatusDto {
-                status: "unspent".to_string(),
-                archived: is_currently_archived,
-                successor_t_id: None,
-                reduced_guarantor_protection: reduced_protection,
-                manifest_revision: manifest_rev,
-            }),
-            VoucherReconciliationResult::Inconclusive { .. } => Ok(FrontendVoucherL2StatusDto {
-                status: "inconclusive".to_string(),
-                archived: is_currently_archived,
-                successor_t_id: None,
-                reduced_guarantor_protection: reduced_protection,
-                manifest_revision: manifest_rev,
-            }),
-        },
-        StaticVoucherReconcileOutcome::Inconclusive {
-            any_reachable: true,
-            ..
-        } => Ok(FrontendVoucherL2StatusDto {
-            status: "inconclusive".to_string(),
-            archived: is_currently_archived,
-            successor_t_id: None,
-            reduced_guarantor_protection: reduced_protection,
-            manifest_revision: manifest_rev,
-        }),
-        StaticVoucherReconcileOutcome::Inconclusive {
-            any_reachable: false,
-            ..
-        } => Ok(FrontendVoucherL2StatusDto {
-            status: "offline".to_string(),
-            archived: is_currently_archived,
-            successor_t_id: None,
-            reduced_guarantor_protection: reduced_protection,
-            manifest_revision: manifest_rev,
-        }),
-    }
+    Ok(map_reconcile_outcome_to_status_dto(
+        outcome,
+        is_currently_archived,
+        reduced_protection,
+        manifest_rev,
+    ))
 }

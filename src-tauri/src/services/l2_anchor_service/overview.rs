@@ -13,28 +13,54 @@ use crate::{
     AppState,
 };
 
-pub(crate) fn build_lock_protection_overview_from_service(
-    state: &AppState,
-    service: &mut human_money_core::app_service::AppService,
-    policy: &SecurityPolicy,
-    lifecycle: &InternalLifecycleState,
-    standard_toml: Option<&str>,
-    validity_duration: Option<&str>,
-    password: Option<&str>,
-) -> Result<FrontendLockProtectionOverviewDto, FrontendError> {
-    let offenders = state.get_or_load_server_offender_list(service, password)?;
-    let is_offender_hex = |lock_hex: &str, admin_hex: &str| -> bool {
-        let lock_pk = decode_hex_fixed::<32>(lock_hex).ok();
-        let admin_pk = decode_hex_fixed::<32>(admin_hex).ok();
-        match (lock_pk, admin_pk) {
-            (Some(lpk), apk) => {
-                crate::l2_lifecycle::is_server_key_revoked(&offenders, &lpk, apk.as_ref())
-            }
-            (None, Some(apk)) => offenders.is_admin_pub_revoked(&apk),
-            (None, None) => false,
+fn is_offender_hex(
+    offenders: &humoco_wot::ServerOffenderList,
+    lock_hex: &str,
+    admin_hex: &str,
+) -> bool {
+    let lock_pk = decode_hex_fixed::<32>(lock_hex).ok();
+    let admin_pk = decode_hex_fixed::<32>(admin_hex).ok();
+    match (lock_pk, admin_pk) {
+        (Some(lpk), apk) => {
+            crate::l2_lifecycle::is_server_key_revoked(offenders, &lpk, apk.as_ref())
         }
-    };
-    let sources = collect_known_sync_sources(state, service, policy, password);
+        (None, Some(apk)) => offenders.is_admin_pub_revoked(&apk),
+        (None, None) => false,
+    }
+}
+
+fn item_status_from_probe(p: &FrontendLockServerProbeResult, revoked: bool) -> String {
+    if revoked {
+        "unverified".to_string()
+    } else if p.passed && p.delegation_valid {
+        "ok".to_string()
+    } else if p
+        .error
+        .as_deref()
+        .is_some_and(|e| e.to_ascii_lowercase().contains("not enabled"))
+    {
+        "no_lock".to_string()
+    } else if p.lock_pub.trim().is_empty() {
+        "unreachable".to_string()
+    } else {
+        "unverified".to_string()
+    }
+}
+
+fn revoked_server_error(revoked: bool, probe_error: Option<&String>) -> Option<String> {
+    probe_error.cloned().or_else(|| {
+        revoked.then(|| {
+            "Server key or operator key is permanently revoked on ServerOffenderList".to_string()
+        })
+    })
+}
+
+fn collect_overview_servers(
+    sources: &[KnownSyncSource],
+    lifecycle: &InternalLifecycleState,
+    policy: &SecurityPolicy,
+    offenders: &humoco_wot::ServerOffenderList,
+) -> (Vec<FrontendLockServerItemDto>, usize) {
     let mut probe_by_write_norm: BTreeMap<String, &FrontendLockServerProbeResult> = BTreeMap::new();
     let mut probe_by_admin: BTreeMap<String, &FrontendLockServerProbeResult> = BTreeMap::new();
     for probe in lifecycle.l2_probe_cache.values() {
@@ -52,25 +78,7 @@ pub(crate) fn build_lock_protection_overview_from_service(
     let mut servers: Vec<FrontendLockServerItemDto> = Vec::new();
     let mut ready_trusted_count = 0usize;
 
-    let item_status_from_probe = |p: &FrontendLockServerProbeResult, revoked: bool| -> String {
-        if revoked {
-            "unverified".to_string()
-        } else if p.passed && p.delegation_valid {
-            "ok".to_string()
-        } else if p
-            .error
-            .as_deref()
-            .is_some_and(|e| e.to_ascii_lowercase().contains("not enabled"))
-        {
-            "no_lock".to_string()
-        } else if p.lock_pub.trim().is_empty() {
-            "unreachable".to_string()
-        } else {
-            "unverified".to_string()
-        }
-    };
-
-    for src in &sources {
+    for src in sources {
         let norm_w = normalize_sync_url(&src.write_url);
         let probe_opt = probe_by_write_norm
             .get(&norm_w)
@@ -98,7 +106,7 @@ pub(crate) fn build_lock_protection_overview_from_service(
         }
         seen_admin_or_url.insert(norm_w);
 
-        let revoked = is_offender_hex(&lock_pub, &admin_pub);
+        let revoked = is_offender_hex(offenders, &lock_pub, &admin_pub);
         let trusted = if admin_pub.is_empty() {
             true
         } else {
@@ -111,12 +119,7 @@ pub(crate) fn build_lock_protection_overview_from_service(
         if status == "ok" && trusted && !revoked {
             ready_trusted_count += 1;
         }
-        let error = probe_opt.and_then(|p| p.error.clone()).or_else(|| {
-            revoked.then(|| {
-                "Server key or operator key is permanently revoked on ServerOffenderList"
-                    .to_string()
-            })
-        });
+        let error = revoked_server_error(revoked, probe_opt.and_then(|p| p.error.as_ref()));
         servers.push(FrontendLockServerItemDto {
             write_url: probe_opt
                 .map(|p| p.write_url.clone())
@@ -148,7 +151,7 @@ pub(crate) fn build_lock_protection_overview_from_service(
         {
             continue;
         }
-        let revoked = is_offender_hex(&lp, &ap);
+        let revoked = is_offender_hex(offenders, &lp, &ap);
         let trusted = if ap.is_empty() {
             true
         } else {
@@ -158,12 +161,7 @@ pub(crate) fn build_lock_protection_overview_from_service(
         if status == "ok" && trusted && !revoked {
             ready_trusted_count += 1;
         }
-        let error = probe.error.clone().or_else(|| {
-            revoked.then(|| {
-                "Server key or operator key is permanently revoked on ServerOffenderList"
-                    .to_string()
-            })
-        });
+        let error = revoked_server_error(revoked, probe.error.as_ref());
         servers.push(FrontendLockServerItemDto {
             write_url: probe.write_url.clone(),
             read_url: probe.read_url.clone(),
@@ -179,15 +177,30 @@ pub(crate) fn build_lock_protection_overview_from_service(
         });
     }
 
+    (servers, ready_trusted_count)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_expected_committee_preview(
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    policy: &SecurityPolicy,
+    lifecycle: &InternalLifecycleState,
+    offenders: &humoco_wot::ServerOffenderList,
+    sources: &[KnownSyncSource],
+    standard_toml: Option<&str>,
+    validity_duration: Option<&str>,
+    password: Option<&str>,
+) -> Result<(Vec<String>, u8, String, bool), FrontendError> {
     let now_secs = sync_client::current_unix_timestamp();
     let preview_deletable_ms = estimate_deletable_ms(now_secs, standard_toml, validity_duration);
     let reusable_offline =
-        find_reusable_offline_anchor(service, policy, &offenders, preview_deletable_ms);
+        find_reusable_offline_anchor(service, policy, offenders, preview_deletable_ms);
     let has_offline_cached_anchor = reusable_offline.is_some();
     let preview_quarter = required_retention_quarter(preview_deletable_ms).ok();
     let live_expected = if let Some(req_q) = preview_quarter {
         select_expected_candidates_from_lifecycle(
-            state, service, policy, lifecycle, &offenders, &sources, req_q, password,
+            state, service, policy, lifecycle, offenders, sources, req_q, password,
         )?
     } else {
         Vec::new()
@@ -211,6 +224,39 @@ pub(crate) fn build_lock_protection_overview_from_service(
     } else {
         (Vec::new(), 0, "none".to_string())
     };
+    Ok((
+        expected_lock_pubs,
+        expected_threshold,
+        expected_source,
+        has_offline_cached_anchor,
+    ))
+}
+
+pub(crate) fn build_lock_protection_overview_from_service(
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    policy: &SecurityPolicy,
+    lifecycle: &InternalLifecycleState,
+    standard_toml: Option<&str>,
+    validity_duration: Option<&str>,
+    password: Option<&str>,
+) -> Result<FrontendLockProtectionOverviewDto, FrontendError> {
+    let offenders = state.get_or_load_server_offender_list(service, password)?;
+    let sources = collect_known_sync_sources(state, service, policy, password);
+    let (servers, ready_trusted_count) =
+        collect_overview_servers(&sources, lifecycle, policy, &offenders);
+    let (expected_lock_pubs, expected_threshold, expected_source, has_offline_cached_anchor) =
+        resolve_expected_committee_preview(
+            state,
+            service,
+            policy,
+            lifecycle,
+            &offenders,
+            &sources,
+            standard_toml,
+            validity_duration,
+            password,
+        )?;
     let unresolved_intents_count = service
         .unresolved_l2_send_intents()
         .map(|v| v.len())
