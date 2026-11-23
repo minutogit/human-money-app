@@ -1532,13 +1532,21 @@ mod tests {
         assert_eq!(wipe_reauth_err.code, "error.auth.pinWipedMaxAttempts");
         let after_reauth_wipe = get_session_status_impl(&app_state).unwrap();
         assert!(!after_reauth_wipe.has_cached_session);
+        assert!(!after_reauth_wipe.is_unlocked);
         assert!(
             !get_profile_pin_status_impl(&folder, &keystore_dir, &app_state)
                 .unwrap()
                 .enabled
         );
 
-        // Re-enable PIN and verify 5-strike wipe on login_with_pin_impl as well
+        // Re-authenticate with master password after wipe-triggered auto-logout, re-enable PIN,
+        // and verify 5-strike wipe on login_with_pin_impl as well
+        app_state
+            .service
+            .lock()
+            .unwrap()
+            .login(&folder, master_pw, false, "dev-pin-1".into())
+            .unwrap();
         enable_profile_pin_impl(
             master_pw,
             "246810",
