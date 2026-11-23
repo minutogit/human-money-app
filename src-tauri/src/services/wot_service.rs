@@ -660,12 +660,28 @@ mod tests {
 
     const ALICE_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     const BOB_PHRASE: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
+    const DAVE_PHRASE: &str =
+        "vessel ladder alter error federal sibling chat ability sun glass valve picture";
 
-    fn temp_test_dir(name: &str) -> PathBuf {
-        let p =
-            std::env::temp_dir().join(format!("humoco_wot_test_{}_{}", name, uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    struct TempDirGuard(PathBuf);
+
+    impl TempDirGuard {
+        fn new(name: &str) -> Self {
+            let p = std::env::temp_dir()
+                .join(format!("humoco_wot_test_{}_{}", name, uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     fn setup_test_app(dir: &Path, profile_name: &str, phrase: &str, password: &str) -> AppService {
@@ -689,13 +705,126 @@ mod tests {
         AppState::new(service)
     }
 
+    fn make_contact(did: &str, name: &str, trust_level: u8, desired_hops: u8) -> FrontendContact {
+        FrontendContact {
+            did: did.to_string(),
+            profile: FrontendUserProfile {
+                first_name: Some(name.to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: "2026-01-01T00:00:00Z".to_string(),
+            notes: None,
+            trust_level: Some(trust_level),
+            desired_hops: Some(desired_hops),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        }
+    }
+
+    fn sign_provider_filter_with(
+        svc: &AppService,
+        name: &str,
+        version: u64,
+        iat: u64,
+        source_url: Option<String>,
+        members: &[(String, u8)],
+    ) -> String {
+        svc.with_wallet_and_identity(|_w, id| {
+            let signer = crate::state::DidWotSigner::from_identity(id);
+            humoco_wot::create_and_sign_provider_filter(&signer, name, version, iat, source_url, members)
+                .unwrap()
+        })
+        .unwrap()
+    }
+
+    fn spawn_single_provider_server(
+        listener: tokio::net::TcpListener,
+        body: String,
+        hit_tx: tokio::sync::oneshot::Sender<()>,
+        release_rx: tokio::sync::oneshot::Receiver<()>,
+    ) -> tokio::task::JoinHandle<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("mock provider server must accept connection");
+            let mut req_buf = [0u8; 1024];
+            let n = stream
+                .read(&mut req_buf)
+                .await
+                .expect("mock provider must read request");
+            assert!(n > 0, "expected non-empty HTTP request");
+            hit_tx
+                .send(())
+                .expect("test harness must await provider hit notification");
+            release_rx
+                .await
+                .expect("test harness must release provider response");
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.shutdown().await;
+        })
+    }
+
+    fn spawn_chunked_oversized_server(
+        listener: tokio::net::TcpListener,
+    ) -> tokio::task::JoinHandle<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("mock oversized server must accept connection");
+            let mut req_buf = [0u8; 1024];
+            let n = stream
+                .read(&mut req_buf)
+                .await
+                .expect("mock oversized server must read request");
+            assert!(n > 0, "expected non-empty HTTP request");
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .await
+                .expect("header write must succeed");
+            let chunk = vec![b'a'; 64 * 1024];
+            let hdr = format!("{:x}\r\n", chunk.len());
+            let chunks_needed = (humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN / chunk.len()) + 2;
+            let mut aborted_early = false;
+            for _ in 0..chunks_needed {
+                if stream.write_all(hdr.as_bytes()).await.is_err()
+                    || stream.write_all(&chunk).await.is_err()
+                    || stream.write_all(b"\r\n").await.is_err()
+                {
+                    aborted_early = true;
+                    break;
+                }
+            }
+            if !aborted_early {
+                let _ = stream.write_all(b"0\r\n\r\n").await;
+            }
+        })
+    }
+
     #[test]
     fn test_contact_trust_sync_canonical_dedup_and_delete() {
-        let base_dir = temp_test_dir("trust_sync");
+        let base_dir = TempDirGuard::new("trust_sync");
         let password = "TestPassword123!";
-        let alice_service =
-            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
-        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let alice_service = setup_test_app(
+            &base_dir.path().join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        );
+        let bob_service =
+            setup_test_app(&base_dir.path().join("bob"), "Bob", BOB_PHRASE, password);
 
         let bob_did = bob_service
             .with_wallet(|w| w.get_user_id().to_string())
@@ -789,9 +918,9 @@ mod tests {
 
     #[test]
     fn test_container_export_import_roundtrip_and_invalid_password() {
-        let base_dir = temp_test_dir("container_roundtrip");
-        let alice_dir = base_dir.join("alice");
-        let bob_dir = base_dir.join("bob");
+        let base_dir = TempDirGuard::new("container_roundtrip");
+        let alice_dir = base_dir.path().join("alice");
+        let bob_dir = base_dir.path().join("bob");
         let password = "TestPassword123!";
 
         let alice_service = setup_test_app(&alice_dir, "Alice", ALICE_PHRASE, password);
@@ -810,21 +939,7 @@ mod tests {
         };
 
         // Alice adds Bob as contact level 2
-        let bob_contact = FrontendContact {
-            did: bob_did.clone(),
-            profile: FrontendUserProfile {
-                first_name: Some("Bob".to_string()),
-                ..Default::default()
-            },
-            tags: vec![],
-            added_at: "2026-01-01T00:00:00Z".to_string(),
-            notes: None,
-            trust_level: Some(2),
-            desired_hops: Some(3),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![],
-        };
+        let bob_contact = make_contact(&bob_did, "Bob", 2, 3);
         {
             let mut s = alice_state.service.lock().unwrap();
             alice_state
@@ -832,7 +947,7 @@ mod tests {
                 .unwrap();
         }
 
-        // 1. Password container export
+        // 1. Password container export (must NOT commit sync receipt to sent_log)
         let container_pwd = "SecretContainerPass123!";
         let container_bytes = export_wot_package_impl(
             None,
@@ -842,17 +957,32 @@ mod tests {
             &alice_state,
         )
         .unwrap();
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            let reg = alice_state
+                .get_or_load_wot_register(&mut s, Some(password))
+                .unwrap();
+            assert!(
+                reg.sent_log.is_empty(),
+                "password export must not commit single-recipient sync receipt"
+            );
+        }
 
-        // Bob attempts import with wrong container password -> should fail
-        let wrong_pwd_res = import_wot_package_impl(
+        // Invariant: wrong container password must fail AEAD decryption specifically, not envelope/session checks.
+        let wrong_pwd_err = import_wot_package_impl(
             container_bytes.clone(),
             Some("WrongPassword".to_string()),
             Some(password.to_string()),
             &bob_state,
+        )
+        .expect_err("wrong container password must fail decryption");
+        assert!(
+            wrong_pwd_err.message.contains("AEAD decryption failed"),
+            "unexpected error for wrong container password: {}",
+            wrong_pwd_err.message
         );
-        assert!(wrong_pwd_res.is_err());
 
-        // Bob imports with correct container password -> should succeed
+        // Positive baseline: Bob imports with correct container password -> succeeds
         let import_res = import_wot_package_impl(
             container_bytes,
             Some(container_pwd.to_string()),
@@ -864,7 +994,7 @@ mod tests {
         assert_eq!(import_res.sender_did, alice_did);
         assert_eq!(import_res.imported, 1);
 
-        // 2. TargetDid container export (targeted to Bob's DID)
+        // 2. TargetDid container export (targeted to Bob's DID -> MUST commit sync receipt)
         let target_container_bytes = export_wot_package_impl(
             Some(bob_did.clone()),
             None,
@@ -873,6 +1003,17 @@ mod tests {
             &alice_state,
         )
         .unwrap();
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            let reg = alice_state
+                .get_or_load_wot_register(&mut s, Some(password))
+                .unwrap();
+            let can_bob = crate::state::canonicalize_did(&bob_did).unwrap();
+            assert!(
+                reg.sent_log.contains_key(&can_bob),
+                "single-recipient TargetDid export must commit sync receipt for recipient"
+            );
+        }
 
         // Bob imports without container password -> decrypted via Bob's DID key
         let target_import_res = import_wot_package_impl(
@@ -886,97 +1027,209 @@ mod tests {
         assert_eq!(target_import_res.sender_did, alice_did);
     }
 
-    #[test]
-    fn test_piggybacking_condition() {
-        let base_dir = temp_test_dir("piggyback_cond");
-        let password = "TestPassword123!";
-        let alice_service =
-            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
-        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+    async fn send_and_receive_offline_transfer(
+        alice_state: &AppState,
+        bob_state: &AppState,
+        bob_did: &str,
+        bob_identity: &human_money_core::models::profile::UserIdentity,
+        standards: &std::collections::HashMap<String, String>,
+        password: &str,
+    ) -> (Option<String>, Option<usize>) {
+        use crate::models::{FrontendSourceTransfer, ReceiveCommitMode};
+        use crate::services::transfer_service::{create_transfer_bundle_impl, receive_bundle_impl};
+        use human_money_core::services::bundle_processor::open_and_verify_bundle;
 
-        let bob_did = bob_service
+        let v_id = alice_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+        let res = create_transfer_bundle_impl(
+            None,
+            bob_did.to_string(),
+            vec![FrontendSourceTransfer {
+                local_instance_id: v_id,
+                amount_to_send: "10".into(),
+            }],
+            None,
+            None,
+            standards.clone(),
+            None,
+            Some(false),
+            None,
+            Some(password.to_string()),
+            alice_state,
+        )
+        .await
+        .unwrap();
+        let opened = open_and_verify_bundle(bob_identity, &res.bundle_data).unwrap();
+        let recv = receive_bundle_impl(
+            None,
+            res.bundle_data,
+            standards.clone(),
+            Some(password.to_string()),
+            false,
+            Some(ReceiveCommitMode::ForceTrustOffline),
+            None,
+            bob_state,
+        )
+        .await
+        .unwrap();
+        (opened.wot_sync_json, recv.wot_imported_lists)
+    }
+
+    #[tokio::test]
+    async fn test_piggybacking_respects_contact_trust_level_end_to_end() {
+        use human_money_core::models::profile::PublicProfile;
+        use human_money_core::models::voucher::{NewVoucherData, ValueDefinition};
+        use human_money_core::models::voucher_standard_definition::VoucherStandardDefinition;
+        use std::collections::HashMap;
+
+        // Invariant: Sending a voucher via create_transfer_bundle_impl to a level-0 contact MUST NOT
+        // piggyback Alice's WoT sync package (even when Alice has other rated contacts), whereas
+        // upgrading the recipient to level 1 MUST piggyback and import Alice's WoT list on receive.
+        let base_dir = TempDirGuard::new("piggyback_e2e");
+        let password = "TestPassword123!";
+        let mut alice_svc = setup_test_app(
+            &base_dir.path().join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        );
+        let mut bob_svc =
+            setup_test_app(&base_dir.path().join("bob"), "Bob", BOB_PHRASE, password);
+        let charlie_svc = setup_test_app(
+            &base_dir.path().join("charlie"),
+            "Charlie",
+            crate::test_support::CHARLIE_PHRASE,
+            password,
+        );
+
+        alice_svc.unlock_session(password, 3600).unwrap();
+        bob_svc.unlock_session(password, 3600).unwrap();
+
+        let alice_did = alice_svc
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
-        let state = create_test_state(alice_service);
+        let can_alice = crate::state::canonicalize_did(&alice_did).unwrap();
+        let bob_did = bob_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let bob_identity = bob_svc
+            .with_wallet_and_identity(|_, id| id.clone())
+            .unwrap();
+        let charlie_did = charlie_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
-        // Bob added with level 0
-        let contact_lvl0 = FrontendContact {
-            did: bob_did.clone(),
-            profile: FrontendUserProfile::default(),
-            tags: vec![],
-            added_at: "2026-01-01T00:00:00Z".to_string(),
-            notes: None,
-            trust_level: Some(0),
-            desired_hops: Some(0),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![],
-        };
+        let std_toml = human_money_core::test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let (std_def, _) = VoucherStandardDefinition::from_toml(&std_toml).unwrap();
+        let standards = HashMap::from([(std_def.immutable.identity.uuid, std_toml.clone())]);
+
+        alice_svc
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_did),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Some(password),
+            )
+            .unwrap();
+
+        let alice_state = create_test_state(alice_svc);
+        let bob_state = create_test_state(bob_svc);
+
+        // Give Alice a rated contact (Charlie level 1) so Alice's own_signed_list is non-empty,
+        // and add Bob at level 0 (verified human only -> must NOT trigger piggybacking).
         {
-            let mut s = state.service.lock().unwrap();
-            state
-                .save_contact(&mut s, contact_lvl0, Some(password))
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_contact(&mut s, make_contact(&charlie_did, "Charlie", 1, 2), Some(password))
+                .unwrap();
+            alice_state
+                .save_contact(&mut s, make_contact(&bob_did, "Bob", 0, 0), Some(password))
                 .unwrap();
         }
 
-        // Test piggybacking evaluation logic: level 0 => must NOT piggyback
-        {
-            let mut s = state.service.lock().unwrap();
-            let can_rcpt = crate::state::canonicalize_did(&bob_did).unwrap();
-            let reg = state
-                .get_or_load_wot_register(&mut s, Some(password))
-                .unwrap();
-            let should_piggyback = reg
-                .own_contacts
-                .get(&can_rcpt)
-                .is_some_and(|e| e.level >= 1);
-            assert!(!should_piggyback);
-        }
+        let (wot_lvl0, imported_lvl0) = send_and_receive_offline_transfer(
+            &alice_state,
+            &bob_state,
+            &bob_did,
+            &bob_identity,
+            &standards,
+            password,
+        )
+        .await;
+        assert!(
+            wot_lvl0.is_none(),
+            "level-0 contact must NOT receive piggybacked WoT sync package"
+        );
+        assert_eq!(imported_lvl0, None);
 
-        // Update Bob to level 1 => must piggyback
-        let contact_lvl1 = FrontendContact {
-            did: bob_did.clone(),
-            profile: FrontendUserProfile::default(),
-            tags: vec![],
-            added_at: "2026-01-01T00:00:00Z".to_string(),
-            notes: None,
-            trust_level: Some(1),
-            desired_hops: Some(2),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![],
-        };
+        // Upgrade Bob to level 1 -> positive baseline MUST piggyback and import Alice's list
         {
-            let mut s = state.service.lock().unwrap();
-            state
-                .save_contact(&mut s, contact_lvl1, Some(password))
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_contact(&mut s, make_contact(&bob_did, "Bob", 1, 2), Some(password))
                 .unwrap();
         }
 
-        {
-            let mut s = state.service.lock().unwrap();
-            let can_rcpt = crate::state::canonicalize_did(&bob_did).unwrap();
-            let reg = state
-                .get_or_load_wot_register(&mut s, Some(password))
-                .unwrap();
-            let should_piggyback = reg
-                .own_contacts
-                .get(&can_rcpt)
-                .is_some_and(|e| e.level >= 1);
-            assert!(should_piggyback);
-        }
+        let (wot_lvl1, imported_lvl1) = send_and_receive_offline_transfer(
+            &alice_state,
+            &bob_state,
+            &bob_did,
+            &bob_identity,
+            &standards,
+            password,
+        )
+        .await;
+        assert!(
+            wot_lvl1.is_some(),
+            "level-1 contact must receive piggybacked WoT sync package"
+        );
+        assert_eq!(imported_lvl1, Some(1));
+
+        let mut s = bob_state.service.lock().unwrap();
+        let bob_reg = bob_state
+            .get_or_load_wot_register(&mut s, Some(password))
+            .unwrap();
+        assert!(
+            bob_reg.raw_list_store.contains_key(&can_alice),
+            "Bob's WoT register must store Alice's piggybacked signed list"
+        );
     }
 
     #[test]
     fn test_set_wot_max_hops_updates_contacts_and_rejects_out_of_range() {
-        let base_dir = temp_test_dir("max_hops");
+        let base_dir = TempDirGuard::new("max_hops");
         let password = "TestPassword123!";
-        let alice_service =
-            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
-        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
-        const CHARLIE_PHRASE: &str =
-            "legal winner thank year wave sausage worth useful legal winner thank yellow";
-        let dave_service = setup_test_app(&base_dir.join("dave"), "Dave", CHARLIE_PHRASE, password);
+        let alice_service = setup_test_app(
+            &base_dir.path().join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        );
+        let bob_service =
+            setup_test_app(&base_dir.path().join("bob"), "Bob", BOB_PHRASE, password);
+        let dave_service = setup_test_app(
+            &base_dir.path().join("dave"),
+            "Dave",
+            crate::test_support::CHARLIE_PHRASE,
+            password,
+        );
 
         let bob_did = bob_service
             .with_wallet(|w| w.get_user_id().to_string())
@@ -986,49 +1239,13 @@ mod tests {
             .unwrap();
         let alice_state = create_test_state(alice_service);
 
-        // Add Bob with level 2
-        let bob_contact = FrontendContact {
-            did: bob_did.clone(),
-            profile: FrontendUserProfile {
-                first_name: Some("Bob".to_string()),
-                ..Default::default()
-            },
-            tags: vec![],
-            added_at: "2026-01-01T00:00:00Z".to_string(),
-            notes: None,
-            trust_level: Some(2),
-            desired_hops: Some(3),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![],
-        };
         {
             let mut s = alice_state.service.lock().unwrap();
             alice_state
-                .save_contact(&mut s, bob_contact, Some(password))
+                .save_contact(&mut s, make_contact(&bob_did, "Bob", 2, 3), Some(password))
                 .unwrap();
-        }
-
-        // Add Dave with level 0
-        let dave_contact = FrontendContact {
-            did: dave_did.clone(),
-            profile: FrontendUserProfile {
-                first_name: Some("Dave".to_string()),
-                ..Default::default()
-            },
-            tags: vec![],
-            added_at: "2026-01-01T00:00:00Z".to_string(),
-            notes: None,
-            trust_level: Some(0),
-            desired_hops: Some(0),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![],
-        };
-        {
-            let mut s = alice_state.service.lock().unwrap();
             alice_state
-                .save_contact(&mut s, dave_contact, Some(password))
+                .save_contact(&mut s, make_contact(&dave_did, "Dave", 0, 0), Some(password))
                 .unwrap();
         }
 
@@ -1044,22 +1261,28 @@ mod tests {
             assert_eq!(reg.own_contacts.get(&dave_can).unwrap().desired_hops, 0);
         }
 
-        // Verify bounds: 0 and 4 fail
-        let err0 = set_wot_max_hops_impl(0, Some(password.to_string()), &alice_state);
-        assert!(err0.is_err());
-        assert!(err0
-            .unwrap_err()
-            .message
-            .contains("maxHops must be between 1 and 3"));
+        // Invariant: max_hops outside 1..=3 must fail with range error; valid boundaries 1 and 3 succeed.
+        let err0 = set_wot_max_hops_impl(0, Some(password.to_string()), &alice_state)
+            .expect_err("max_hops=0 must be rejected");
+        assert!(
+            err0.message.contains("maxHops must be between 1 and 3"),
+            "unexpected error for max_hops=0: {}",
+            err0.message
+        );
 
-        let err4 = set_wot_max_hops_impl(4, Some(password.to_string()), &alice_state);
-        assert!(err4.is_err());
-        assert!(err4
-            .unwrap_err()
-            .message
-            .contains("maxHops must be between 1 and 3"));
+        let err4 = set_wot_max_hops_impl(4, Some(password.to_string()), &alice_state)
+            .expect_err("max_hops=4 must be rejected");
+        assert!(
+            err4.message.contains("maxHops must be between 1 and 3"),
+            "unexpected error for max_hops=4: {}",
+            err4.message
+        );
 
-        // Valid update: set to 3
+        // Lower valid boundary: set to 1
+        let summary1 = set_wot_max_hops_impl(1, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(summary1.own_list_max_hops, 1);
+
+        // Upper valid boundary: set to 3
         let summary = set_wot_max_hops_impl(3, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(summary.own_list_max_hops, 3);
 
@@ -1086,94 +1309,96 @@ mod tests {
 
     #[test]
     fn test_multi_recipient_share_with_all_contacts_roundtrip() {
-        let base_dir = temp_test_dir("multi_recipient");
+        let base_dir = TempDirGuard::new("multi_recipient");
         let password = "TestPassword123!";
-        const CHARLIE_PHRASE: &str =
-            "legal winner thank year wave sausage worth useful legal winner thank yellow";
 
-        let alice_service =
-            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
-        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let alice_service = setup_test_app(
+            &base_dir.path().join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        );
+        let bob_service =
+            setup_test_app(&base_dir.path().join("bob"), "Bob", BOB_PHRASE, password);
         let charlie_service = setup_test_app(
-            &base_dir.join("charlie"),
+            &base_dir.path().join("charlie"),
             "Charlie",
-            CHARLIE_PHRASE,
+            crate::test_support::CHARLIE_PHRASE,
+            password,
+        );
+        let dave_service = setup_test_app(
+            &base_dir.path().join("dave"),
+            "Dave",
+            DAVE_PHRASE,
             password,
         );
 
         let alice_state = create_test_state(alice_service);
         let bob_state = create_test_state(bob_service);
         let charlie_state = create_test_state(charlie_service);
+        let dave_state = create_test_state(dave_service);
 
-        let alice_did = {
-            let s = alice_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
-        let bob_did = {
-            let s = bob_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
-        let charlie_did = {
-            let s = charlie_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
+        let alice_did = alice_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let bob_did = bob_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let charlie_did = charlie_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let dave_did = dave_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
-        // If Alice has no rated contacts, share_with_all_contacts should fail with clear error
+        // Add level-0 contact Dave: level-0 contacts must NOT count as rated recipients.
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_contact(&mut s, make_contact(&dave_did, "Dave", 0, 0), Some(password))
+                .unwrap();
+        }
+
+        // Invariant: share_with_all_contacts with zero rated (level 1-3) contacts must fail closed.
         let empty_err = export_wot_package_impl(
             None,
             None,
             Some(true),
             Some(password.to_string()),
             &alice_state,
+        )
+        .expect_err("export with only level-0 contacts must fail");
+        assert!(
+            empty_err
+                .message
+                .contains("No rated contacts (level 1-3) available to encrypt for"),
+            "unexpected error: {}",
+            empty_err.message
         );
-        assert!(empty_err.is_err());
-        assert!(empty_err
-            .unwrap_err()
-            .message
-            .contains("No rated contacts (level 1-3) available to encrypt for"));
 
         // Alice adds Bob (level 2) and Charlie (level 1)
-        let bob_contact = FrontendContact {
-            did: bob_did.clone(),
-            profile: FrontendUserProfile {
-                first_name: Some("Bob".to_string()),
-                ..Default::default()
-            },
-            tags: vec![],
-            added_at: "2026-01-01T00:00:00Z".to_string(),
-            notes: None,
-            trust_level: Some(2),
-            desired_hops: Some(3),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![],
-        };
-        let charlie_contact = FrontendContact {
-            did: charlie_did.clone(),
-            profile: FrontendUserProfile {
-                first_name: Some("Charlie".to_string()),
-                ..Default::default()
-            },
-            tags: vec![],
-            added_at: "2026-01-01T00:00:00Z".to_string(),
-            notes: None,
-            trust_level: Some(1),
-            desired_hops: Some(3),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![],
-        };
         {
             let mut s = alice_state.service.lock().unwrap();
             alice_state
-                .save_contact(&mut s, bob_contact, Some(password))
+                .save_contact(&mut s, make_contact(&bob_did, "Bob", 2, 3), Some(password))
                 .unwrap();
             alice_state
-                .save_contact(&mut s, charlie_contact, Some(password))
+                .save_contact(&mut s, make_contact(&charlie_did, "Charlie", 1, 3), Some(password))
                 .unwrap();
         }
 
-        // Alice exports a single .wot package with share_with_all_contacts: Some(true) and NO password
         let container_bytes = export_wot_package_impl(
             None,
             None,
@@ -1183,7 +1408,23 @@ mod tests {
         )
         .unwrap();
 
-        // BOTH Bob and Charlie successfully import that EXACT SAME container_bytes without any password!
+        // Dave (level 0) must NOT be able to decrypt the multi-recipient container.
+        let dave_err = import_wot_package_impl(
+            container_bytes.clone(),
+            None,
+            Some(password.to_string()),
+            &dave_state,
+        )
+        .expect_err("level-0 contact must not be encrypted for");
+        assert!(
+            dave_err
+                .message
+                .contains("not in the list of recipients"),
+            "unexpected error for excluded level-0 recipient: {}",
+            dave_err.message
+        );
+
+        // Both Bob and Charlie import the exact same container without any password.
         let bob_import = import_wot_package_impl(
             container_bytes.clone(),
             None,
@@ -1207,58 +1448,52 @@ mod tests {
         assert!(!charlie_import.is_provider_filter);
     }
 
-    #[test]
-    fn test_provider_filter_import_trust_and_voucher_preview() {
-        let base_dir = temp_test_dir("provider_filter");
+    #[tokio::test]
+    async fn test_provider_filter_import_trust_and_voucher_preview() {
+        let base_dir = TempDirGuard::new("provider_filter");
         let password = "TestPassword123!";
-        const CHARLIE_PHRASE: &str =
-            "legal winner thank year wave sausage worth useful legal winner thank yellow";
-        const PROV_PHRASE: &str =
-            "letter advice cage absurd amount doctor acoustic avoid letter advice cage above";
-
-        let alice_service =
-            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_service = setup_test_app(
+            &base_dir.path().join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        );
         let charlie_service = setup_test_app(
-            &base_dir.join("charlie"),
+            &base_dir.path().join("charlie"),
             "Charlie",
-            CHARLIE_PHRASE,
+            crate::test_support::CHARLIE_PHRASE,
             password,
         );
         let prov_service = setup_test_app(
-            &base_dir.join("prov"),
+            &base_dir.path().join("prov"),
             "Minuto Verband",
-            PROV_PHRASE,
+            crate::test_support::READER1_PHRASE,
             password,
         );
 
         let alice_state = create_test_state(alice_service);
         let charlie_state = create_test_state(charlie_service);
 
-        let charlie_did = {
-            let s = charlie_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
+        let charlie_did = charlie_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
         let prov_did = prov_service
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
         let can_charlie = crate::state::canonicalize_did(&charlie_did).unwrap();
         let now_secs = Utc::now().timestamp() as u64;
 
-        // Provider signs a filter certifying Charlie at level 2
-        let raw_filter_json = prov_service
-            .with_wallet_and_identity(|_w, id| {
-                let signer = crate::state::DidWotSigner::from_identity(id);
-                humoco_wot::create_and_sign_provider_filter(
-                    &signer,
-                    "Minuto Verband e.V.",
-                    1,
-                    now_secs,
-                    Some("https://minuto.org/filter.json".to_string()),
-                    &[(can_charlie.clone(), 2)],
-                )
-                .unwrap()
-            })
-            .unwrap();
+        let raw_filter_json = sign_provider_filter_with(
+            &prov_service,
+            "Minuto Verband e.V.",
+            1,
+            now_secs,
+            Some("https://minuto.org/filter.json".to_string()),
+            &[(can_charlie.clone(), 2)],
+        );
 
         // 1. Alice imports the raw JSON provider filter
         let import_res = import_wot_package_impl(
@@ -1318,21 +1553,15 @@ mod tests {
         let summary_after = get_wot_summary_impl(&alice_state).unwrap();
         assert_eq!(summary_after.provider_filters_count, 0);
 
-        // 7. Security check: import provider filter with non-HTTPS scheme and verify refresh rejects
-        let insecure_filter_json = prov_service
-            .with_wallet_and_identity(|_w, id| {
-                let signer = crate::state::DidWotSigner::from_identity(id);
-                humoco_wot::create_and_sign_provider_filter(
-                    &signer,
-                    "Minuto Insecure",
-                    2,
-                    now_secs,
-                    Some("ftp://insecure.example.com/filter.json".to_string()),
-                    &[(can_charlie.clone(), 2)],
-                )
-                .unwrap()
-            })
-            .unwrap();
+        // 7. Invariant: non-HTTPS provider sourceUrl must be rejected by SSRF/HTTPS guard.
+        let insecure_filter_json = sign_provider_filter_with(
+            &prov_service,
+            "Minuto Insecure",
+            2,
+            now_secs,
+            Some("ftp://insecure.example.com/filter.json".to_string()),
+            &[(can_charlie, 2)],
+        );
         import_wot_package_impl(
             insecure_filter_json.as_bytes().to_vec(),
             None,
@@ -1341,54 +1570,236 @@ mod tests {
         )
         .unwrap();
 
-        let tokio_rt = tokio::runtime::Runtime::new().unwrap();
-        let refresh_err = tokio_rt.block_on(refresh_wot_provider_url_impl(
-            prov_did.clone(),
-            Some(password.to_string()),
-            &alice_state,
-        ));
-        assert!(refresh_err.is_err());
-        assert!(refresh_err
-            .unwrap_err()
-            .message
-            .contains("Security violation"));
+        let refresh_err =
+            refresh_wot_provider_url_impl(prov_did, Some(password.to_string()), &alice_state)
+                .await
+                .expect_err("non-HTTPS provider sourceUrl must be rejected");
+        assert!(
+            refresh_err
+                .message
+                .contains("Security violation: provider sourceUrl failed SSRF/HTTPS validation"),
+            "unexpected error: {}",
+            refresh_err.message
+        );
     }
 
-    #[tokio::test]
-    async fn s11_f6_bounds_envelope_strictness_did_fail_closed_and_refresh_guard() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let big_json = format!(
-            "{{\"typ\":\"{}\",\"pad\":\"{}\"}}",
-            humoco_wot::PROVIDER_FILTER_TYP,
-            "a".repeat(humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN + 10)
+    #[test]
+    fn test_looks_like_provider_filter_enforces_max_len_and_typ() {
+        // Invariant: Only UTF-8 JSON with typ == PROVIDER_FILTER_TYP and byte length <= MAX_PROVIDER_FILTER_RAW_LEN is recognized.
+        let prefix = format!("{{\"typ\":\"{}\",\"pad\":\"", humoco_wot::PROVIDER_FILTER_TYP);
+        let suffix = "\"}";
+        let max_pad_len = humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN - prefix.len() - suffix.len();
+        let exact_max = format!("{}{}{}", prefix, "a".repeat(max_pad_len), suffix);
+        assert_eq!(exact_max.len(), humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN);
+        assert_eq!(
+            super::looks_like_provider_filter(exact_max.as_bytes()),
+            Some(exact_max.as_str())
         );
-        assert!(super::looks_like_provider_filter(big_json.as_bytes()).is_none());
 
-        assert!(serde_json::from_str::<super::WotFileEnvelope>(
-            r#"{"formatVersion":1,"senderDid":"did:key:z1","syncPackage":{"sender":"did:key:z1","list":null,"hop_count":1,"sent_at":1,"sig":""},"bogus":1}"#
-        )
-        .is_err());
+        let over_max = format!("{}{}{}", prefix, "a".repeat(max_pad_len + 1), suffix);
+        assert_eq!(over_max.len(), humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN + 1);
+        assert!(super::looks_like_provider_filter(over_max.as_bytes()).is_none());
 
-        let dir = crate::test_support::temp_test_dir("s11_f6_wot");
-        let pw = "pw-s11-f6";
+        let wrong_typ = br#"{"typ":"other-typ","pad":"ok"}"#;
+        assert!(super::looks_like_provider_filter(wrong_typ).is_none());
+    }
+
+    #[test]
+    fn test_wot_file_envelope_rejects_unknown_fields() {
+        // Invariant: WotFileEnvelope must accept valid canonical JSON and reject any unknown field via #[serde(deny_unknown_fields)].
+        let valid_json = r#"{"formatVersion":1,"senderDid":"did:key:z1","syncPackage":{"format_version":1,"lists":[]}}"#;
+        let parsed = serde_json::from_str::<super::WotFileEnvelope>(valid_json)
+            .expect("valid WotFileEnvelope baseline must deserialize");
+        assert_eq!(parsed.format_version, 1);
+
+        let bogus_json = r#"{"formatVersion":1,"senderDid":"did:key:z1","syncPackage":{"format_version":1,"lists":[]},"bogus":1}"#;
+        let err = serde_json::from_str::<super::WotFileEnvelope>(bogus_json)
+            .expect_err("unknown field on WotFileEnvelope must be rejected");
+        assert!(
+            err.to_string().contains("unknown field"),
+            "expected unknown field serde error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_import_wot_package_rejects_unsupported_envelope_version() {
+        // Invariant: import_wot_package_impl must accept format_version=1 and reject any unsupported envelope version.
+        let dir = TempDirGuard::new("wot_env_version");
+        let pw = "pw-env-ver";
         let mut alice_svc =
-            crate::test_support::setup_test_app(&dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+            crate::test_support::setup_test_app(&dir.path().join("alice"), "Alice", ALICE_PHRASE, pw);
         alice_svc.unlock_session(pw, 3600).unwrap();
-        let alice_state = crate::test_support::create_test_state(alice_svc);
-
+        let alice_state = create_test_state(alice_svc);
         let prov_svc = crate::test_support::setup_test_app(
-            &dir.join("prov"),
+            &dir.path().join("prov"),
             "Provider",
-            crate::test_support::BOB_PHRASE,
+            BOB_PHRASE,
             pw,
         );
-        let prov_did = prov_svc
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
+        let prov_did = prov_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
 
-        let charlie_svc = crate::test_support::setup_test_app(
-            &dir.join("charlie"),
+        let (pkg, alice_did) = {
+            let mut s = alice_state.service.lock().unwrap();
+            let mut reg = alice_state.get_or_load_wot_register(&mut s, Some(pw)).unwrap();
+            alice_state.ensure_wot_list_signed(&mut s, &mut reg).unwrap();
+            let (pkg, _) = reg.prepare_sync_package(None, None, false).unwrap();
+            let alice_did = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+            (pkg, alice_did)
+        };
+
+        let seal_for_alice = |version: u8| -> Vec<u8> {
+            let env = super::WotFileEnvelope {
+                format_version: version,
+                sender_did: prov_did.clone(),
+                sender_profile: None,
+                sync_package: pkg.clone(),
+            };
+            prov_svc
+                .seal_trust_container(
+                    &serde_json::to_vec(&env).unwrap(),
+                    ContainerConfig::TargetDid(alice_did.clone(), PrivacyMode::TrialDecryption),
+                    Some(pw),
+                )
+                .unwrap()
+        };
+
+        let ok_res = import_wot_package_impl(
+            seal_for_alice(1),
+            None,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .expect("format_version=1 envelope baseline must import");
+        assert_eq!(ok_res.sender_did, prov_did);
+
+        let v2_err = import_wot_package_impl(
+            seal_for_alice(2),
+            None,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .expect_err("format_version=2 envelope must be rejected");
+        assert!(
+            v2_err
+                .message
+                .contains("Unsupported WoT file envelope version: 2"),
+            "unexpected error for unsupported envelope version: {}",
+            v2_err.message
+        );
+    }
+
+    #[test]
+    fn test_wot_service_rejects_invalid_did_fail_closed() {
+        // Invariant: Export and provider-management operations must fail closed with Invalid DID on malformed DIDs/prefixes while valid DIDs succeed.
+        let dir = TempDirGuard::new("wot_invalid_did");
+        let pw = "pw-did-check";
+        let mut alice_svc =
+            crate::test_support::setup_test_app(&dir.path().join("alice"), "Alice", ALICE_PHRASE, pw);
+        alice_svc.unlock_session(pw, 3600).unwrap();
+        let alice_state = create_test_state(alice_svc);
+        let prov_svc = crate::test_support::setup_test_app(
+            &dir.path().join("prov"),
+            "Provider",
+            BOB_PHRASE,
+            pw,
+        );
+        let prov_did = prov_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let charlie_sk = ed25519_dalek::SigningKey::from_bytes(&[33u8; 32]);
+        let charlie_did =
+            human_money_core::crypto::create_user_id(&charlie_sk.verifying_key(), None).unwrap();
+        let raw_filter = sign_provider_filter_with(
+            prov_service_or_ref(&prov_svc),
+            "Verband",
+            1,
+            Utc::now().timestamp().max(0) as u64,
+            None,
+            &[(humoco_wot::canonicalize_did(&charlie_did).unwrap(), 2)],
+        );
+        import_wot_package_impl(
+            raw_filter.as_bytes().to_vec(),
+            None,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+
+        // Positive baselines with valid DID
+        export_wot_package_impl(
+            Some(prov_did.clone()),
+            None,
+            Some(false),
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .expect("valid recipient DID must export");
+        set_wot_provider_trust_impl(prov_did.clone(), 2, Some(pw.to_string()), &alice_state)
+            .expect("valid issuer DID must update trust");
+        remove_wot_provider_impl(prov_did, Some(pw.to_string()), &alice_state)
+            .expect("valid issuer DID must remove provider");
+
+        // Negative cases with malformed DID / prefix
+        let exp_err = export_wot_package_impl(
+            Some("bad!prefix@did:key:z123".to_string()),
+            None,
+            Some(false),
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .expect_err("invalid recipient prefix must fail closed");
+        assert!(
+            exp_err.message.contains("Invalid DID:"),
+            "unexpected export error: {}",
+            exp_err.message
+        );
+
+        let trust_err = set_wot_provider_trust_impl(
+            "not-a-did".to_string(),
+            2,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .expect_err("invalid issuer DID in set_wot_provider_trust must fail closed");
+        assert!(
+            trust_err.message.contains("Invalid DID:"),
+            "unexpected set_wot_provider_trust error: {}",
+            trust_err.message
+        );
+
+        let rem_err =
+            remove_wot_provider_impl("not-a-did".to_string(), Some(pw.to_string()), &alice_state)
+                .expect_err("invalid issuer DID in remove_wot_provider must fail closed");
+        assert!(
+            rem_err.message.contains("Invalid DID:"),
+            "unexpected remove_wot_provider error: {}",
+            rem_err.message
+        );
+    }
+
+    fn prov_service_or_ref(svc: &AppService) -> &AppService {
+        svc
+    }
+
+    #[test]
+    fn test_evaluate_voucher_trust_preview_warms_cold_wot_cache() {
+        // Invariant: evaluate_voucher_trust_preview_impl must reload TrustRegister from disk when cold-cached and resolve provider trust only for certified DIDs.
+        let dir = TempDirGuard::new("wot_cold_cache");
+        let pw = "pw-cold-cache";
+        let mut alice_svc =
+            crate::test_support::setup_test_app(&dir.path().join("alice"), "Alice", ALICE_PHRASE, pw);
+        alice_svc.unlock_session(pw, 3600).unwrap();
+        let alice_state = create_test_state(alice_svc);
+        let prov_svc = crate::test_support::setup_test_app(
+            &dir.path().join("prov"),
+            "Provider",
+            BOB_PHRASE,
+            pw,
+        );
+        let prov_did = prov_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let charlie_svc = setup_test_app(
+            &dir.path().join("charlie"),
             "Charlie",
             crate::test_support::CHARLIE_PHRASE,
             pw,
@@ -1398,93 +1809,84 @@ mod tests {
             .unwrap();
         let can_charlie = crate::state::canonicalize_did(&charlie_did).unwrap();
 
-        // 1. Sealed WotFileEnvelope with formatVersion: 2 must be rejected
-        let (bad_env_bytes, alice_did) = {
-            let mut s = alice_state.service.lock().unwrap();
-            let reg = alice_state
-                .get_or_load_wot_register(&mut s, Some(pw))
-                .unwrap();
-            let (pkg, _) = reg.prepare_sync_package(None, None, false).unwrap();
-            let bad_env = super::WotFileEnvelope {
-                format_version: 2,
-                sender_did: prov_did.clone(),
-                sender_profile: None,
-                sync_package: pkg,
-            };
-            let alice_did = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
-            (serde_json::to_vec(&bad_env).unwrap(), alice_did)
-        };
-        let sealed_v2 = prov_svc
-            .seal_trust_container(
-                &bad_env_bytes,
-                human_money_core::models::secure_container::ContainerConfig::TargetDid(
-                    alice_did,
-                    human_money_core::models::secure_container::PrivacyMode::TrialDecryption,
-                ),
-                Some(pw),
-            )
-            .unwrap();
-        assert!(
-            import_wot_package_impl(sealed_v2, None, Some(pw.to_string()), &alice_state,).is_err()
-        );
-
-        // 2. Invalid DID/prefix fails closed across export, set_provider_trust, remove_provider
-        assert!(export_wot_package_impl(
-            Some("bad!prefix@did:key:z123".to_string()),
+        let raw_filter = sign_provider_filter_with(
+            &prov_svc,
+            "Verband",
+            1,
+            Utc::now().timestamp().max(0) as u64,
             None,
-            Some(false),
+            &[(can_charlie, 3)],
+        );
+        import_wot_package_impl(
+            raw_filter.as_bytes().to_vec(),
+            None,
             Some(pw.to_string()),
             &alice_state,
         )
-        .is_err());
-        assert!(set_wot_provider_trust_impl(
-            "not-a-did".to_string(),
-            2,
-            Some(pw.to_string()),
-            &alice_state
-        )
-        .is_err());
-        assert!(remove_wot_provider_impl(
-            "not-a-did".to_string(),
-            Some(pw.to_string()),
-            &alice_state
-        )
-        .is_err());
+        .unwrap();
+        set_wot_provider_trust_impl(prov_did, 3, Some(pw.to_string()), &alice_state).unwrap();
 
-        // 3. Cold-cache evaluate_voucher_trust_preview_impl warms TrustRegister cleanly
+        // Drop in-memory WoT cache to force cold reload from encrypted storage
+        {
+            let svc = alice_state.service.lock().unwrap();
+            alice_state.set_cached_wot_for_service(&svc, None);
+        }
+
+        let preview =
+            evaluate_voucher_trust_preview_impl(charlie_did, vec![], &alice_state).unwrap();
+        assert!(preview.score > 0.0);
+        assert_eq!(preview.primary_bridge_name.as_deref(), Some("Verband"));
+
+        let dave_sk = ed25519_dalek::SigningKey::from_bytes(&[88u8; 32]);
+        let uncertified_did =
+            human_money_core::crypto::create_user_id(&dave_sk.verifying_key(), None).unwrap();
+        let unknown_preview =
+            evaluate_voucher_trust_preview_impl(uncertified_did, vec![], &alice_state).unwrap();
+        assert_eq!(unknown_preview.score, 0.0);
+        assert!(unknown_preview.primary_bridge_name.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_refresh_wot_provider_aborts_when_removed_concurrently() {
+        // Invariant: Deleting a provider while refresh_wot_provider_url_impl is awaiting HTTP MUST abort saving without resurrecting the deleted provider.
+        let dir = TempDirGuard::new("wot_concurrent_remove");
+        let pw = "pw-concurrent-remove";
+        let mut alice_svc =
+            crate::test_support::setup_test_app(&dir.path().join("alice"), "Alice", ALICE_PHRASE, pw);
+        alice_svc.unlock_session(pw, 3600).unwrap();
+        let alice_state = create_test_state(alice_svc);
+        let prov_svc = crate::test_support::setup_test_app(
+            &dir.path().join("prov"),
+            "Provider",
+            BOB_PHRASE,
+            pw,
+        );
+        let prov_did = prov_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let charlie_sk = ed25519_dalek::SigningKey::from_bytes(&[55u8; 32]);
+        let charlie_did =
+            human_money_core::crypto::create_user_id(&charlie_sk.verifying_key(), None).unwrap();
+        let can_charlie = humoco_wot::canonicalize_did(&charlie_did).unwrap();
+
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let source_url = format!("http://127.0.0.1:{}/filter.json", port);
-
+        let source_url = format!("http://127.0.0.1:{}/filter.json", listener.local_addr().unwrap().port());
         let now_secs = Utc::now().timestamp().max(0) as u64;
-        let filter_v1 = prov_svc
-            .with_wallet_and_identity(|_w, id| {
-                let signer = crate::state::DidWotSigner::from_identity(id);
-                humoco_wot::create_and_sign_provider_filter(
-                    &signer,
-                    "Verband",
-                    1,
-                    now_secs,
-                    Some(source_url.clone()),
-                    &[(can_charlie.clone(), 3)],
-                )
-                .unwrap()
-            })
-            .unwrap();
-        let filter_v2 = prov_svc
-            .with_wallet_and_identity(|_w, id| {
-                let signer = crate::state::DidWotSigner::from_identity(id);
-                humoco_wot::create_and_sign_provider_filter(
-                    &signer,
-                    "Verband",
-                    2,
-                    now_secs + 1,
-                    Some(source_url),
-                    &[(can_charlie, 3)],
-                )
-                .unwrap()
-            })
-            .unwrap();
+        let filter_v1 = sign_provider_filter_with(
+            &prov_svc,
+            "Verband",
+            1,
+            now_secs,
+            Some(source_url.clone()),
+            &[(can_charlie.clone(), 3)],
+        );
+        let filter_v2 = sign_provider_filter_with(
+            &prov_svc,
+            "Verband",
+            2,
+            now_secs + 1,
+            Some(source_url),
+            &[(can_charlie, 3)],
+        );
 
         import_wot_package_impl(
             filter_v1.as_bytes().to_vec(),
@@ -1493,70 +1895,177 @@ mod tests {
             &alice_state,
         )
         .unwrap();
-        set_wot_provider_trust_impl(prov_did.clone(), 3, Some(pw.to_string()), &alice_state)
-            .unwrap();
-        {
-            let svc = alice_state.service.lock().unwrap();
-            alice_state.set_cached_wot_for_service(&svc, None);
-        }
-        let preview =
-            evaluate_voucher_trust_preview_impl(charlie_did, vec![], &alice_state).unwrap();
-        assert!(preview.score > 0.0);
 
-        // 4. Concurrent remove_wot_provider during refresh HTTP wait must NOT resurrect provider
         let (hit_tx, hit_rx) = tokio::sync::oneshot::channel::<()>();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
-        tokio::spawn(async move {
-            if let Ok((mut stream, _)) = listener.accept().await {
-                let mut req_buf = [0u8; 1024];
-                let _ = stream.read(&mut req_buf).await;
-                let _ = hit_tx.send(());
-                let _ = release_rx.await;
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    filter_v2.len(),
-                    filter_v2
-                );
-                let _ = stream.write_all(resp.as_bytes()).await;
-                let _ = stream.shutdown().await;
-            }
-        });
+        let server = spawn_single_provider_server(listener, filter_v2, hit_tx, release_rx);
 
         let refresh_fut =
             refresh_wot_provider_url_impl(prov_did.clone(), Some(pw.to_string()), &alice_state);
         tokio::pin!(refresh_fut);
+        let mut removed_during_wait = false;
         let refresh_res = tokio::select! {
             res = &mut refresh_fut => res,
-            _ = hit_rx => {
-                remove_wot_provider_impl(prov_did.clone(), Some(pw.to_string()), &alice_state).unwrap();
-                let _ = release_tx.send(());
+            hit = hit_rx => {
+                hit.expect("mock server must signal HTTP request arrival");
+                remove_wot_provider_impl(prov_did, Some(pw.to_string()), &alice_state).unwrap();
+                removed_during_wait = true;
+                release_tx.send(()).expect("mock server must accept release signal");
                 refresh_fut.await
             }
         };
         assert!(
-            refresh_res.is_err(),
-            "Concurrent provider deletion must abort refresh without resurrection"
+            removed_during_wait,
+            "concurrent deletion branch must execute while HTTP refresh is in flight"
+        );
+        let err = refresh_res
+            .expect_err("Concurrent provider deletion must abort refresh without resurrection");
+        assert!(
+            err.message.contains("was removed during refresh"),
+            "unexpected error: {}",
+            err.message
         );
         assert!(get_wot_providers_impl(&alice_state).unwrap().is_empty());
+        server.await.expect("mock server task must exit cleanly");
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    #[tokio::test]
+    async fn test_refresh_wot_provider_updates_version_and_rejects_hijacked_issuer() {
+        // Invariant: Valid v2 refresh updates stored provider metadata; a response signed by a different issuer must fail Anti-hijack validation without overwriting v2.
+        let dir = TempDirGuard::new("wot_refresh_hijack");
+        let pw = "pw-refresh-hijack";
+        let mut alice_svc =
+            crate::test_support::setup_test_app(&dir.path().join("alice"), "Alice", ALICE_PHRASE, pw);
+        alice_svc.unlock_session(pw, 3600).unwrap();
+        let alice_state = create_test_state(alice_svc);
+        let prov_svc = crate::test_support::setup_test_app(
+            &dir.path().join("prov"),
+            "Provider",
+            BOB_PHRASE,
+            pw,
+        );
+        let rogue_svc = crate::test_support::setup_test_app(
+            &dir.path().join("rogue"),
+            "Rogue",
+            DAVE_PHRASE,
+            pw,
+        );
+        let prov_did = prov_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let charlie_sk = ed25519_dalek::SigningKey::from_bytes(&[66u8; 32]);
+        let charlie_did =
+            human_money_core::crypto::create_user_id(&charlie_sk.verifying_key(), None).unwrap();
+        let can_charlie = humoco_wot::canonicalize_did(&charlie_did).unwrap();
+
+        let listener_ok = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let source_url = format!("http://127.0.0.1:{}/filter.json", listener_ok.local_addr().unwrap().port());
+        let now_secs = Utc::now().timestamp().max(0) as u64;
+        let filter_v1 = sign_provider_filter_with(
+            &prov_svc,
+            "Verband",
+            1,
+            now_secs,
+            Some(source_url.clone()),
+            &[(can_charlie.clone(), 2)],
+        );
+        let filter_v2 = sign_provider_filter_with(
+            &prov_svc,
+            "Verband",
+            2,
+            now_secs + 1,
+            Some(source_url.clone()),
+            &[(can_charlie.clone(), 3)],
+        );
+        let rogue_filter = sign_provider_filter_with(
+            &rogue_svc,
+            "Hijacked",
+            99,
+            now_secs + 2,
+            Some(source_url),
+            &[(can_charlie, 3)],
+        );
+
+        import_wot_package_impl(
+            filter_v1.as_bytes().to_vec(),
+            None,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+
+        // Positive baseline: valid v2 filter updates stored provider to version 2
+        let (hit_tx1, hit_rx1) = tokio::sync::oneshot::channel::<()>();
+        let (rel_tx1, rel_rx1) = tokio::sync::oneshot::channel::<()>();
+        let srv1 = spawn_single_provider_server(listener_ok, filter_v2, hit_tx1, rel_rx1);
+        let fut1 = refresh_wot_provider_url_impl(prov_did.clone(), Some(pw.to_string()), &alice_state);
+        tokio::pin!(fut1);
+        let updated = tokio::select! {
+            res = &mut fut1 => res,
+            hit = hit_rx1 => {
+                hit.unwrap();
+                rel_tx1.send(()).unwrap();
+                fut1.await
+            }
+        }
+        .expect("valid v2 provider refresh must succeed");
+        assert_eq!(updated.version, 2);
+        srv1.await.expect("v2 server task must exit cleanly");
+
+        // Negative test: hijacked issuer on same URL is rejected (reuse same port via rogue filter not possible on bound port -> test URL hijack directly by pointing provider source_url to rogue server)
+        let listener_rogue = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rogue_url = format!("http://127.0.0.1:{}/filter.json", listener_rogue.local_addr().unwrap().port());
+        let filter_v3_pointing_to_rogue = sign_provider_filter_with(
+            &prov_svc,
+            "Verband",
+            3,
+            now_secs + 3,
+            Some(rogue_url),
+            &[],
+        );
+        import_wot_package_impl(
+            filter_v3_pointing_to_rogue.as_bytes().to_vec(),
+            None,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+
+        let (hit_tx2, hit_rx2) = tokio::sync::oneshot::channel::<()>();
+        let (rel_tx2, rel_rx2) = tokio::sync::oneshot::channel::<()>();
+        let srv2 = spawn_single_provider_server(listener_rogue, rogue_filter, hit_tx2, rel_rx2);
+        let fut2 = refresh_wot_provider_url_impl(prov_did, Some(pw.to_string()), &alice_state);
+        tokio::pin!(fut2);
+        let hijack_err = tokio::select! {
+            res = &mut fut2 => res,
+            hit = hit_rx2 => {
+                hit.unwrap();
+                rel_tx2.send(()).unwrap();
+                fut2.await
+            }
+        }
+        .expect_err("rogue issuer filter must be rejected by Anti-hijack guard");
+        assert!(
+            hijack_err.message.contains("Anti-hijack violation"),
+            "unexpected error: {}",
+            hijack_err.message
+        );
+        assert_eq!(get_wot_providers_impl(&alice_state).unwrap()[0].version, 3);
+        srv2.await.expect("rogue server task must exit cleanly");
     }
 
     #[tokio::test]
     async fn test_refresh_wot_provider_rejects_oversized_response() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let dir = crate::test_support::temp_test_dir("wot_provider_oversized");
+        let dir = TempDirGuard::new("wot_provider_oversized");
         let pw = "pw-oversized";
         let mut alice_svc =
-            crate::test_support::setup_test_app(&dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+            crate::test_support::setup_test_app(&dir.path().join("alice"), "Alice", ALICE_PHRASE, pw);
         alice_svc.unlock_session(pw, 3600).unwrap();
-        let alice_state = crate::test_support::create_test_state(alice_svc);
+        let alice_state = create_test_state(alice_svc);
 
         let prov_svc = crate::test_support::setup_test_app(
-            &dir.join("prov"),
+            &dir.path().join("prov"),
             "Provider",
-            crate::test_support::BOB_PHRASE,
+            BOB_PHRASE,
             pw,
         );
         let prov_did = prov_svc
@@ -1572,20 +2081,14 @@ mod tests {
         let source_url = format!("http://127.0.0.1:{}/filter.json", port);
 
         let now_secs = Utc::now().timestamp().max(0) as u64;
-        let filter_v1 = prov_svc
-            .with_wallet_and_identity(|_w, id| {
-                let signer = crate::state::DidWotSigner::from_identity(id);
-                humoco_wot::create_and_sign_provider_filter(
-                    &signer,
-                    "Verband",
-                    1,
-                    now_secs,
-                    Some(source_url),
-                    &[(can_charlie, 3)],
-                )
-                .unwrap()
-            })
-            .unwrap();
+        let filter_v1 = sign_provider_filter_with(
+            &prov_svc,
+            "Verband",
+            1,
+            now_secs,
+            Some(source_url),
+            &[(can_charlie, 3)],
+        );
 
         import_wot_package_impl(
             filter_v1.as_bytes().to_vec(),
@@ -1595,28 +2098,7 @@ mod tests {
         )
         .unwrap();
 
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut req_buf = [0u8; 1024];
-            let _ = stream.read(&mut req_buf).await;
-            let _ = stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
-                )
-                .await;
-            let chunk = vec![b'a'; 64 * 1024];
-            let hdr = format!("{:x}\r\n", chunk.len());
-            let chunks_needed = (humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN / chunk.len()) + 2;
-            for _ in 0..chunks_needed {
-                if stream.write_all(hdr.as_bytes()).await.is_err()
-                    || stream.write_all(&chunk).await.is_err()
-                    || stream.write_all(b"\r\n").await.is_err()
-                {
-                    break;
-                }
-            }
-            let _ = stream.write_all(b"0\r\n\r\n").await;
-        });
+        let server = spawn_chunked_oversized_server(listener);
 
         let err = refresh_wot_provider_url_impl(prov_did, Some(pw.to_string()), &alice_state)
             .await
@@ -1624,6 +2106,5 @@ mod tests {
         assert_eq!(err.code, "error.sync.responseTooLarge");
 
         server.await.unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

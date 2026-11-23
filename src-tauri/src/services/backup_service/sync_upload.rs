@@ -113,6 +113,13 @@ pub(crate) fn run_auto_backup_sync_impl(
     state: &AppState,
     app: &tauri::AppHandle,
 ) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
+    run_auto_backup_sync_with_standards_impl(state, || collect_custom_standards(app))
+}
+
+pub(crate) fn run_auto_backup_sync_with_standards_impl(
+    state: &AppState,
+    load_custom_standards: impl FnOnce() -> HashMap<String, String>,
+) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
     let (session, resolved_pw) =
         state.authorize_and_begin_session_secret(crate::state::RequiredAccess::DailyPay, None)?;
     let pw = resolved_pw.as_deref().map(String::as_str);
@@ -174,7 +181,7 @@ pub(crate) fn run_auto_backup_sync_impl(
         ));
     }
 
-    let custom_standards = collect_custom_standards(app);
+    let custom_standards = load_custom_standards();
 
     let sync_res = state.with_session(&session, |service| {
         if let Err(e) = service.require_access_mode(human_money_core::AccessMode::DailyPay, pw) {

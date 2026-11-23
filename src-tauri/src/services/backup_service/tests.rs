@@ -16,14 +16,36 @@ use std::{
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
-fn temp_test_dir(name: &str) -> PathBuf {
+struct TempDirGuard(PathBuf);
+
+impl std::ops::Deref for TempDirGuard {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for TempDirGuard {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_test_dir(name: &str) -> TempDirGuard {
     let p = std::env::temp_dir().join(format!(
         "humoco_backup_test_{}_{}",
         name,
         uuid::Uuid::new_v4()
     ));
     fs::create_dir_all(&p).unwrap();
-    p
+    TempDirGuard(p)
 }
 
 fn setup_test_app(dir: &Path, profile_name: &str, password: &str) -> AppService {
@@ -166,8 +188,6 @@ fn test_file_backup_roundtrip_mnemonic_and_password() {
     )
     .unwrap();
     assert_eq!(restored_name2, "Alice Test");
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[test]
@@ -233,12 +253,12 @@ fn test_differential_folder_sync_and_restore() {
     .unwrap();
     assert_eq!(name, "Bob Diff");
     assert!(outcome.folder_name.starts_with("restore_"));
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[test]
 fn test_tampered_blob_hash_rejected_on_restore() {
+    // Invariant: Restoring an untampered backup succeeds, whereas flipping any byte in a stored
+    // blob must fail integrity verification with a Backup blob hash mismatch error.
     let base_dir = temp_test_dir("tamper_test");
     let wallet_dir = base_dir.join("wallet");
     let sync_dir = base_dir.join("sync_folder");
@@ -256,63 +276,97 @@ fn test_tampered_blob_hash_rejected_on_restore() {
     )
     .unwrap();
 
-    // Tamper a blob inside blobs/
-    let mut tampered = false;
-    for entry in fs::read_dir(sync_dir.join("blobs")).unwrap().flatten() {
-        if entry.path().is_file() {
-            let mut data = fs::read(entry.path()).unwrap();
-            if !data.is_empty() {
-                data[0] ^= 0xFF; // Flip bits
-                fs::write(entry.path(), data).unwrap();
-                tampered = true;
-                break;
-            }
-        }
-    }
-    assert!(tampered, "Expected at least one blob to tamper");
-
-    // Attempt restore -> must fail with hash mismatch / integrity error
-    let restore_dir = base_dir.join("restore_tampered");
-    let mut restore_service = AppService::new(&restore_dir).unwrap();
-    let creds = BackupRestoreCredentials::Mnemonic {
+    // Positive baseline before tampering
+    let make_creds = || BackupRestoreCredentials::Mnemonic {
         phrase: PHRASE,
         passphrase: None,
         prefix: Some("pc"),
         language: human_money_core::MnemonicLanguage::English,
     };
+    let mut ok_service = AppService::new(&base_dir.join("restore_ok")).unwrap();
+    let (_, ok_name, _) = restore_backup_impl(
+        &sync_dir,
+        make_creds(),
+        "NewPasswordOk!",
+        "inst_ok".to_string(),
+        &mut ok_service,
+    )
+    .expect("untampered backup folder baseline must restore");
+    assert_eq!(ok_name, "Tamper User");
+
+    // Tamper a concrete non-empty blob inside blobs/ without conditional skipping
+    let blob_path = fs::read_dir(sync_dir.join("blobs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|p| p.is_file() && fs::metadata(p).map(|m| m.len() > 0).unwrap_or(false))
+        .expect("Expected at least one non-empty blob to tamper");
+    let mut data = fs::read(&blob_path).unwrap();
+    data[0] ^= 0xFF;
+    fs::write(&blob_path, data).unwrap();
+
+    // Attempt restore -> must fail with hash mismatch error
+    let mut restore_service = AppService::new(&base_dir.join("restore_tampered")).unwrap();
     let err = restore_backup_impl(
         &sync_dir,
-        creds,
+        make_creds(),
         "NewPasswordTamper!",
         "inst_t".to_string(),
         &mut restore_service,
     )
-    .unwrap_err();
-    let msg = err.message.to_lowercase();
-    assert!(msg.contains("mismatch") || msg.contains("integrity") || msg.contains("invalid"));
-
-    let _ = fs::remove_dir_all(base_dir);
+    .expect_err("tampered blob must be rejected on restore");
+    assert!(
+        err.message.contains("Backup blob hash mismatch"),
+        "expected Backup blob hash mismatch, got: {}",
+        err.message
+    );
 }
 
 #[test]
 fn test_auto_backup_usb_protection_folder_disconnected() {
+    // Invariant: When auto_backup_enabled is true and backup_sync_folder points to a missing
+    // drive/directory, run_auto_backup_sync_with_standards_impl MUST NOT create it, MUST mark
+    // backup_dirty=true and return status="disconnected"; once present, it syncs and returns "ok".
     let base_dir = temp_test_dir("usb_protection");
     let non_existent_usb = base_dir.join("media").join("usb_token_offline");
+    let password = "TestPassword123!";
+    let mut service = setup_test_app(&base_dir.join("wallet"), "Alice USB", password);
+    service.unlock_session(password, 3600).unwrap();
+    let state = crate::test_support::create_test_state(service);
+    {
+        let mut s = state.lock_service().unwrap();
+        state
+            .mutate_security_policy(&mut s, Some(password), |p| {
+                p.auto_backup_enabled = true;
+                p.backup_protection_mode = Some("mnemonic".to_string());
+                p.backup_sync_folder = Some(non_existent_usb.to_string_lossy().to_string());
+            })
+            .unwrap();
+        state
+            .mutate_internal_lifecycle(&mut s, Some(password), |lc| {
+                lc.backup_dirty = false;
+            })
+            .unwrap();
+    }
 
-    // Assure it does NOT exist
-    assert!(!non_existent_usb.exists());
-    assert!(!non_existent_usb.is_dir());
-
-    // In auto-backup, we check is_dir() to protect disconnected drives.
-    // It must NOT create directories if disconnected!
-    let is_connected = non_existent_usb.is_dir();
-    assert!(!is_connected);
+    let disconnected_dto = run_auto_backup_sync_with_standards_impl(&state, HashMap::new).unwrap();
+    assert_eq!(disconnected_dto.status, "disconnected");
+    assert!(disconnected_dto.backup_dirty);
     assert!(
         !non_existent_usb.exists(),
-        "USB path must not have been created"
+        "USB path must NOT be created by auto-backup when disconnected"
     );
+    let lc_disconnected = state
+        .get_or_load_internal_lifecycle_locked(Some(password))
+        .unwrap();
+    assert!(lc_disconnected.backup_dirty);
 
-    let _ = fs::remove_dir_all(base_dir);
+    // Positive baseline: mount the USB directory -> auto-backup syncs cleanly and clears dirty flag
+    fs::create_dir_all(&non_existent_usb).unwrap();
+    let connected_dto = run_auto_backup_sync_with_standards_impl(&state, HashMap::new).unwrap();
+    assert_eq!(connected_dto.status, "ok");
+    assert!(!connected_dto.backup_dirty);
+    assert!(non_existent_usb.join("manifest.enc").exists());
+    assert!(connected_dto.changed_blobs.is_some_and(|c| c > 0));
 }
 
 #[test]
@@ -329,67 +383,192 @@ fn test_is_older_than_14_days() {
     assert!(is_older_than_14_days(&Some(old)));
 }
 
-#[test]
-fn test_sync_backup_slot_padding_integration() {
-    use humoco_market::slot::{
-        pad_backup_slot_bytes, unpad_backup_slot_bytes, BACKUP_PAD_BLOCK_BYTES,
-        DROP_BACKUP_MAX_BYTES,
-    };
-
-    let fake_backup = b"HMC_BACKUP_CONTAINER_V1_MOCK_PAYLOAD_DATA";
-    let padded =
-        pad_backup_slot_bytes(fake_backup, DROP_BACKUP_MAX_BYTES).expect("padding must succeed");
-    assert_eq!(padded.len() % BACKUP_PAD_BLOCK_BYTES, 0);
-    assert_eq!(padded.len(), BACKUP_PAD_BLOCK_BYTES);
-
-    let recovered = unpad_backup_slot_bytes(&padded).expect("unpadding must succeed");
-    assert_eq!(recovered, fake_backup);
-}
-
-#[test]
-fn test_sync_backup_stealth_key_and_candidate_resolution() {
-    let mnemonic = PHRASE;
-    let (_my_pk, my_ed_sk) = human_money_core::services::crypto::keys::derive_ed25519_keypair(
-        mnemonic,
-        None,
-        human_money_core::MnemonicLanguage::English,
+async fn export_and_finalize_restore_for_test(
+    base_dir: &Path,
+    tag: &str,
+    src_svc: &mut AppService,
+    password: &str,
+) -> (crate::models::FrontendRestoreOutcomeDto, crate::AppState) {
+    let bkp_file = base_dir.join(format!("{tag}.hmcbackup"));
+    export_backup_file_impl(
+        &bkp_file,
+        BackupProtection::MnemonicOnly,
+        Some(password),
+        src_svc,
+        HashMap::new(),
     )
-    .expect("key derivation failed");
-
-    // Simulate Drop master key
-    let sync_sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-    let drop_pub_hex = hex::encode(sync_sk.verifying_key().as_bytes());
-
-    // 1. Client derives stealth slot key for friend's drop
-    let stealth_pk = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_pub_hex)
-        .expect("stealth key derivation failed");
-    assert_eq!(stealth_pk.len(), 64);
-
-    // 2. Candidate keys generation in restore:
-    let candidate_stealth = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_pub_hex)
-        .expect("candidate derivation failed");
-    assert_eq!(candidate_stealth, stealth_pk);
+    .unwrap();
+    let restore_dir = base_dir.join(format!("{tag}_restore"));
+    let state = crate::test_support::create_test_state(AppService::new(&restore_dir).unwrap());
+    let (outcome, _) = super::finalize_restored_wallet_and_reconcile_l2(
+        &bkp_file,
+        BackupRestoreCredentials::Mnemonic {
+            phrase: PHRASE,
+            passphrase: None,
+            prefix: Some("pc"),
+            language: human_money_core::MnemonicLanguage::English,
+        },
+        password,
+        format!("inst-{tag}"),
+        None,
+        &restore_dir,
+        &base_dir.join(format!("{tag}_stds")),
+        &base_dir.join(format!("{tag}_tmp")),
+        &state,
+        None,
+    )
+    .await
+    .unwrap();
+    (outcome, state)
 }
 
-#[test]
-fn test_pending_restore_l2_reconciliation_setting_flag() {
-    let mut lifecycle = crate::settings::InternalLifecycleState::default();
-    assert!(!lifecycle.pending_restore_l2_reconciliation);
+#[tokio::test]
+async fn test_restore_anchored_voucher_offline_sets_pending_l2_reconciliation_and_blocks_spend() {
+    use ed25519_dalek::{Signer, SigningKey};
+    use human_money_core::humoco_proto::{
+        encode_quarter,
+        manifest::{AnchorAuthority, AnchorManifest, GenesisTicket, NominatedBy, ServerEntry},
+    };
+    use human_money_core::models::profile::PublicProfile;
+    use human_money_core::models::voucher::{NewVoucherData, ValueDefinition};
+    use human_money_core::services::l2_gateway;
 
-    // Simulate restore with active vouchers and offline status
-    let active_voucher_queries_count = 3;
-    let l2_reconciliation_status = "no_servers";
-    if active_voucher_queries_count > 0 && l2_reconciliation_status != "reconciled" {
-        lifecycle.pending_restore_l2_reconciliation = true;
-    }
-    assert!(lifecycle.pending_restore_l2_reconciliation);
+    // Invariant: Restoring a wallet containing an active L2-anchored voucher when its lock server
+    // is unreachable MUST keep pending_restore_l2_reconciliation=true and fail spend gating,
+    // whereas restoring an unanchored wallet clears pending_restore_l2_reconciliation=false.
+    let base_dir = temp_test_dir("restore_pending_l2_reconcile");
+    let password = "TestPassword123!";
+    let std_toml = human_money_core::test_utils::generate_signed_standard_toml(
+        "voucher_standards/freetaler_v1/standard.toml",
+    );
 
-    // Simulate successful online reconciliation
-    let l2_reconciled = true;
-    if l2_reconciled {
-        lifecycle.pending_restore_l2_reconciliation = false;
+    // 1. Positive baseline: wallet with only unanchored (N=0) voucher clears reconciliation gate
+    let mut svc_clean = setup_test_app(&base_dir.join("clean_src"), "Alice Clean", password);
+    let clean_uid = svc_clean.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+    svc_clean
+        .create_new_voucher(
+            &std_toml,
+            NewVoucherData {
+                creator_profile: PublicProfile {
+                    id: Some(clean_uid),
+                    ..Default::default()
+                },
+                nominal_value: ValueDefinition {
+                    amount: "20".into(),
+                    ..Default::default()
+                },
+                layer2_anchor: None,
+                ..Default::default()
+            },
+            Some(password),
+        )
+        .unwrap();
+    let (clean_outcome, clean_state) =
+        export_and_finalize_restore_for_test(&base_dir, "clean", &mut svc_clean, password).await;
+    assert_eq!(clean_outcome.active_voucher_queries_count, 0);
+    let clean_lc = clean_state
+        .get_or_load_internal_lifecycle_locked(Some(password))
+        .unwrap();
+    assert!(!clean_lc.pending_restore_l2_reconciliation);
+    {
+        let mut s = clean_state.lock_service().unwrap();
+        crate::services::common::ensure_restore_l2_reconciled(&clean_state, &mut s, Some(password))
+            .expect("unanchored restore must pass spend reconciliation gate");
     }
-    assert!(!lifecycle.pending_restore_l2_reconciliation);
+
+    // 2. Wallet with active L2-anchored voucher whose lock server refuses connection (offline)
+    let dead_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_port = dead_listener.local_addr().unwrap().port();
+    drop(dead_listener);
+
+    let mut svc_l2 = setup_test_app(&base_dir.join("l2_src"), "Alice L2", password);
+    let l2_uid = svc_l2.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+    let anchor_nonce = [44u8; 32];
+    let creator_mig_pub = svc_l2
+        .with_wallet_and_identity(|_, id| {
+            l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                .map(|k| k.verifying_key().to_bytes())
+        })
+        .unwrap()
+        .unwrap();
+    let sk = SigningKey::from_bytes(&[77u8; 32]);
+    let retain_q = encode_quarter(2035, 4).unwrap();
+    let manifest = AnchorManifest {
+        revision: 1,
+        threshold: 1,
+        servers: vec![ServerEntry {
+            write_url: format!("http://127.0.0.1:{}/sync.php", dead_port),
+            read_url: format!("http://127.0.0.1:{}/d", dead_port),
+            admin_pub: sk.verifying_key().to_bytes(),
+            lock_pub: sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        }],
+        successors: vec![],
+        authority: AnchorAuthority {
+            creator_mig_pub,
+            guarantor_mig_pubs: vec![],
+        },
+        migration_chain: vec![],
+        issued_at_ms: 1_760_000_000_000,
+        retain_until_quarter: retain_q,
+    };
+    let anchor_id = manifest.rev1_anchor_id().unwrap();
+    let mut ticket = GenesisTicket {
+        anchor_id,
+        retain_until_quarter: retain_q,
+        issued_at: 1_760_000_000,
+        lock_pub: sk.verifying_key().to_bytes(),
+        sig: [0u8; 64],
+    };
+    ticket.sig = sk.sign(&ticket.digest()).to_bytes();
+    svc_l2
+        .register_l2_anchor_template_with_nonce(
+            manifest,
+            vec![ticket],
+            Some(&anchor_nonce),
+            Some(password),
+        )
+        .unwrap();
+    svc_l2
+        .create_new_voucher(
+            &std_toml,
+            NewVoucherData {
+                creator_profile: PublicProfile {
+                    id: Some(l2_uid),
+                    ..Default::default()
+                },
+                nominal_value: ValueDefinition {
+                    amount: "20".into(),
+                    ..Default::default()
+                },
+                layer2_anchor: Some(anchor_id),
+                ..Default::default()
+            },
+            Some(password),
+        )
+        .unwrap();
+
+    let (l2_outcome, l2_state) =
+        export_and_finalize_restore_for_test(&base_dir, "l2", &mut svc_l2, password).await;
+    assert_eq!(l2_outcome.active_voucher_queries_count, 1);
+    let l2_lc = l2_state
+        .get_or_load_internal_lifecycle_locked(Some(password))
+        .unwrap();
+    assert!(
+        l2_lc.pending_restore_l2_reconciliation,
+        "unreachable L2 server after restore must keep pending_restore_l2_reconciliation=true"
+    );
+    let mut s = l2_state.lock_service().unwrap();
+    let gate_err =
+        crate::services::common::ensure_restore_l2_reconciled(&l2_state, &mut s, Some(password))
+            .expect_err("offline restored anchored wallet must fail spend reconciliation gate");
+    assert!(
+        gate_err
+            .message
+            .contains("Online-Sicherheitsabgleich erforderlich"),
+        "unexpected gate error: {}",
+        gate_err.message
+    );
 }
 
 #[test]
@@ -535,20 +714,45 @@ fn test_merge_backup_delta_into_base_and_mismatch() {
     );
 
     // Mismatching base_manifest_sha256 must be rejected
-    let mut bad_delta = delta;
+    let mut bad_delta = delta.clone();
     bad_delta.base_manifest_sha256 = "0000".to_string();
-    assert!(super::merge_backup_delta_into_base(&mut base, &bad_delta).is_err());
+    let mismatch_err = super::merge_backup_delta_into_base(&mut base, &bad_delta)
+        .expect_err("mismatching base_manifest_sha256 must fail");
+    assert!(
+        mismatch_err.contains("Backup delta base mismatch"),
+        "unexpected delta mismatch error: {}",
+        mismatch_err
+    );
+
+    // Mismatching base container_format must also be rejected
+    let mut bad_base = base.clone();
+    bad_base.container_format = "wrong-base-v99".to_string();
+    let base_fmt_err = super::merge_backup_delta_into_base(&mut bad_base, &delta)
+        .expect_err("unsupported base container format must fail");
+    assert!(
+        base_fmt_err.contains("Unsupported base backup container format: wrong-base-v99"),
+        "unexpected base format error: {}",
+        base_fmt_err
+    );
 }
 
-#[tokio::test]
-async fn test_sync_backup_base_delta_lifecycle_and_remote_wipe_recovery() {
+struct SyncBackupMirrorHarness {
+    _base_dir: TempDirGuard,
+    base_dir_path: PathBuf,
+    state: crate::AppState,
+    server: crate::test_support::MockSyncServer,
+    stealth_pk: String,
+    read_url: String,
+    base_slot_key: String,
+    delta_slot_key: String,
+}
+
+async fn setup_base_delta_mirror_harness(name: &str, password: &str) -> SyncBackupMirrorHarness {
     use crate::test_support::{
         create_test_state, setup_test_app as setup_sync_test_app, MockSyncServer, ALICE_PHRASE,
     };
-    use rand::{rngs::OsRng, RngCore};
-
-    let base_dir = temp_test_dir("sync_backup_base_delta_e2e");
-    let password = "TestPassword123!";
+    let base_dir = temp_test_dir(name);
+    let base_dir_path = base_dir.0.clone();
     let service = setup_sync_test_app(&base_dir.join("wallet"), "Alice", ALICE_PHRASE, password);
     let state = create_test_state(service);
 
@@ -576,31 +780,51 @@ async fn test_sync_backup_base_delta_lifecycle_and_remote_wipe_recovery() {
             .mutate_security_policy(&mut s, Some(password), |policy| {
                 policy.sync_backup_enabled = true;
                 policy.market_selected_syncs = vec![crate::models::FrontendSyncDescriptor {
-                    write_url: write_url.clone(),
+                    write_url,
                     read_url: read_url.clone(),
-                    drop_pub: drop_pub.clone(),
+                    drop_pub,
                     ..Default::default()
                 }];
             })
             .unwrap();
     }
 
+    SyncBackupMirrorHarness {
+        _base_dir: base_dir,
+        base_dir_path,
+        state,
+        server,
+        stealth_pk,
+        read_url,
+        base_slot_key,
+        delta_slot_key,
+    }
+}
+
+#[tokio::test]
+async fn test_sync_backup_small_vs_large_base_and_delta_restore() {
+    use crate::test_support::ALICE_PHRASE;
+    use rand::{rngs::OsRng, RngCore};
+
+    let password = "TestPassword123!";
+    let h = setup_base_delta_mirror_harness("sync_backup_base_delta_e2e", password).await;
+
     // 1. Small wallet (< 64 KiB compressed): repeated mutations overwrite Base, never create Delta
     let res1 = super::sync_backup_with_standards_impl(
         Some(password.to_string()),
         None,
         HashMap::new(),
-        &state,
+        &h.state,
     )
     .await
     .unwrap();
     assert_eq!(res1.uploaded_to, 1, "errors: {:?}", res1.errors);
     assert_eq!(res1.padded_bytes, 65_536);
-    assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
-    assert!(!server.slots.lock().unwrap().contains_key(&delta_slot_key));
+    assert!(h.server.slots.lock().unwrap().contains_key(&h.base_slot_key));
+    assert!(!h.server.slots.lock().unwrap().contains_key(&h.delta_slot_key));
 
     {
-        let mut s = state.service.lock().unwrap();
+        let mut s = h.state.service.lock().unwrap();
         s.save_encrypted_data("small_key", b"small-v2", Some(password))
             .unwrap();
     }
@@ -608,20 +832,20 @@ async fn test_sync_backup_base_delta_lifecycle_and_remote_wipe_recovery() {
         Some(password.to_string()),
         None,
         HashMap::new(),
-        &state,
+        &h.state,
     )
     .await
     .unwrap();
     assert_eq!(res2.uploaded_to, 1, "errors: {:?}", res2.errors);
     assert_eq!(res2.padded_bytes, 65_536);
-    assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
-    assert!(!server.slots.lock().unwrap().contains_key(&delta_slot_key));
+    assert!(h.server.slots.lock().unwrap().contains_key(&h.base_slot_key));
+    assert!(!h.server.slots.lock().unwrap().contains_key(&h.delta_slot_key));
 
     // 2. Large wallet (>= 128 KiB padded Base): triggers fresh Base rollover
     let mut big_random = vec![0u8; 150 * 1024];
     OsRng.fill_bytes(&mut big_random);
     {
-        let mut s = state.service.lock().unwrap();
+        let mut s = h.state.service.lock().unwrap();
         s.save_encrypted_data("big_blob", &big_random, Some(password))
             .unwrap();
     }
@@ -629,18 +853,18 @@ async fn test_sync_backup_base_delta_lifecycle_and_remote_wipe_recovery() {
         Some(password.to_string()),
         None,
         HashMap::new(),
-        &state,
+        &h.state,
     )
     .await
     .unwrap();
     assert_eq!(res3.uploaded_to, 1, "errors: {:?}", res3.errors);
     assert!(res3.padded_bytes >= 131_072);
-    assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
-    assert!(!server.slots.lock().unwrap().contains_key(&delta_slot_key));
+    assert!(h.server.slots.lock().unwrap().contains_key(&h.base_slot_key));
+    assert!(!h.server.slots.lock().unwrap().contains_key(&h.delta_slot_key));
 
     // 3. Small mutation after large Base -> uploads Delta slot & restores full merged state
     {
-        let mut s = state.service.lock().unwrap();
+        let mut s = h.state.service.lock().unwrap();
         s.save_encrypted_data("small_after_base", b"delta-payload", Some(password))
             .unwrap();
     }
@@ -648,24 +872,28 @@ async fn test_sync_backup_base_delta_lifecycle_and_remote_wipe_recovery() {
         Some(password.to_string()),
         None,
         HashMap::new(),
-        &state,
+        &h.state,
     )
     .await
     .unwrap();
     assert_eq!(res4.uploaded_to, 1, "errors: {:?}", res4.errors);
     assert_eq!(res4.padded_bytes, 65_536);
-    assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
-    assert!(server.slots.lock().unwrap().contains_key(&delta_slot_key));
+    assert!(h.server.slots.lock().unwrap().contains_key(&h.base_slot_key));
+    assert!(h.server.slots.lock().unwrap().contains_key(&h.delta_slot_key));
 
     let fetch_client = crate::sync_client::create_sync_http_client();
-    let merged_bytes =
-        super::fetch_and_merge_backup_slot(&fetch_client, &read_url, &stealth_pk, Some("pc"))
-            .await
-            .expect("merged backup container must be fetched");
-    let staged_file = base_dir.join("merged_sync_restore.hmcbackup");
+    let merged_bytes = super::fetch_and_merge_backup_slot(
+        &fetch_client,
+        &h.read_url,
+        &h.stealth_pk,
+        Some("pc"),
+    )
+    .await
+    .expect("merged backup container must be fetched");
+    let staged_file = h.base_dir_path.join("merged_sync_restore.hmcbackup");
     crate::services::fs_helpers::write_file_atomic(&staged_file, &merged_bytes).unwrap();
 
-    let restored_wallet_dir = base_dir.join("restored_wallet");
+    let restored_wallet_dir = h.base_dir_path.join("restored_wallet");
     let mut restored_service = AppService::new(&restored_wallet_dir).unwrap();
     let restore_creds = BackupRestoreCredentials::Mnemonic {
         phrase: ALICE_PHRASE,
@@ -703,29 +931,67 @@ async fn test_sync_backup_base_delta_lifecycle_and_remote_wipe_recovery() {
             .unwrap(),
         b"delta-payload"
     );
+}
 
-    // 4. Remote Base wipe auto-recovery & orphaned Delta cleanup
-    server.slots.lock().unwrap().remove(&base_slot_key);
-    server.etags.lock().unwrap().remove(&base_slot_key);
-    assert!(server.slots.lock().unwrap().contains_key(&delta_slot_key));
+#[tokio::test]
+async fn test_sync_backup_remote_base_wipe_heals_and_cleans_orphaned_delta() {
+    use rand::{rngs::OsRng, RngCore};
 
-    let res5 = super::sync_backup_with_standards_impl(
+    let password = "TestPassword123!";
+    let h = setup_base_delta_mirror_harness("sync_backup_remote_wipe", password).await;
+
+    let mut big_random = vec![0u8; 150 * 1024];
+    OsRng.fill_bytes(&mut big_random);
+    {
+        let mut s = h.state.service.lock().unwrap();
+        s.save_encrypted_data("big_blob", &big_random, Some(password))
+            .unwrap();
+    }
+    let res_base = super::sync_backup_with_standards_impl(
         Some(password.to_string()),
         None,
         HashMap::new(),
-        &state,
+        &h.state,
     )
     .await
     .unwrap();
-    assert_eq!(res5.uploaded_to, 1, "errors: {:?}", res5.errors);
-    assert!(res5.padded_bytes >= 131_072);
-    assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
+    assert!(res_base.padded_bytes >= 131_072);
+
+    {
+        let mut s = h.state.service.lock().unwrap();
+        s.save_encrypted_data("small_after_base", b"delta-payload", Some(password))
+            .unwrap();
+    }
+    super::sync_backup_with_standards_impl(
+        Some(password.to_string()),
+        None,
+        HashMap::new(),
+        &h.state,
+    )
+    .await
+    .unwrap();
+    assert!(h.server.slots.lock().unwrap().contains_key(&h.delta_slot_key));
+
+    // Remote Base wipe auto-recovery & orphaned Delta cleanup
+    h.server.slots.lock().unwrap().remove(&h.base_slot_key);
+    h.server.etags.lock().unwrap().remove(&h.base_slot_key);
+    assert!(h.server.slots.lock().unwrap().contains_key(&h.delta_slot_key));
+
+    let res_heal = super::sync_backup_with_standards_impl(
+        Some(password.to_string()),
+        None,
+        HashMap::new(),
+        &h.state,
+    )
+    .await
+    .unwrap();
+    assert_eq!(res_heal.uploaded_to, 1, "errors: {:?}", res_heal.errors);
+    assert!(res_heal.padded_bytes >= 131_072);
+    assert!(h.server.slots.lock().unwrap().contains_key(&h.base_slot_key));
     assert!(
-        !server.slots.lock().unwrap().contains_key(&delta_slot_key),
+        !h.server.slots.lock().unwrap().contains_key(&h.delta_slot_key),
         "orphaned delta slot must be deleted after Base re-upload"
     );
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 fn copy_dir_recursive_for_test(src: &std::path::Path, dst: &std::path::Path) {
@@ -856,29 +1122,29 @@ async fn test_acknowledge_seal_sync_marks_wallet_synced() {
         .unwrap();
     assert!(!lc.pending_restore_l2_reconciliation);
     assert!(lc.wallet_sync_alert.is_none());
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
-#[tokio::test]
-async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
-    use crate::services::preflight::{run_value_outflow_preflight, ValueOutflowPreflight};
+struct ClonedMirrorSetup {
+    _base_dir: TempDirGuard,
+    server: crate::test_support::MockSyncServer,
+    wallet_b_dir: PathBuf,
+    server_slots_after_a: HashMap<String, Vec<u8>>,
+    server_etags_after_a: HashMap<String, String>,
+}
+
+async fn setup_advanced_mirror_with_v1_clone(name: &str, password: &str) -> ClonedMirrorSetup {
     use crate::test_support::{
         create_test_state, setup_test_app as setup_sync_test_app, ALICE_PHRASE,
     };
-    use human_money_core::models::seal::SealLockReason;
 
-    let base_dir = temp_test_dir("sync_backup_stale_and_fork_guard");
+    let base_dir = temp_test_dir(name);
     let wallet_a_dir = base_dir.join("wallet_a");
-    let wallet_b_stale_dir = base_dir.join("wallet_b_stale");
-    let wallet_b_fork_dir = base_dir.join("wallet_b_fork");
-    let password = "TestPassword123!";
+    let wallet_b_dir = base_dir.join("wallet_b");
 
     let service_a = setup_sync_test_app(&wallet_a_dir, "Alice", ALICE_PHRASE, password);
     let state_a = create_test_state(service_a);
     let server = setup_authorized_backup_mirror(&state_a, password).await;
 
-    // 1. Initial sync on Device A (v1)
     let res_a1 = super::sync_backup_with_standards_impl(
         Some(password.to_string()),
         None,
@@ -889,11 +1155,9 @@ async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
     .unwrap();
     assert_eq!(res_a1.uploaded_to, 1, "errors: {:?}", res_a1.errors);
 
-    // Clone Device A at v1 to create two secondary device snapshots BEFORE A advances
-    copy_dir_recursive_for_test(&wallet_a_dir, &wallet_b_stale_dir);
-    copy_dir_recursive_for_test(&wallet_a_dir, &wallet_b_fork_dir);
+    // Clone Device A at v1 BEFORE A advances
+    copy_dir_recursive_for_test(&wallet_a_dir, &wallet_b_dir);
 
-    // 2. Advance Device A by multiple steps (gap > 1) and sync newer state to mirror
     {
         let mut s = state_a.service.lock().unwrap();
         s.save_encrypted_data("tx_step_1", b"state-a-2", Some(password))
@@ -913,8 +1177,26 @@ async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
     let server_slots_after_a = server.slots.lock().unwrap().clone();
     let server_etags_after_a = server.etags.lock().unwrap().clone();
 
-    // 3. Stale clone (unmodified v1) attempts sync -> RemoteIsNewer -> aborts upload, warns, blocks spend
-    let mut service_b_stale = AppService::new(&wallet_b_stale_dir).unwrap();
+    ClonedMirrorSetup {
+        _base_dir: base_dir,
+        server,
+        wallet_b_dir,
+        server_slots_after_a,
+        server_etags_after_a,
+    }
+}
+
+#[tokio::test]
+async fn test_sync_backup_stale_clone_aborts_upload_and_blocks_spend() {
+    use crate::services::preflight::{run_value_outflow_preflight, ValueOutflowPreflight};
+    use crate::test_support::create_test_state;
+
+    // Invariant: An unmodified stale v1 clone detecting a newer remote backup MUST abort upload,
+    // persist stale_local_backup alert + pending_restore_l2_reconciliation, and fail spend preflight.
+    let password = "TestPassword123!";
+    let setup = setup_advanced_mirror_with_v1_clone("sync_backup_stale_guard", password).await;
+
+    let mut service_b_stale = AppService::new(&setup.wallet_b_dir).unwrap();
     let profiles_stale = service_b_stale.list_profiles().unwrap();
     service_b_stale
         .login(
@@ -939,6 +1221,21 @@ async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
         )
         .unwrap();
         state_b_stale.set_cached_internal_lifecycle(Some(lc));
+
+        // Positive baseline BEFORE stale sync detects remote advancement: spend preflight passes
+        run_value_outflow_preflight(
+            &state_b_stale,
+            &mut s,
+            Some(password),
+            &ValueOutflowPreflight {
+                require_restore_reconciled: true,
+                check_known_offender_dids: &[],
+                check_blocking_intent_local_ids: &[],
+                check_anchor_id_quorum_health: None,
+                preverified_anchor_manifest: None,
+            },
+        )
+        .expect("baseline preflight must pass before stale clone sync");
     }
 
     let res_b_stale = super::sync_backup_with_standards_impl(
@@ -950,8 +1247,14 @@ async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
     .await
     .unwrap();
     assert_eq!(res_b_stale.uploaded_to, 0);
-    assert_eq!(*server.slots.lock().unwrap(), server_slots_after_a);
-    assert_eq!(*server.etags.lock().unwrap(), server_etags_after_a);
+    assert_eq!(
+        *setup.server.slots.lock().unwrap(),
+        setup.server_slots_after_a
+    );
+    assert_eq!(
+        *setup.server.etags.lock().unwrap(),
+        setup.server_etags_after_a
+    );
 
     let lc_stale = state_b_stale
         .get_or_load_internal_lifecycle_locked(Some(password))
@@ -962,7 +1265,7 @@ async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
         Some("stale_local_backup")
     );
 
-    let spend_block_stale = {
+    let spend_err = {
         let mut s = state_b_stale.service.lock().unwrap();
         run_value_outflow_preflight(
             &state_b_stale,
@@ -976,11 +1279,28 @@ async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
                 preverified_anchor_manifest: None,
             },
         )
-    };
-    assert!(spend_block_stale.is_err());
+    }
+    .expect_err("stale clone must fail spend preflight after detecting newer remote backup");
+    assert!(
+        spend_err
+            .message
+            .contains("Online-Sicherheitsabgleich erforderlich"),
+        "unexpected preflight error: {}",
+        spend_err.message
+    );
+}
 
-    // 4. Divergent clone (offline write after v1) attempts sync -> ForkDetected -> aborts + locks seal
-    let mut service_b_fork = AppService::new(&wallet_b_fork_dir).unwrap();
+#[tokio::test]
+async fn test_sync_backup_divergent_fork_aborts_upload_and_locks_seal() {
+    use crate::test_support::create_test_state;
+    use human_money_core::models::seal::SealLockReason;
+
+    // Invariant: A diverged clone (local offline write after v1) attempting sync against newer
+    // remote state MUST abort upload, record fork_detected, and persist SealLockReason::ForkDetected.
+    let password = "TestPassword123!";
+    let setup = setup_advanced_mirror_with_v1_clone("sync_backup_fork_guard", password).await;
+
+    let mut service_b_fork = AppService::new(&setup.wallet_b_dir).unwrap();
     let profiles_fork = service_b_fork.list_profiles().unwrap();
     service_b_fork
         .login(
@@ -1004,7 +1324,10 @@ async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
     .await
     .unwrap();
     assert_eq!(res_b_fork.uploaded_to, 0);
-    assert_eq!(*server.slots.lock().unwrap(), server_slots_after_a);
+    assert_eq!(
+        *setup.server.slots.lock().unwrap(),
+        setup.server_slots_after_a
+    );
 
     let lc_fork = state_b_fork
         .get_or_load_internal_lifecycle_locked(Some(password))
@@ -1014,15 +1337,11 @@ async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
         lc_fork.wallet_sync_alert.as_ref().map(|a| a.kind.as_str()),
         Some("fork_detected")
     );
-    {
-        let s = state_b_fork.service.lock().unwrap();
-        assert_eq!(
-            s.get_seal_lock_reason(Some(password)).unwrap(),
-            Some(SealLockReason::ForkDetected)
-        );
-    }
-
-    let _ = fs::remove_dir_all(base_dir);
+    let s = state_b_fork.service.lock().unwrap();
+    assert_eq!(
+        s.get_seal_lock_reason(Some(password)).unwrap(),
+        Some(SealLockReason::ForkDetected)
+    );
 }
 
 #[tokio::test]
@@ -1096,8 +1415,6 @@ async fn test_sync_backup_detects_server_rollback_with_signed_ack_and_heals() {
         .expect("server_rollback alert must be recorded");
     assert_eq!(alert.kind, "server_rollback");
     assert!(alert.has_signed_ack_proof);
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[tokio::test]
@@ -1207,8 +1524,6 @@ async fn test_sync_backup_wipe_alert_respects_server_ttl() {
         "expired slot beyond ttl_days must not raise unexpected_data_loss alert: {:?}",
         lc3.wallet_sync_alert
     );
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[test]
@@ -1260,8 +1575,6 @@ fn test_preview_mnemonic_identity_collision_and_subaccount() {
     .unwrap();
     assert!(sub_preview.user_id.starts_with("mobil:"));
     assert!(sub_preview.local_collision.is_none());
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[tokio::test]
@@ -1358,9 +1671,11 @@ async fn test_probe_sync_backup_found_and_not_found() {
         .is_some_and(|p| Path::new(p).exists()));
     let inspection = found_res.inspection.expect("inspection must be populated");
     assert_eq!(inspection.profile_name, "Alice");
-    assert!(inspection.local_collision.is_some());
-
-    let _ = fs::remove_dir_all(base_dir);
+    let coll = inspection
+        .local_collision
+        .expect("found backup must report local profile collision");
+    assert_eq!(coll.profile_name, "Alice");
+    assert!(!coll.is_locked_or_conflicted);
 }
 
 #[tokio::test]
@@ -1413,22 +1728,28 @@ async fn test_replace_local_profile_and_reset_password_via_backup() {
     {
         let mut s = state.service.lock().unwrap();
         s.logout();
-        assert!(s
+        let old_login_err = s
             .login(
                 &original_folder,
                 old_pass,
                 false,
-                "inst-pw-reset".to_string()
+                "inst-pw-reset".to_string(),
             )
-            .is_err());
-        assert!(s
-            .login(
-                &original_folder,
-                new_pass,
-                false,
-                "inst-pw-reset".to_string()
-            )
-            .is_ok());
+            .expect_err("old password must be rejected after reset");
+        assert!(
+            old_login_err
+                .to_string()
+                .contains("Login failed (check password)"),
+            "unexpected login error with old password: {}",
+            old_login_err
+        );
+        s.login(
+            &original_folder,
+            new_pass,
+            false,
+            "inst-pw-reset".to_string(),
+        )
+        .expect("new password must unlock wallet after reset");
         assert_eq!(
             s.with_wallet(|w| w.get_user_id().to_string()).unwrap(),
             alice_uid
@@ -1463,8 +1784,6 @@ async fn test_replace_local_profile_and_reset_password_via_backup() {
     assert_eq!(remaining_profiles.len(), 1);
     assert_eq!(remaining_profiles[0].profile_name, "Alice");
     assert_eq!(remaining_profiles[0].folder_name, outcome.folder_name);
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[tokio::test]
@@ -1514,13 +1833,11 @@ async fn test_sync_backup_respects_wifi_only_skip() {
     .await
     .unwrap();
     assert!(!manual_res.skipped_wifi_only);
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[tokio::test]
 async fn k3_reconcile_restored_wallet_honors_fork_alert_vs_honest_offline() {
-    let base_dir = crate::test_support::temp_test_dir("k3_restore_reconcile");
+    let base_dir = temp_test_dir("k3_restore_reconcile");
     let password = "TestPassword123!";
     let svc = crate::test_support::setup_test_app(
         &base_dir,
@@ -1599,13 +1916,27 @@ async fn k3_reconcile_restored_wallet_honors_fork_alert_vs_honest_offline() {
         res_alert.pending_restore_l2_reconciliation,
         "K3: stale_local_backup / fork alert must keep pending_restore_l2_reconciliation locked when offline vouchers exist"
     );
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[tokio::test]
 async fn s07_f14_container_format_and_sync_input_cap_enforced() {
+    // Invariant: Container format parsers reject foreign version tags and probe_sync_backup_impl
+    // enforces 1..=MAX_PROBE_SYNC_INPUTS bounds while valid containers/deltas pass.
     let base_dir = temp_test_dir("s07_f14_container_bounds");
+    let mut src_svc = setup_test_app(&base_dir.join("src"), "Alice", "pw-src");
+    let good_file = base_dir.join("good_format.hmcbackup");
+    export_backup_file_impl(
+        &good_file,
+        BackupProtection::MnemonicOnly,
+        Some("pw-src"),
+        &mut src_svc,
+        HashMap::new(),
+    )
+    .unwrap();
+    let probe_ok = probe_wallet_backup_impl(&good_file.to_string_lossy())
+        .expect("valid v1 container format baseline must probe cleanly");
+    assert_eq!(probe_ok.protection_mode, "mnemonic");
+
     let bad_file = base_dir.join("bad_format.hmcbackup");
     let container = PortableBackupContainer {
         container_format: "evil-backup-v99".to_string(),
@@ -1615,9 +1946,14 @@ async fn s07_f14_container_format_and_sync_input_cap_enforced() {
         custom_standards: HashMap::new(),
     };
     fs::write(&bad_file, serde_json::to_vec(&container).unwrap()).unwrap();
+    let probe_err = probe_wallet_backup_impl(&bad_file.to_string_lossy())
+        .expect_err("S07-F14: probe_wallet_backup_impl must reject unexpected container_format");
     assert!(
-        probe_wallet_backup_impl(&bad_file.to_string_lossy()).is_err(),
-        "S07-F14: probe_wallet_backup_impl must reject unexpected container_format"
+        probe_err
+            .message
+            .contains("Unsupported backup container format: evil-backup-v99"),
+        "unexpected container_format error: {}",
+        probe_err.message
     );
 
     let mut base = PortableBackupContainer {
@@ -1627,26 +1963,61 @@ async fn s07_f14_container_format_and_sync_input_cap_enforced() {
         blobs_hex: HashMap::new(),
         custom_standards: HashMap::new(),
     };
+    let good_delta = BackupDeltaContainer {
+        container_format: "humoco-app-backup-delta-v1".to_string(),
+        created_at: Utc::now().to_rfc3339(),
+        base_manifest_sha256: sha256_hex(b"base"),
+        manifest_hex: hex::encode(b"mid"),
+        put_blobs_hex: HashMap::new(),
+        delete_blobs: vec![],
+        custom_standards: HashMap::new(),
+    };
+    merge_backup_delta_into_base(&mut base, &good_delta)
+        .expect("valid delta container format baseline must merge");
+
     let bad_delta = BackupDeltaContainer {
         container_format: "evil-delta-v99".to_string(),
         created_at: Utc::now().to_rfc3339(),
-        base_manifest_sha256: sha256_hex(b"base"),
+        base_manifest_sha256: sha256_hex(b"mid"),
         manifest_hex: hex::encode(b"new"),
         put_blobs_hex: HashMap::new(),
         delete_blobs: vec![],
         custom_standards: HashMap::new(),
     };
+    let delta_err = merge_backup_delta_into_base(&mut base, &bad_delta)
+        .expect_err("S07-F14: merge_backup_delta_into_base must reject unexpected delta format");
     assert!(
-        merge_backup_delta_into_base(&mut base, &bad_delta).is_err(),
-        "S07-F14: merge_backup_delta_into_base must reject unexpected delta container_format"
+        delta_err.contains("Unsupported backup delta container format: evil-delta-v99"),
+        "unexpected delta format error: {}",
+        delta_err
     );
 
     let svc = AppService::new(&base_dir.join("w")).unwrap();
     let state = crate::test_support::create_test_state(svc);
+    let empty_err = probe_sync_backup_impl(
+        vec!["   ".to_string()],
+        PHRASE.to_string(),
+        None,
+        None,
+        Some(MnemonicLanguage::English),
+        &base_dir.join("w"),
+        &base_dir.join("tmp"),
+        &state,
+    )
+    .await
+    .expect_err("empty sync input list must be rejected");
+    assert!(
+        empty_err
+            .message
+            .contains("Sync-Dienst-Adresse darf nicht leer sein"),
+        "unexpected empty sync input error: {}",
+        empty_err.message
+    );
+
     let too_many: Vec<String> = (0..33)
         .map(|i| format!("https://sync{}.example.org/sync.php", i))
         .collect();
-    let res = probe_sync_backup_impl(
+    let cap_err = probe_sync_backup_impl(
         too_many,
         PHRASE.to_string(),
         None,
@@ -1656,13 +2027,15 @@ async fn s07_f14_container_format_and_sync_input_cap_enforced() {
         &base_dir.join("tmp"),
         &state,
     )
-    .await;
+    .await
+    .expect_err("S07-F14: probe_sync_backup_impl must reject > 32 sync inputs");
     assert!(
-        res.is_err(),
-        "S07-F14: probe_sync_backup_impl must reject > 32 sync inputs"
+        cap_err
+            .message
+            .contains("Too many sync inputs (33 > maximum 32)"),
+        "unexpected cap error: {}",
+        cap_err.message
     );
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[tokio::test]
@@ -1742,8 +2115,6 @@ async fn s07_f3_reset_password_via_backup_preserves_fork_lock_reason() {
         Some(human_money_core::models::seal::SealLockReason::ForkDetected),
         "S07-F3: reset_local_password_via_backup must preserve existing ForkDetected seal lock on disk"
     );
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[tokio::test]
@@ -1795,7 +2166,7 @@ async fn s07_f7_f8_restore_rejects_metadata_spoof_replace_and_preserves_unrelate
     let state = crate::test_support::create_test_state(service);
 
     // 1. S07-F7: Attempting to replace Bob's folder using Alice's backup MUST fail (not silently keep or delete Bob!)
-    let replace_res = super::finalize_restored_wallet_and_reconcile_l2(
+    let replace_err = super::finalize_restored_wallet_and_reconcile_l2(
         &user_bkp,
         BackupRestoreCredentials::Mnemonic {
             phrase: PHRASE,
@@ -1812,10 +2183,14 @@ async fn s07_f7_f8_restore_rejects_metadata_spoof_replace_and_preserves_unrelate
         &state,
         None,
     )
-    .await;
+    .await
+    .expect_err("S07-F7: replacing another user's folder via poisoned profile_metadata.json must fail closed");
     assert!(
-        replace_res.is_err(),
-        "S07-F7: replacing another user's folder via poisoned profile_metadata.json must fail closed"
+        replace_err
+            .message
+            .contains("cryptographic ownership could not be verified"),
+        "unexpected metadata spoof replace error: {}",
+        replace_err.message
     );
     assert!(
         wallet_dir.join(&bob_folder).exists(),
@@ -1846,8 +2221,6 @@ async fn s07_f7_f8_restore_rejects_metadata_spoof_replace_and_preserves_unrelate
         user_bkp.exists(),
         "S07-F8: backup file outside tmp_restore_dir whose path contains 'tmp_restore' must NOT be deleted"
     );
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[tokio::test]
@@ -1990,8 +2363,6 @@ async fn s07_f10_f17_uncached_ack_rejected_no_tofu_and_timeout_zero_backup_statu
         status.has_authorized_sync_backup_target,
         "S07-F17: get_backup_status_impl must read cached own_sync_descriptor under timeout == 0"
     );
-
-    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[tokio::test]
@@ -2129,6 +2500,4 @@ async fn s07_f1_reconcile_restored_wallet_blocks_clear_when_fork_alert_with_offl
         Some(human_money_core::models::seal::SealLockReason::ForkDetected),
         "S07-F1: ForkDetected seal lock must NOT be cleared while offline voucher is exposed"
     );
-
-    let _ = fs::remove_dir_all(base_dir);
 }

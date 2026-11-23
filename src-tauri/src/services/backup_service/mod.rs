@@ -42,7 +42,8 @@ pub(crate) use sync_upload::{
 };
 #[cfg(test)]
 use sync_upload::{
-    is_older_than_14_days, merge_backup_delta_into_base, sync_backup_with_standards_impl,
+    is_older_than_14_days, merge_backup_delta_into_base, run_auto_backup_sync_with_standards_impl,
+    sync_backup_with_standards_impl,
 };
 
 const BACKUP_BASE_TTL_SECS: u64 = 7 * 24 * 3600; // 7 days
