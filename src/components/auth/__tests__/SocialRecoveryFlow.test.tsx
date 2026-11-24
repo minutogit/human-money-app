@@ -2,6 +2,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SocialRecoveryFlow } from '../SocialRecoveryFlow';
 import { recoveryService } from '../../../services/recoveryService';
+import { profileService } from '../../../services/profileService';
 import { authService } from '../../../services/authService';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { ActiveRecoverySessionDto } from '../../../types';
@@ -17,6 +18,12 @@ vi.mock('../../../services/recoveryService', () => ({
         cancelSocialRecoverySession: vi.fn(),
         importGuardianRecoveryReply: vi.fn(),
         completeSocialRecovery: vi.fn(),
+    },
+}));
+
+vi.mock('../../../services/profileService', () => ({
+    profileService: {
+        encodeTextQrSvg: vi.fn(),
     },
 }));
 
@@ -48,7 +55,8 @@ describe('SocialRecoveryFlow Component', () => {
     const onBack = vi.fn();
 
     beforeEach(() => {
-        vi.clearAllMocks();
+        vi.resetAllMocks();
+        vi.mocked(copyToClipboard).mockResolvedValue(true);
         vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(null);
         vi.mocked(authService.getLocalInstanceId).mockResolvedValue('inst-1');
     });
@@ -171,6 +179,7 @@ describe('SocialRecoveryFlow Component', () => {
         await waitFor(() => {
             expect(screen.getByTestId('social-sync-empty-confirm')).toBeInTheDocument();
         });
+        expect(onSuccess).not.toHaveBeenCalled();
 
         fireEvent.click(screen.getByTestId('social-confirm-empty-btn'));
 
@@ -251,6 +260,7 @@ describe('SocialRecoveryFlow Component', () => {
         await waitFor(() => {
             expect(screen.getByTestId('social-collision-card')).toBeInTheDocument();
         });
+        expect(onSuccess).not.toHaveBeenCalled();
 
         fireEvent.click(screen.getByTestId('social-collision-replace-btn'));
 
@@ -350,5 +360,278 @@ describe('SocialRecoveryFlow Component', () => {
         await waitFor(() => {
             expect(screen.getByText(/newer recovery contact epoch|neuerer Vertrauenskontakt-Stand/i)).toBeInTheDocument();
         });
+    });
+
+    it('rejects recovery-req and kit links pasted into reply input without calling backend', async () => {
+        const waitingSession: ActiveRecoverySessionDto = {
+            ...SESSION_WITH_SHARES,
+            collectedCount: 0,
+            hasEnoughShares: false,
+            questionIds: null,
+        };
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(waitingSession);
+
+        render(<SocialRecoveryFlow mode="restore_new_device" onSuccess={onSuccess} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('social-reply-input')).toBeInTheDocument();
+        });
+
+        fireEvent.change(screen.getByTestId('social-reply-input'), {
+            target: { value: 'humoco://recovery-req?v=1&pk=abc' },
+        });
+        fireEvent.click(screen.getByTestId('social-add-reply-btn'));
+        expect(
+            screen.getByText(
+                'This is your own request link (recovery-req…), not a reply from a recovery contact.'
+            )
+        ).toBeInTheDocument();
+        expect(recoveryService.importGuardianRecoveryReply).not.toHaveBeenCalled();
+
+        fireEvent.change(screen.getByTestId('social-reply-input'), {
+            target: { value: 'humoco://kit?v=1&ent=abc' },
+        });
+        fireEvent.click(screen.getByTestId('social-add-reply-btn'));
+        expect(
+            screen.getByText(
+                'This is an emergency sheet link (humoco://kit…), not a recovery contact reply.'
+            )
+        ).toBeInTheDocument();
+        expect(recoveryService.importGuardianRecoveryReply).not.toHaveBeenCalled();
+    });
+
+    it('disables completion submit until all 3 answers, profile name, and valid matching passwords are provided', async () => {
+        const sessionWithoutName: ActiveRecoverySessionDto = {
+            ...SESSION_WITH_SHARES,
+            ownerDisplayName: null,
+        };
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(sessionWithoutName);
+
+        render(<SocialRecoveryFlow mode="restore_new_device" onSuccess={onSuccess} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('social-complete-submit-btn')).toBeInTheDocument();
+        });
+
+        const submitBtn = screen.getByTestId('social-complete-submit-btn');
+
+        // Only 2 answers + profile name + valid matching password -> disabled
+        fireEvent.change(screen.getByTestId('social-answer-0'), { target: { value: 'Berlin' } });
+        fireEvent.change(screen.getByTestId('social-answer-1'), { target: { value: 'Oma' } });
+        fireEvent.change(screen.getByTestId('social-profile-name-input'), {
+            target: { value: 'Alice' },
+        });
+        fireEvent.change(screen.getByTestId('social-new-password-input'), {
+            target: { value: 'StrongPass123' },
+        });
+        fireEvent.change(screen.getByTestId('social-confirm-password-input'), {
+            target: { value: 'StrongPass123' },
+        });
+        expect(submitBtn).toBeDisabled();
+
+        // Fill 3rd answer, clear profile name -> disabled
+        fireEvent.change(screen.getByTestId('social-answer-2'), { target: { value: 'Bello' } });
+        fireEvent.change(screen.getByTestId('social-profile-name-input'), { target: { value: '' } });
+        expect(submitBtn).toBeDisabled();
+
+        // Restore profile name, short password -> disabled
+        fireEvent.change(screen.getByTestId('social-profile-name-input'), {
+            target: { value: 'Alice' },
+        });
+        fireEvent.change(screen.getByTestId('social-new-password-input'), {
+            target: { value: 'Short1!' },
+        });
+        fireEvent.change(screen.getByTestId('social-confirm-password-input'), {
+            target: { value: 'Short1!' },
+        });
+        expect(submitBtn).toBeDisabled();
+
+        // Mismatched passwords -> disabled
+        fireEvent.change(screen.getByTestId('social-new-password-input'), {
+            target: { value: 'StrongPass123' },
+        });
+        fireEvent.change(screen.getByTestId('social-confirm-password-input'), {
+            target: { value: 'Different123' },
+        });
+        expect(submitBtn).toBeDisabled();
+
+        // Positive baseline: matching valid passwords -> enabled
+        fireEvent.change(screen.getByTestId('social-confirm-password-input'), {
+            target: { value: 'StrongPass123' },
+        });
+        expect(submitBtn).not.toBeDisabled();
+        expect(recoveryService.completeSocialRecovery).not.toHaveBeenCalled();
+    });
+
+    it('reveals BIP-39 passphrase input on bip39PassphraseRequired error and displays wrongAnswersRetry without calling onSuccess', async () => {
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(
+            SESSION_WITH_SHARES
+        );
+        vi.mocked(recoveryService.completeSocialRecovery)
+            .mockRejectedValueOnce({
+                code: 'error.recovery.bip39PassphraseRequired',
+                message: 'Passphrase required',
+            })
+            .mockRejectedValueOnce({
+                code: 'error.recovery.wrongAnswers',
+                message: 'Wrong answers',
+            });
+
+        render(<SocialRecoveryFlow mode="restore_new_device" onSuccess={onSuccess} />);
+
+        await waitFor(() => expect(screen.getByTestId('social-answer-0')).toBeInTheDocument());
+
+        fireEvent.change(screen.getByTestId('social-answer-0'), { target: { value: 'Berlin' } });
+        fireEvent.change(screen.getByTestId('social-answer-1'), { target: { value: 'Oma' } });
+        fireEvent.change(screen.getByTestId('social-answer-2'), { target: { value: 'Bello' } });
+        fireEvent.change(screen.getByTestId('social-new-password-input'), {
+            target: { value: 'StrongPass123' },
+        });
+        fireEvent.change(screen.getByTestId('social-confirm-password-input'), {
+            target: { value: 'StrongPass123' },
+        });
+        fireEvent.click(screen.getByTestId('social-complete-submit-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('social-passphrase-input')).toBeInTheDocument();
+            expect(
+                screen.getAllByText(
+                    'An additional passphrase (25th word) was set when creating this profile. Please enter it here:'
+                )
+            ).toHaveLength(2);
+        });
+        expect(onSuccess).not.toHaveBeenCalled();
+
+        fireEvent.change(screen.getByTestId('social-passphrase-input'), {
+            target: { value: 'my25thword' },
+        });
+        fireEvent.click(screen.getByTestId('social-complete-submit-btn'));
+
+        await waitFor(() => {
+            expect(recoveryService.completeSocialRecovery).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    bip39Passphrase: 'my25thword',
+                })
+            );
+            expect(
+                screen.getByText(
+                    'Your answers do not match yet – please check carefully and try again.'
+                )
+            ).toBeInTheDocument();
+        });
+        expect(onSuccess).not.toHaveBeenCalled();
+    });
+
+    it('handles syncUnreachable error by showing warning and completing only after explicit empty fallback', async () => {
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(
+            SESSION_WITH_SHARES
+        );
+        vi.mocked(recoveryService.completeSocialRecovery)
+            .mockRejectedValueOnce({
+                code: 'error.recovery.syncUnreachable',
+                message: 'Sync offline',
+            })
+            .mockResolvedValueOnce({
+                folderName: 'alice_empty',
+                profileName: 'Alice',
+                mode: 'restore_new_device',
+                outcome: 'restored_seed_only',
+                backupEpoch: null,
+                backupTxNonce: null,
+                activeVoucherQueriesCount: 0,
+                reconciledSpentCount: 0,
+                restoredStandardsCount: 0,
+                l2ReconciliationStatus: 'no_servers',
+                pendingRestoreL2Reconciliation: false,
+                localCollision: null,
+                resolvedSyncTargets: [],
+            });
+
+        render(<SocialRecoveryFlow mode="restore_new_device" onSuccess={onSuccess} />);
+
+        await waitFor(() => expect(screen.getByTestId('social-answer-0')).toBeInTheDocument());
+
+        fireEvent.change(screen.getByTestId('social-answer-0'), { target: { value: 'Berlin' } });
+        fireEvent.change(screen.getByTestId('social-answer-1'), { target: { value: 'Oma' } });
+        fireEvent.change(screen.getByTestId('social-answer-2'), { target: { value: 'Bello' } });
+        fireEvent.change(screen.getByTestId('social-new-password-input'), {
+            target: { value: 'StrongPass123' },
+        });
+        fireEvent.change(screen.getByTestId('social-confirm-password-input'), {
+            target: { value: 'StrongPass123' },
+        });
+        fireEvent.click(screen.getByTestId('social-complete-submit-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('social-unreachable-warning')).toBeInTheDocument();
+        });
+        expect(onSuccess).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByTestId('social-unreachable-empty-btn'));
+
+        await waitFor(() => {
+            expect(recoveryService.completeSocialRecovery).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    allowEmptyFallback: true,
+                })
+            );
+            expect(onSuccess).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    it('renders sanitized request QR SVG when toggling show QR code', async () => {
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(
+            SESSION_WITH_SHARES
+        );
+        vi.mocked(profileService.encodeTextQrSvg).mockResolvedValue(
+            '<svg viewBox="0 0 10 10"><rect width="99" height="99"/></svg>'
+        );
+
+        render(<SocialRecoveryFlow mode="restore_new_device" onSuccess={onSuccess} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('social-toggle-request-qr-btn')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('social-toggle-request-qr-btn'));
+
+        await waitFor(() => {
+            expect(profileService.encodeTextQrSvg).toHaveBeenCalledWith(
+                'humoco://recovery-req?v=1&pk=abc'
+            );
+            expect(
+                screen.getByTestId('social-request-qr').querySelector('svg rect[width="99"]')
+            ).not.toBeNull();
+        });
+    });
+
+    it('sanitizes/rejects unsafe requestQrSvg markup instead of injecting raw HTML', async () => {
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(
+            SESSION_WITH_SHARES
+        );
+        vi.mocked(profileService.encodeTextQrSvg).mockResolvedValue(
+            '<svg onload="alert(1)"><script>alert(1)</script><rect width="99" height="99"/></svg>'
+        );
+
+        const { container } = render(
+            <SocialRecoveryFlow mode="restore_new_device" onSuccess={onSuccess} />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('social-toggle-request-qr-btn')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('social-toggle-request-qr-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('social-toggle-request-qr-btn')).toHaveTextContent(
+                /Hide QR|QR-Code verbergen/i
+            );
+        });
+
+        expect(container.querySelector('script')).toBeNull();
+        expect(container.innerHTML).not.toContain('onload=');
+        expect(screen.getByTestId('social-request-qr')).toBeInTheDocument();
+        expect(screen.getByTestId('social-request-qr').querySelector('rect[width="99"]')).toBeNull();
     });
 });

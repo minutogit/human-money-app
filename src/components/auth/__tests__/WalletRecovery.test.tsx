@@ -80,7 +80,10 @@ describe('WalletRecovery Component', () => {
         });
 
         fireEvent.click(screen.getByTestId('wallet-recovery-choose-words'));
-        expect(screen.getByTestId('feedback-message')).toBeInTheDocument();
+        expect(screen.getByTestId('feedback-message')).toHaveTextContent(
+            'Please select a profile to recover'
+        );
+        expect(screen.queryByTestId('recovery-word-word-0')).toBeNull();
 
         fireEvent.change(screen.getByTestId('profile-select'), { target: { value: 'profile1' } });
         expect(screen.getByTestId('profile-select')).toHaveValue('profile1');
@@ -204,6 +207,31 @@ describe('WalletRecovery Component', () => {
                 /passwords do not match/i
             );
         });
+        expect(invoke).not.toHaveBeenCalledWith(
+            'recover_wallet_and_set_new_password',
+            expect.anything()
+        );
+        expect(mockOnRecoverySuccess).not.toHaveBeenCalled();
+
+        // Short password (< 8 characters) must also be rejected client-side
+        fireEvent.change(screen.getByTestId('recovery-new-password-input'), {
+            target: { value: 'Short1!' },
+        });
+        fireEvent.change(screen.getByTestId('recovery-confirm-password-input'), {
+            target: { value: 'Short1!' },
+        });
+        fireEvent.click(screen.getByTestId('recovery-submit-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('feedback-message')).toHaveTextContent(
+                'Password must be at least 8 characters'
+            );
+        });
+        expect(invoke).not.toHaveBeenCalledWith(
+            'recover_wallet_and_set_new_password',
+            expect.anything()
+        );
+        expect(mockOnRecoverySuccess).not.toHaveBeenCalled();
     });
 
     it('switches to social recovery card cleanly', async () => {
@@ -230,14 +258,20 @@ describe('WalletRecovery Component', () => {
         (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
             if (cmd === 'get_active_recovery_session') {
                 return Promise.resolve({
-                    sessionId: 'sess-p2',
+                    sasCode: '123456',
+                    createdAt: Math.floor(Date.now() / 1000),
+                    nameHint: 'Profile 2',
+                    requestUri: 'humoco://recovery-req?v=1&pk=abc',
                     sessionMode: 'reset_local_password',
                     targetFolderName: 'profile2',
-                    sasCode: '123456',
+                    ownerDid: null,
+                    ownerDisplayName: null,
+                    rotationEpoch: null,
                     thresholdM: 2,
                     collectedCount: 1,
                     questionIds: [1, 2, 3],
-                    createdAtSecs: 1000,
+                    hasEnoughShares: false,
+                    discoveredSyncUrls: [],
                 });
             }
             return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
@@ -261,5 +295,91 @@ describe('WalletRecovery Component', () => {
             expect(screen.getByTestId('profile-select')).toBeDisabled();
             expect(screen.getByTestId('profile-select')).toHaveValue('profile2');
         });
+    });
+
+    it('displays backend error and does not call onRecoverySuccess when recover_wallet_and_set_new_password rejects', async () => {
+        const baseImpl = (invoke as Mock).getMockImplementation();
+        (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+            if (cmd === 'recover_wallet_and_set_new_password') {
+                return Promise.reject(new Error('Mnemonic does not match profile'));
+            }
+            return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+        });
+
+        render(
+            <WalletRecovery
+                onRecoverySuccess={mockOnRecoverySuccess}
+                onSwitchToLogin={mockOnSwitchToLogin}
+                defaultMethod="words"
+            />
+        );
+
+        await waitFor(() => expect(screen.getByTestId('profile-select')).toBeInTheDocument());
+        fireEvent.change(screen.getByTestId('profile-select'), { target: { value: 'profile1' } });
+        fireEvent.change(screen.getByTestId('recovery-word-word-0'), {
+            target: { value: mockSeed12 },
+        });
+        await waitFor(() => expect(screen.getByTestId('recovery-submit-btn')).not.toBeDisabled());
+
+        fireEvent.change(screen.getByTestId('recovery-new-password-input'), {
+            target: { value: 'NewPassword123!' },
+        });
+        fireEvent.change(screen.getByTestId('recovery-confirm-password-input'), {
+            target: { value: 'NewPassword123!' },
+        });
+        fireEvent.click(screen.getByTestId('recovery-submit-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('feedback-message')).toHaveTextContent(
+                'Error recovering profile: Mnemonic does not match profile'
+            );
+        });
+        expect(mockOnRecoverySuccess).not.toHaveBeenCalled();
+    });
+
+    it('auto-selects the only profile when exactly one local profile exists', async () => {
+        const baseImpl = (invoke as Mock).getMockImplementation();
+        (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+            if (cmd === 'list_profiles') {
+                return Promise.resolve([mockProfiles[0]]);
+            }
+            return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+        });
+
+        render(
+            <WalletRecovery
+                onRecoverySuccess={mockOnRecoverySuccess}
+                onSwitchToLogin={mockOnSwitchToLogin}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('profile-select')).toHaveValue('profile1');
+        });
+        expect(screen.queryByTestId('feedback-message')).toBeNull();
+    });
+
+    it('shows no-profiles error when listProfiles returns empty', async () => {
+        const baseImpl = (invoke as Mock).getMockImplementation();
+        (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+            if (cmd === 'list_profiles') {
+                return Promise.resolve([]);
+            }
+            return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+        });
+
+        render(
+            <WalletRecovery
+                onRecoverySuccess={mockOnRecoverySuccess}
+                onSwitchToLogin={mockOnSwitchToLogin}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('feedback-message')).toHaveTextContent(
+                'No local profiles detected for restoration.'
+            );
+        });
+        expect(screen.queryByTestId('profile-select')).toBeNull();
     });
 });

@@ -344,16 +344,28 @@ describe('RestoreBackupView', () => {
         fireEvent.click(screen.getByTestId('words-continue-btn'));
 
         await waitFor(() => {
+            expect(backupService.probeSyncBackup).toHaveBeenCalledTimes(1);
             expect(screen.getByTestId('sync-unreachable-card')).toBeInTheDocument();
             expect(screen.getByTestId('retry-sync-probe-btn')).toBeInTheDocument();
             expect(screen.getByTestId('proceed-without-backup-btn')).toBeInTheDocument();
         });
 
+        fireEvent.click(screen.getByTestId('retry-sync-probe-btn'));
+        await waitFor(() => {
+            expect(backupService.probeSyncBackup).toHaveBeenCalledTimes(2);
+            expect(backupService.probeSyncBackup).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    syncInputs: ['https://down.example.org/sync.php'],
+                })
+            );
+        });
+        expect(profileService.createProfile).not.toHaveBeenCalled();
+
         fireEvent.click(screen.getByTestId('proceed-without-backup-btn'));
         expect(screen.getByTestId('direct-profile-name-input')).toBeInTheDocument();
     });
 
-    it('shows Smart Local Collision Card when profile exists locally and handles reset_pw or replace', async () => {
+    it('shows Smart Local Collision Card when profile exists locally and defaults to reset_pw when local state is newer', async () => {
         vi.mocked(open).mockResolvedValue('/tmp/my-backup.hmcbackup');
         vi.mocked(backupService.probeBackup).mockResolvedValue({
             sourceKind: 'file',
@@ -422,6 +434,7 @@ describe('RestoreBackupView', () => {
                     newPassword: 'NewLocalPass123',
                 })
             );
+            expect(backupService.restoreBackup).not.toHaveBeenCalled();
             expect(onRestoreSuccess).toHaveBeenCalled();
         });
     });
@@ -493,5 +506,254 @@ describe('RestoreBackupView', () => {
         await waitFor(() => {
             expect(screen.getByTestId('start-social-recovery-btn')).toBeInTheDocument();
         });
+    });
+
+    it('handles Smart Local Collision replace choice by calling restoreBackup with replaceFolderName', async () => {
+        vi.mocked(open).mockResolvedValue('/tmp/my-backup.hmcbackup');
+        vi.mocked(backupService.probeBackup).mockResolvedValue({
+            sourceKind: 'file',
+            protectionMode: 'custom_password',
+            supportsPasswordRestore: true,
+            supportsMnemonicRestore: true,
+            blobCount: 15,
+            customStandardCount: 1,
+        });
+        vi.mocked(backupService.inspectBackup).mockResolvedValue({
+            profileName: 'Alice',
+            userId: 'did:key:z6MkAlice',
+            epoch: 2,
+            txNonce: 10,
+            sealTimestamp: '2026-10-30T10:00:00Z',
+            blobCount: 15,
+            customStandardCount: 1,
+            protectionMode: 'custom_password',
+            localCollision: {
+                folderName: 'alice_local',
+                profileName: 'Alice',
+                userId: 'did:key:z6MkAlice',
+                localEpoch: 3,
+                localTxNonce: 12,
+                isLockedOrConflicted: false,
+            },
+        });
+        vi.mocked(backupService.restoreBackup).mockResolvedValue({
+            folderName: 'alice_local',
+            profileName: 'Alice',
+            activeVoucherQueriesCount: 1,
+            reconciledSpentCount: 0,
+            restoredStandardsCount: 1,
+            l2ReconciliationStatus: 'reconciled',
+        });
+
+        render(<RestoreBackupView onRestoreSuccess={onRestoreSuccess} onBack={onBack} />);
+
+        fireEvent.click(screen.getByTestId('choose-file-or-folder-btn'));
+        fireEvent.click(screen.getByTestId('select-backup-file-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('backup-password-input')).toBeInTheDocument();
+        });
+
+        fireEvent.change(screen.getByTestId('backup-password-input'), {
+            target: { value: 'backupSecret123' },
+        });
+        fireEvent.click(screen.getByTestId('inspect-file-backup-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('collision-choice-replace')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('collision-choice-replace'));
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'NewLocalPass123' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'NewLocalPass123' },
+        });
+        fireEvent.click(screen.getByTestId('restore-submit-btn'));
+
+        await waitFor(() => {
+            expect(backupService.restoreBackup).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    sourcePath: '/tmp/my-backup.hmcbackup',
+                    replaceFolderName: 'alice_local',
+                    credentialMode: 'password',
+                    backupPassword: 'backupSecret123',
+                    newPassword: 'NewLocalPass123',
+                })
+            );
+            expect(screen.getByText('Profile Successfully Restored!')).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Go to My Vouchers' })).toBeInTheDocument();
+        });
+        expect(backupService.resetLocalPasswordViaBackup).not.toHaveBeenCalled();
+    });
+
+    it('validates missing profile name, short password, and mismatched passwords before calling createProfile in direct open flow', async () => {
+        vi.mocked(backupService.previewMnemonicIdentity).mockResolvedValue({
+            userId: 'did:key:z6MkAlice',
+            localCollision: null,
+        });
+
+        render(
+            <RestoreBackupView
+                onRestoreSuccess={onRestoreSuccess}
+                onBack={onBack}
+                initialMethod="words_or_sheet"
+            />
+        );
+
+        fireEvent.change(screen.getByTestId('restore-words-word-0'), {
+            target: { value: VALID_12 },
+        });
+        await waitFor(() => expect(screen.getByTestId('words-continue-btn')).not.toBeDisabled());
+        fireEvent.click(screen.getByTestId('words-continue-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('direct-profile-name-input')).toBeInTheDocument();
+        });
+
+        // Empty profile name
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'StrongPass123!' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'StrongPass123!' },
+        });
+        fireEvent.click(screen.getByTestId('direct-open-profile-submit-btn'));
+        expect(screen.getByText('Please enter a profile name.')).toBeInTheDocument();
+        expect(profileService.createProfile).not.toHaveBeenCalled();
+
+        // Short password
+        fireEvent.change(screen.getByTestId('direct-profile-name-input'), {
+            target: { value: 'Alice' },
+        });
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'Short1!' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'Short1!' },
+        });
+        fireEvent.click(screen.getByTestId('direct-open-profile-submit-btn'));
+        expect(screen.getByText('Error: Password must be at least 8 characters')).toBeInTheDocument();
+        expect(profileService.createProfile).not.toHaveBeenCalled();
+
+        // Mismatched passwords
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'StrongPass123!' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'Different123!' },
+        });
+        fireEvent.click(screen.getByTestId('direct-open-profile-submit-btn'));
+        expect(screen.getByText('Error: The passwords do not match')).toBeInTheDocument();
+        expect(profileService.createProfile).not.toHaveBeenCalled();
+        expect(onRestoreSuccess).not.toHaveBeenCalled();
+    });
+
+    it('validates short and mismatched device passwords before calling restoreBackup on an inspected backup', async () => {
+        vi.mocked(backupService.probeSyncBackup).mockResolvedValue({
+            status: 'found',
+            stagedPath: '/tmp/sync_restore.hmcbackup',
+            matchedKeyKind: 'stealth',
+            sourceUrl: 'https://drop.example.org/data',
+            inspection: {
+                profileName: 'Bob',
+                userId: 'did:key:z6MkBob',
+                epoch: 2,
+                txNonce: 9,
+                sealTimestamp: '2026-11-01T10:00:00Z',
+                blobCount: 10,
+                customStandardCount: 1,
+                protectionMode: 'mnemonic_only',
+                localCollision: null,
+            },
+            userId: 'did:key:z6MkBob',
+            localCollision: null,
+            resolvedSyncTargets: [],
+            error: null,
+        });
+
+        render(
+            <RestoreBackupView
+                onRestoreSuccess={onRestoreSuccess}
+                onBack={onBack}
+                initialMethod="words_or_sheet"
+            />
+        );
+
+        fireEvent.change(screen.getByTestId('restore-words-word-0'), {
+            target: { value: VALID_12 },
+        });
+        fireEvent.change(screen.getByTestId('restore-sync-input'), {
+            target: { value: 'https://drop.example.org/sync.php' },
+        });
+        await waitFor(() => expect(screen.getByTestId('words-continue-btn')).not.toBeDisabled());
+        fireEvent.click(screen.getByTestId('words-continue-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('restore-submit-btn')).toBeInTheDocument();
+        });
+
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'Short1!' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'Short1!' },
+        });
+        fireEvent.click(screen.getByTestId('restore-submit-btn'));
+        expect(screen.getByText('Error: Password must be at least 8 characters')).toBeInTheDocument();
+        expect(backupService.restoreBackup).not.toHaveBeenCalled();
+
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'DevicePass456!' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'OtherPass456!' },
+        });
+        fireEvent.click(screen.getByTestId('restore-submit-btn'));
+        expect(screen.getByText('Error: The passwords do not match')).toBeInTheDocument();
+        expect(backupService.restoreBackup).not.toHaveBeenCalled();
+        expect(onRestoreSuccess).not.toHaveBeenCalled();
+    });
+
+    it('blocks empty backup password and surfaces inspectBackup error without advancing to restore form', async () => {
+        vi.mocked(open).mockResolvedValue('/tmp/my-backup.hmcbackup');
+        vi.mocked(backupService.probeBackup).mockResolvedValue({
+            sourceKind: 'file',
+            protectionMode: 'custom_password',
+            supportsPasswordRestore: true,
+            supportsMnemonicRestore: true,
+            blobCount: 15,
+            customStandardCount: 1,
+        });
+        vi.mocked(backupService.inspectBackup).mockRejectedValue(
+            new Error('Incorrect backup password')
+        );
+
+        render(<RestoreBackupView onRestoreSuccess={onRestoreSuccess} onBack={onBack} />);
+
+        fireEvent.click(screen.getByTestId('choose-file-or-folder-btn'));
+        fireEvent.click(screen.getByTestId('select-backup-file-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('backup-password-input')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('inspect-file-backup-btn'));
+        expect(
+            screen.getByText('Backup password must be at least 8 characters.')
+        ).toBeInTheDocument();
+        expect(backupService.inspectBackup).not.toHaveBeenCalled();
+
+        fireEvent.change(screen.getByTestId('backup-password-input'), {
+            target: { value: 'wrongpass123' },
+        });
+        fireEvent.click(screen.getByTestId('inspect-file-backup-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByText('Incorrect backup password')).toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('restore-submit-btn')).toBeNull();
+        expect(onRestoreSuccess).not.toHaveBeenCalled();
     });
 });

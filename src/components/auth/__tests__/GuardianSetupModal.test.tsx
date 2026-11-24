@@ -106,6 +106,8 @@ describe('GuardianSetupModal Component', () => {
                 questionIds: [1, 2, 3],
                 answers: ['ValidAnswerOne', 'ValidAnswerTwo', 'ValidAnswerThree'],
             });
+            expect(mockOnSuccess).toHaveBeenCalledTimes(1);
+            expect(mockOnClose).toHaveBeenCalledTimes(1);
         });
     });
 
@@ -201,5 +203,171 @@ describe('GuardianSetupModal Component', () => {
         expect(screen.getByTestId('select-contact-did:key:z6MkuContact2')).toBeInTheDocument();
         expect(screen.getByTestId('select-contact-did:key:z6MkuContact3')).toBeInTheDocument();
         expect(screen.getByText('3 / 5')).toBeInTheDocument();
+    });
+
+    it('filters out trustLevel 0 contacts, shows min-contacts warning, and disables submit when fewer than 3 trusted contacts exist', async () => {
+        const twoTrustedPlusUntrusted: Contact[] = [
+            ...mockEligibleContacts.slice(0, 2),
+            {
+                did: 'did:key:z6MkuUntrusted',
+                profile: { id: '4', firstName: 'Untrusted', lastName: 'Person' },
+                tags: [],
+                trustLevel: 0,
+                addedAt: '2026-01-01',
+            },
+        ];
+        vi.mocked(contactService.getContacts).mockResolvedValue(twoTrustedPlusUntrusted);
+
+        render(
+            <GuardianSetupModal
+                isOpen={true}
+                onClose={mockOnClose}
+                onSuccess={mockOnSuccess}
+            />
+        );
+
+        await screen.findByText('Alice Smith');
+
+        expect(screen.queryByText('Untrusted Person')).toBeNull();
+        expect(screen.getByTestId('guardian-min-contacts-hint')).toHaveTextContent(
+            "At least 3 contacts with trust level 'Acquainted' or higher are required (currently available: 2)."
+        );
+
+        fireEvent.click(screen.getByTestId('select-contact-did:key:z6MkuContact1'));
+        fireEvent.click(screen.getByTestId('select-contact-did:key:z6MkuContact2'));
+        fireEvent.change(screen.getByTestId('guardian-answer-0'), { target: { value: 'ValidAnswerOne' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-1'), { target: { value: 'ValidAnswerTwo' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-2'), { target: { value: 'ValidAnswerThree' } });
+        fireEvent.change(screen.getByTestId('guardian-password-input'), {
+            target: { value: 'CorrectPassword123' },
+        });
+
+        expect(screen.getByTestId('guardian-setup-submit-btn')).toBeDisabled();
+        expect(recoveryService.setupSocialRecoveryGuardians).not.toHaveBeenCalled();
+    });
+
+    it('enforces answer length rules and password requirement before enabling submit', async () => {
+        render(
+            <GuardianSetupModal
+                isOpen={true}
+                onClose={mockOnClose}
+                onSuccess={mockOnSuccess}
+            />
+        );
+
+        await screen.findByText('Alice Smith');
+
+        fireEvent.change(screen.getByTestId('guardian-answer-0'), { target: { value: 'ab' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-1'), { target: { value: 'cd' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-2'), { target: { value: 'ef' } });
+        fireEvent.change(screen.getByTestId('guardian-password-input'), {
+            target: { value: 'CorrectPassword123' },
+        });
+
+        expect(
+            screen.getByText(
+                'All 3 answers must have at least 2 characters each and at least 12 characters combined.'
+            )
+        ).toBeInTheDocument();
+        expect(screen.getByTestId('guardian-setup-submit-btn')).toBeDisabled();
+
+        // Single-char individual answer still fails even when combined length >= 12
+        fireEvent.change(screen.getByTestId('guardian-answer-0'), { target: { value: 'a' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-1'), { target: { value: 'LongAnswerOne' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-2'), { target: { value: 'LongAnswerTwo' } });
+        expect(
+            screen.getByText(
+                'All 3 answers must have at least 2 characters each and at least 12 characters combined.'
+            )
+        ).toBeInTheDocument();
+        expect(screen.getByTestId('guardian-setup-submit-btn')).toBeDisabled();
+
+        // Fix answer 0, clear password -> still disabled until password provided
+        fireEvent.change(screen.getByTestId('guardian-answer-0'), { target: { value: 'ab' } });
+        fireEvent.change(screen.getByTestId('guardian-password-input'), { target: { value: '' } });
+        expect(
+            screen.queryByText(
+                'All 3 answers must have at least 2 characters each and at least 12 characters combined.'
+            )
+        ).toBeNull();
+        expect(screen.getByTestId('guardian-setup-submit-btn')).toBeDisabled();
+
+        // Positive baseline: restore password -> submit enabled
+        fireEvent.change(screen.getByTestId('guardian-password-input'), {
+            target: { value: 'CorrectPassword123' },
+        });
+        expect(screen.getByTestId('guardian-setup-submit-btn')).not.toBeDisabled();
+    });
+
+    it('keeps modal open with delivery warning when guardian sync reaches zero servers and closes on acknowledgement', async () => {
+        vi.mocked(recoveryService.setupSocialRecoveryGuardians).mockResolvedValue({
+            rotationEpoch: 1,
+            thresholdM: 2,
+            guardiansCount: 3,
+            postSyncResult: { uploadedTo: 0, errors: [] },
+            backupSyncResult: null,
+        });
+
+        render(
+            <GuardianSetupModal
+                isOpen={true}
+                onClose={mockOnClose}
+                onSuccess={mockOnSuccess}
+            />
+        );
+
+        await screen.findByText('Alice Smith');
+
+        fireEvent.change(screen.getByTestId('guardian-answer-0'), { target: { value: 'ValidAnswerOne' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-1'), { target: { value: 'ValidAnswerTwo' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-2'), { target: { value: 'ValidAnswerThree' } });
+        fireEvent.change(screen.getByTestId('guardian-password-input'), {
+            target: { value: 'CorrectPassword123' },
+        });
+        fireEvent.click(screen.getByTestId('guardian-setup-submit-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('guardian-setup-unreachable-warning')).toHaveTextContent(
+                'none of their sync services were reachable'
+            );
+        });
+
+        expect(mockOnSuccess).toHaveBeenCalledTimes(1);
+        expect(mockOnClose).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole('button', { name: /Understood|Verstanden/i }));
+        expect(mockOnClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('displays backend error and stays open without calling onSuccess or onClose when setupSocialRecoveryGuardians rejects', async () => {
+        vi.mocked(recoveryService.setupSocialRecoveryGuardians).mockRejectedValue(
+            new Error('Invalid wallet password')
+        );
+
+        render(
+            <GuardianSetupModal
+                isOpen={true}
+                onClose={mockOnClose}
+                onSuccess={mockOnSuccess}
+            />
+        );
+
+        await screen.findByText('Alice Smith');
+
+        fireEvent.change(screen.getByTestId('guardian-answer-0'), { target: { value: 'ValidAnswerOne' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-1'), { target: { value: 'ValidAnswerTwo' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-2'), { target: { value: 'ValidAnswerThree' } });
+        fireEvent.change(screen.getByTestId('guardian-password-input'), {
+            target: { value: 'WrongPassword' },
+        });
+        fireEvent.click(screen.getByTestId('guardian-setup-submit-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByText('Invalid wallet password')).toBeInTheDocument();
+        });
+
+        expect(screen.getByTestId('guardian-setup-submit-btn')).toBeInTheDocument();
+        expect(mockOnSuccess).not.toHaveBeenCalled();
+        expect(mockOnClose).not.toHaveBeenCalled();
     });
 });

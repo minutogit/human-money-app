@@ -62,6 +62,18 @@ describe('SeedPhraseInput Component', () => {
 
         await waitFor(() => {
             expect(profileService.validateMnemonic).toHaveBeenCalledWith(SEED_24, expect.any(String));
+            expect(screen.getByTestId('seed-validation-status')).toHaveTextContent(
+                'Seed phrase is valid.'
+            );
+            const calls = onChange.mock.calls;
+            const lastCall = calls[calls.length - 1]?.[0];
+            expect(lastCall).toEqual(
+                expect.objectContaining({
+                    wordCount: 24,
+                    isValid: true,
+                    mnemonic: SEED_24,
+                })
+            );
         });
     });
 
@@ -150,5 +162,78 @@ describe('SeedPhraseInput Component', () => {
         await waitFor(() => {
             expect(screen.getByTestId('seed-user-prefix-input')).toBeInTheDocument();
         });
+    });
+
+    it('marks mnemonic invalid and renders error when validation fails across all 11 BIP-39 languages', async () => {
+        vi.mocked(profileService.validateMnemonic).mockRejectedValue(
+            new Error('Invalid BIP-39 checksum')
+        );
+
+        render(<SeedPhraseInput onChange={onChange} idPrefix="test" />);
+
+        fireEvent.change(screen.getByTestId('test-word-0'), {
+            target: { value: SEED_12 },
+        });
+
+        await waitFor(
+            () => {
+                expect(screen.getByTestId('seed-validation-status')).toHaveTextContent(
+                    'Invalid BIP-39 checksum'
+                );
+            },
+            { timeout: 3000 }
+        );
+
+        expect(profileService.validateMnemonic).toHaveBeenCalledTimes(11);
+        expect(screen.queryByText('Seed phrase is valid.')).toBeNull();
+        const calls = onChange.mock.calls;
+        const lastCall = calls[calls.length - 1]?.[0];
+        expect(lastCall).toEqual(
+            expect.objectContaining({
+                mnemonic: SEED_12,
+                isValid: false,
+            })
+        );
+    });
+
+    it('surfaces kit inspection error and emits isValid false when inspectEmergencyKitUri rejects', async () => {
+        vi.mocked(recoveryService.inspectEmergencyKitUri).mockRejectedValue(
+            new Error('Corrupted kit URI')
+        );
+
+        render(<SeedPhraseInput onChange={onChange} allowKitUri idPrefix="test" />);
+
+        fireEvent.change(screen.getByTestId('test-word-0'), {
+            target: { value: 'humoco://kit?v=1&ent=bad' },
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId('seed-validation-status')).toHaveTextContent(
+                'Corrupted kit URI'
+            );
+        });
+
+        expect(screen.queryByTestId('detected-kit-banner')).toBeNull();
+        const calls = onChange.mock.calls;
+        const lastCall = calls[calls.length - 1]?.[0];
+        expect(lastCall).toEqual(
+            expect.objectContaining({
+                isValid: false,
+                detectedKit: null,
+            })
+        );
+    });
+
+    it('ignores humoco://kit URIs and hides QR scan button when allowKitUri is false', () => {
+        render(<SeedPhraseInput onChange={onChange} allowKitUri={false} idPrefix="nokit" />);
+
+        expect(screen.queryByTestId('seed-scan-kit-qr-btn')).toBeNull();
+
+        fireEvent.change(screen.getByTestId('nokit-word-0'), {
+            target: { value: 'humoco://kit?v=1&ent=abcd' },
+        });
+
+        expect(recoveryService.inspectEmergencyKitUri).not.toHaveBeenCalled();
+        expect(screen.queryByTestId('detected-kit-banner')).toBeNull();
     });
 });
