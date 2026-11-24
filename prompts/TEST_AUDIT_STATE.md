@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `acf9cb3`
-- **Total Test Files:** 165 | **Total Test Functions:** 1234
+- **Updated at HEAD:** `171f0d0`
+- **Total Test Files:** 165 | **Total Test Functions:** 1244
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -16,10 +16,10 @@
 | `crates/humoco-market/tests/card_tests.rs` | P1 | 24 | 0/0/0 | 🟢 Verified | `acf9cb3` | 24/24 pass; hardened 11 .is_err(), AcceptOutcome wildcards & geo-eviction outcomes; cargo-mutants sd_card.rs validate_sd_card/verify_sd_card 51/66 viable caught (2 unviable) |
 | `crates/humoco-market/tests/audit_wave1_regressions.rs` | P1 | 4 | 0/0/0 | 🟢 Verified | `acf9cb3` | 4/4 pass; hardened 10 .is_err() & 5 wildcards to exact MarketError/AcceptOutcome variants; cargo-mutants media.rs open_media_blob 5/10 caught & recovery.rs upsert_ward 11/16 caught |
 | `src-tauri/src/services/recovery_service/tests.rs` | P1 | 17 | 0/0/0 | 🟢 Verified | `acf9cb3` | 17/17 pass (352/352 lib); RAII TempDirGuard, split 3-of-5 mega-test, removed let _ discards & hardened 10 .is_err() / 4 .is_some() / s07_f19; cargo-mutants complete.rs 8/11 & session.rs 18/26 viable caught |
-| `src-tauri/src/l2_lifecycle/tests.rs` | P1 | 23 | 0/7/31 | ⚪ Pending | — | — |
-| `crates/humoco-market/tests/security_audit_s01_market_loop.rs` | P1 | 9 | 0/6/2 | ⚪ Pending | — | — |
-| `src-tauri/src/commands/auth.rs` | P1 | 10 | 0/6/6 | ⚪ Pending | — | — |
-| `src-tauri/src/models/market.rs` | P1 | 1 | 0/6/0 | ⚪ Pending | — | — |
+| `src-tauri/src/l2_lifecycle/tests.rs` | P1 | 26 | 0/0/0 | 🟢 Verified | `171f0d0` | `cargo test --lib (359/359 pass, 26/26 l2_lifecycle::tests); cargo mutants rotation_policy.rs: 21/26 CAUGHT` |
+| `crates/humoco-market/tests/security_audit_s01_market_loop.rs` | P1 | 12 | 0/0/0 | 🟢 Verified | `171f0d0` | `cargo test (148/148 humoco-market pass, 12/12 s01_market_loop); cargo mutants recovery.rs: 12/30 CAUGHT` |
+| `src-tauri/src/commands/auth.rs` | P1 | 14 | 0/0/0 | 🟢 Verified | `171f0d0` | `cargo test --lib (359/359 pass, 14/14 commands::auth::tests); cargo mutants commands/auth.rs: 2/7 CAUGHT` |
+| `src-tauri/src/models/market.rs` | P1 | 1 | 0/0/0 | 🟢 Verified | `171f0d0` | `cargo test --lib (359/359 pass, 1/1 s11_tests); Revert-Red on FrontendSaveMyMarketProfileRequest deny_unknown_fields` |
 | `crates/humoco-market/tests/media_tests.rs` | P1 | 14 | 0/4/0 | ⚪ Pending | — | — |
 | `src/components/auth/__tests__/CreateNewProfile.test.tsx` | P1 | 18 | 0/1/0 | ⚪ Pending | — | — |
 | `crates/humoco-market/tests/market_view_tests.rs` | P1 | 14 | 0/0/1 | ⚪ Pending | — | — |
