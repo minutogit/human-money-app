@@ -98,7 +98,7 @@ describe('Conflict Views (.hmcproof export and import)', () => {
 
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith('export_double_spend_proof', { proofId: mockProofId });
-        expect(writeFile).toHaveBeenCalledWith('/tmp/proof.hmcproof', expect.any(Uint8Array));
+        expect(writeFile).toHaveBeenCalledWith('/tmp/proof.hmcproof', new Uint8Array([10, 20, 30, 40]));
         expect(screen.getByText('/tmp/proof.hmcproof')).toBeInTheDocument();
       });
     });
@@ -583,6 +583,259 @@ describe('Conflict Views (.hmcproof export and import)', () => {
         expect(fetchCount).toBeGreaterThanOrEqual(2);
       });
     });
+
+    it('keeps 0-trusted warning active when only blocked-by-offender or own endorsements exist', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:offender',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [],
+              isCryptographicallyAttributed: true,
+              resolutions: [
+                {
+                  endorsementId: 'end-own',
+                  proofId: mockProofId,
+                  endorserId: 'did:key:z6MkAliceOwn',
+                  resolutionTimestamp: '2024-01-02T00:00:00Z',
+                  notes: 'Own note',
+                  endorserSignature: 'sig-own',
+                  endorserName: 'Alice',
+                  isOwnIdentity: true,
+                  wotTrust: {
+                    score: 1,
+                    trustPercent: 100,
+                    isOwnVoucher: true,
+                    blockedByOffender: false,
+                    shortestHops: 0,
+                    primaryBridgeDid: null,
+                    primaryBridgeName: null,
+                    additionalPathsCount: 0,
+                    viaGuarantor: false,
+                    bestPathNames: [],
+                  },
+                },
+                {
+                  endorsementId: 'end-blocked',
+                  proofId: mockProofId,
+                  endorserId: 'did:key:z6MkBlocked',
+                  resolutionTimestamp: '2024-01-03T00:00:00Z',
+                  notes: 'Blocked path note',
+                  endorserSignature: 'sig-blocked',
+                  endorserName: 'Mallory Friend',
+                  isOwnIdentity: false,
+                  wotTrust: {
+                    score: 0.85,
+                    trustPercent: 85,
+                    isOwnVoucher: false,
+                    blockedByOffender: true,
+                    shortestHops: 1,
+                    primaryBridgeDid: null,
+                    primaryBridgeName: null,
+                    additionalPathsCount: 0,
+                    viaGuarantor: false,
+                    bestPathNames: ['Mallory Friend'],
+                  },
+                },
+              ],
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+            canEndorse: true,
+            hasOwnEndorsement: true,
+          });
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <UiModeProvider>
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('conflict-local-override-warning')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('conflict-local-override-warning')).toHaveTextContent(
+        'Warning: None of your trusted Web-of-Trust contacts have signed a resolution note for this conflict yet.'
+      );
+    });
+
+    it('blocks endorsement submission when note exceeds 512 UTF-8 bytes including multi-byte characters', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:offender',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [],
+              isCryptographicallyAttributed: true,
+              resolutions: [],
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+            canEndorse: true,
+            hasOwnEndorsement: false,
+          });
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <UiModeProvider>
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Confirm & Sign Resolution/i })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Confirm & Sign Resolution/i }));
+
+      const noteInput = screen.getByPlaceholderText(/Optional note/i);
+      const signBtn = screen.getByRole('button', { name: /Sign & Attach Confirmation/i });
+
+      // 256 x 'ä' = exactly 512 UTF-8 bytes -> allowed (positive baseline)
+      fireEvent.change(noteInput, { target: { value: 'ä'.repeat(256) } });
+      expect(screen.getByText('512 / 512 bytes')).toBeInTheDocument();
+      expect(signBtn).not.toBeDisabled();
+
+      // 257 x 'ä' = 514 UTF-8 bytes despite < 512 chars -> disabled
+      fireEvent.change(noteInput, { target: { value: 'ä'.repeat(257) } });
+      expect(screen.getByText('514 / 512 bytes')).toBeInTheDocument();
+      expect(signBtn).toBeDisabled();
+      fireEvent.click(signBtn);
+      expect(invoke).not.toHaveBeenCalledWith('endorse_conflict_resolution', expect.anything());
+    });
+
+    it('matches rated offender contact by bare root DID and revokes trust rating via save_contact', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:z6MkOffenderRoot',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [],
+              isCryptographicallyAttributed: true,
+              resolutions: [],
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+            canEndorse: false,
+            hasOwnEndorsement: false,
+          });
+        }
+        if (cmd === 'get_contacts') {
+          return Promise.resolve([
+            {
+              did: 'shop:abc@did:key:z6MkOffenderRoot',
+              profile: { id: 'shop:abc@did:key:z6MkOffenderRoot', firstName: 'Mallory' },
+              tags: [],
+              trustLevel: 2,
+              desiredHops: 2,
+              addedAt: '2024-01-01T00:00:00Z',
+            },
+          ]);
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <UiModeProvider>
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('This person is currently rated as trusted in your address book')
+        ).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Revoke Trust Rating Now' }));
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('save_contact', {
+          contact: expect.objectContaining({
+            did: 'shop:abc@did:key:z6MkOffenderRoot',
+            trustLevel: null,
+            desiredHops: null,
+          }),
+          password: 'test-password',
+          preserveManualCard: false,
+        });
+        expect(screen.getByText('Trust rating removed from your address book.')).toBeInTheDocument();
+      });
+    });
+
+    it('shows unverified suspected identity warning in expert mode when proof is not cryptographically attributed', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:z6MkEphemeral999',
+              suspectedIdentity: 'did:key:z6MkSuspect123',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [],
+              isCryptographicallyAttributed: false,
+              resolutions: [],
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+            canEndorse: false,
+            hasOwnEndorsement: false,
+          });
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <UiModeProvider initialMode="expert">
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Ephemeral Key / Unverified Local Hint')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('conflict-suspected-identity')).toHaveTextContent(
+        'Suspected counterparty (hint)'
+      );
+      expect(
+        screen.getByText(
+          'This identity is an unverified local hint from transaction metadata, not mathematically proven by an SST trap.'
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/SST V4 Cryptographically Proven Identity/i)).toBeNull();
+    });
+
+    it('displays error state when get_proof_of_double_spend rejects', async () => {
+      (invoke as Mock).mockRejectedValue(new Error('Proof DB unavailable'));
+
+      render(<ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(/Failed to fetch double-spend proof details: Proof DB unavailable/)
+        ).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('conflict-three-questions')).toBeNull();
+    });
   });
 
   describe('ConflictListView', () => {
@@ -657,6 +910,55 @@ describe('Conflict Views (.hmcproof export and import)', () => {
         });
         expect(mockOnViewConflict).toHaveBeenCalledWith('imported-proof-999');
       });
+    });
+
+    it('separates witness conflicts, navigates on View Details, and surfaces import failure without navigating', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_double_spend_conflicts') {
+          return Promise.resolve([
+            {
+              proofId: 'witness-proof-1',
+              offenderId: 'did:key:z6MkOffender',
+              forkPointPrevHash: 'hash-1',
+              affectedVoucherName: 'Minuto Witness',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              conflictRole: 'witness',
+              endorsementCount: 0,
+              localOverride: false,
+            },
+          ]);
+        }
+        if (cmd === 'import_double_spend_proof') {
+          return Promise.reject(new Error('Corrupted proof signature'));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      (open as Mock).mockResolvedValue('/tmp/bad.hmcproof');
+      (readFile as Mock).mockResolvedValue(new Uint8Array([1, 2]));
+
+      render(<ConflictListView onBack={mockOnBack} onViewConflict={mockOnViewConflict} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Network Witness Reports (1)')).toBeInTheDocument();
+      });
+
+      expect(
+        screen.getByText('Network notice about another person’s voucher — your own balance is unaffected.')
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'View Details' }));
+      expect(mockOnViewConflict).toHaveBeenCalledTimes(1);
+      expect(mockOnViewConflict).toHaveBeenCalledWith('witness-proof-1');
+
+      fireEvent.click(screen.getByRole('button', { name: /Import Fraud Proof \(\.hmcproof\)/i }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('Failed to import fraud proof: Corrupted proof signature')
+        ).toBeInTheDocument();
+      });
+      expect(mockOnViewConflict).toHaveBeenCalledTimes(1);
     });
   });
 });

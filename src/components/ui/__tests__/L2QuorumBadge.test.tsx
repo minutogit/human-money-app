@@ -32,9 +32,37 @@ describe('L2QuorumBadge', () => {
   });
 
   it('does not trust standalone confirmation props either', () => {
-    render(<L2QuorumBadge status="final" signerCount={15} activeNodesCount={20} />);
+    const { rerender } = render(
+      <L2QuorumBadge
+        status="final"
+        signerCount={15}
+        activeNodesCount={20}
+        shardId={7}
+        details="Forged standalone detail"
+        showDetails
+      />
+    );
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('unverified');
-    expect(screen.queryByTestId('l2-quorum-count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('l2-quorum-count')).toBeNull();
+    expect(screen.queryByText('Shard #7')).toBeNull();
+    expect(screen.queryByText('Forged standalone detail')).toBeNull();
+    expect(screen.queryByTestId('l2-toggle-tech-diagnostics')).toBeNull();
+
+    rerender(
+      <L2QuorumBadge
+        status="provisional"
+        signerCount={10}
+        activeNodesCount={20}
+        shardId={3}
+        details="Forged provisional detail"
+        showDetails
+      />
+    );
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('unverified');
+    expect(screen.queryByTestId('l2-quorum-count')).toBeNull();
+    expect(screen.queryByText('Shard #3')).toBeNull();
+    expect(screen.queryByText('Forged provisional detail')).toBeNull();
+    expect(screen.queryByTestId('l2-toggle-tech-diagnostics')).toBeNull();
   });
 
   it('preserves conflict warnings', () => {
@@ -111,5 +139,98 @@ describe('L2QuorumBadge', () => {
     expect(screen.getByTestId('reduced-guarantor-protection-badge')).toHaveTextContent(
       'voucher.reducedGuarantorProtectionBadge'
     );
+  });
+
+  it('prioritizes quorum.status over conflicting standalone status prop', () => {
+    render(
+      <L2QuorumBadge
+        quorum={{ status: 'conflict', details: 'Double spend' }}
+        status="final"
+        isVerifiedCheckout={true}
+        showDetails
+      />
+    );
+    expect(screen.getByText('Doppelausgabe erkannt!')).toBeInTheDocument();
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('conflict');
+    expect(screen.getByTestId('l2-quorum-badge').className).toContain('rose');
+    expect(screen.getByTestId('l2-quorum-badge').className).not.toContain('emerald');
+  });
+
+  it('preserves yellow warning quorum counts, shard, and technical details without isVerifiedCheckout', () => {
+    render(
+      <L2QuorumBadge
+        status="yellow"
+        signerCount={1}
+        activeNodesCount={3}
+        shardId={2}
+        details="1/3 trusted"
+        showDetails
+      />
+    );
+    expect(screen.getByText('Eingeschränkt (Gelb)')).toBeInTheDocument();
+    expect(screen.getByTestId('l2-quorum-count')).toHaveTextContent('1/3 Server');
+
+    fireEvent.click(screen.getByTestId('l2-toggle-tech-diagnostics'));
+    expect(screen.getByTestId('l2-tech-details')).toHaveTextContent('1/3 (33%)');
+    expect(screen.getByText('Shard #2')).toBeInTheDocument();
+    expect(screen.getByText('1/3 trusted')).toBeInTheDocument();
+  });
+
+  it('avoids division by zero when activeNodesCount is 0 and clamps progress bar width to 100%', () => {
+    const { rerender } = render(
+      <L2QuorumBadge status="yellow" signerCount={0} activeNodesCount={0} showDetails />
+    );
+    fireEvent.click(screen.getByTestId('l2-toggle-tech-diagnostics'));
+    const techZero = screen.getByTestId('l2-tech-details');
+    expect(techZero.textContent).not.toContain('NaN');
+    expect(techZero.textContent).not.toContain('Infinity');
+    expect(screen.queryByText('Shard Confirmation')).toBeNull();
+
+    rerender(
+      <L2QuorumBadge
+        status="final"
+        isVerifiedCheckout={true}
+        signerCount={5}
+        activeNodesCount={4}
+        showDetails
+      />
+    );
+    const techOver = screen.getByTestId('l2-tech-details');
+    expect(techOver).toHaveTextContent('5/4 (125%)');
+    const bar = techOver.querySelector('.h-full.rounded-full');
+    expect(bar).not.toBeNull();
+    expect(bar).toHaveStyle({ width: '100%' });
+  });
+
+  it('renders conflict progress bar with rose styling rather than emerald', () => {
+    render(
+      <L2QuorumBadge
+        status="conflict"
+        signerCount={2}
+        activeNodesCount={4}
+        showDetails
+      />
+    );
+    fireEvent.click(screen.getByTestId('l2-toggle-tech-diagnostics'));
+    const bar = screen.getByTestId('l2-tech-details').querySelector('.h-full.rounded-full');
+    expect(bar).not.toBeNull();
+    expect(bar!.className).toContain('bg-rose-500');
+    expect(bar!.className).not.toContain('bg-emerald-500');
+  });
+
+  it('renders optional pillarLabel and updates aria-expanded on details toggle', () => {
+    render(<L2QuorumBadge pillarLabel="Layer 2 Lock" />);
+    expect(screen.getByText('Layer 2 Lock')).toBeInTheDocument();
+
+    const toggle = screen.getByTestId('l2-toggle-details');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('l2-merchant-infobox')).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('l2-merchant-infobox')).toBeNull();
   });
 });

@@ -255,6 +255,148 @@ describe('WoT Contacts & Trust Ratings', () => {
         expect(screen.getByTestId('trust-preview-lose-wot')).toBeInTheDocument();
       });
     });
+
+    it('blocks saving own active profile DID and skips trust preview', async () => {
+      const onSaveMock = vi.fn().mockResolvedValue(undefined);
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_user_id') return Promise.resolve('did:key:z6MkOwnActive');
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <ContactDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSaveMock}
+          initialDid="did:key:z6MkOwnActive"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('self-active-profile-warning')).toHaveTextContent(
+          'This is your currently active own profile.'
+        );
+      });
+
+      const saveBtn = screen.getByRole('button', { name: /Save Contact/i });
+      expect(saveBtn).toBeDisabled();
+      fireEvent.click(saveBtn);
+
+      expect(onSaveMock).not.toHaveBeenCalled();
+      expect(invoke).not.toHaveBeenCalledWith('preview_contact_trust_change', expect.anything());
+    });
+
+    it('disables self-rating and forces null trustLevel for own subaccount sharing canonical root key', async () => {
+      const onSaveMock = vi.fn().mockResolvedValue(undefined);
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_user_id') return Promise.resolve('did:key:z6MkOwnRoot');
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <ContactDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSaveMock}
+          initialDid="shop:abc@did:key:z6MkOwnRoot"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('own-subaccount-trust-notice')).toHaveTextContent(
+          'Own subaccount detected'
+        );
+      });
+
+      expect(screen.queryByText(/Close Confidant/i)).toBeNull();
+      expect(invoke).not.toHaveBeenCalledWith('preview_contact_trust_change', expect.anything());
+
+      fireEvent.click(screen.getByRole('button', { name: /Save Contact/i }));
+
+      await waitFor(() => {
+        expect(onSaveMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            did: 'shop:abc@did:key:z6MkOwnRoot',
+            trustLevel: null,
+            desiredHops: null,
+          })
+        );
+      });
+    });
+
+    it('inherits trust level from existing sibling-prefix contact sharing the same canonical root key', async () => {
+      const onSaveMock = vi.fn().mockResolvedValue(undefined);
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_user_id') return Promise.resolve('did:key:z6MkOtherSelf');
+        if (cmd === 'get_contacts') {
+          return Promise.resolve([
+            {
+              did: 'laden:abc@did:key:z6MkAliceRoot',
+              profile: { id: 'laden:abc@did:key:z6MkAliceRoot', firstName: 'Alice' },
+              tags: [],
+              trustLevel: 2,
+              addedAt: '2024-01-01T00:00:00Z',
+            },
+          ]);
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <ContactDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSaveMock}
+          initialDid="privat:def@did:key:z6MkAliceRoot"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('sibling-prefix-trust-notice')).toHaveTextContent(
+          'You already saved "Alice" under the same base key.'
+        );
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Save Contact/i }));
+
+      await waitFor(() => {
+        expect(onSaveMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            did: 'privat:def@did:key:z6MkAliceRoot',
+            trustLevel: 2,
+            desiredHops: null,
+          })
+        );
+      });
+    });
+
+    it('keeps dialog open and displays error when onSave rejects', async () => {
+      const onCloseMock = vi.fn();
+      const onSaveMock = vi.fn().mockRejectedValue(new Error('Database write failed'));
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_user_id') return Promise.resolve('did:key:z6MkOtherSelf');
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <ContactDialog
+          isOpen={true}
+          onClose={onCloseMock}
+          onSave={onSaveMock}
+          initialDid="did:key:z6MkFailSave"
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Save Contact/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Database write failed')).toBeInTheDocument();
+      });
+      expect(onCloseMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('AddressBook Component', () => {
@@ -287,7 +429,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       },
     ];
 
-    it('loads and displays WoT banner stats and contact card trust pills', async () => {
+    it('loads and displays contact card trust pills and synced peer list badge', async () => {
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
@@ -303,6 +445,8 @@ describe('WoT Contacts & Trust Ratings', () => {
       // Wait for contacts to load
       await waitFor(() => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
+        expect(invoke).toHaveBeenCalledWith('get_contacts');
+        expect(invoke).toHaveBeenCalledWith('get_wot_summary');
       });
 
       // Contact trust pills should display
@@ -439,11 +583,8 @@ describe('WoT Contacts & Trust Ratings', () => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
       });
 
-      // Expand network options if collapsed in compact mode
-      const toggleBtn = screen.queryByTestId('toggle-network-options-button');
-      if (toggleBtn) {
-        fireEvent.click(toggleBtn);
-      }
+      // Expand network options in Expert mode
+      fireEvent.click(screen.getByTestId('toggle-network-options-button'));
 
       // Find the "2 Hops" granular button in Expert controls
       const hop2Btn = screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops|\+ their contacts|\+ deren Kontakte/i });
@@ -487,10 +628,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       });
 
       // Open Trust List menu modal, then export modal
-      const toggleBtn = screen.queryByTestId('toggle-network-options-button');
-      if (toggleBtn) {
-        fireEvent.click(toggleBtn);
-      }
+      fireEvent.click(screen.getByTestId('toggle-network-options-button'));
       const trustListMenuBtn = screen.getByTestId('trust-list-menu-button');
       fireEvent.click(trustListMenuBtn);
 
@@ -646,7 +784,14 @@ describe('WoT Contacts & Trust Ratings', () => {
       fireEvent.click(screen.getByRole('button', { name: /^Import$|^Importieren$|^Confirm$/i }));
 
       await waitFor(() => {
-        expect(screen.getByTestId('wot-password-error')).toBeInTheDocument();
+        expect(invoke).toHaveBeenCalledWith('import_wot_package', {
+          containerBytes: [1, 2, 3],
+          containerPassword: 'wrong-pass',
+          password: null,
+        });
+        expect(screen.getByTestId('wot-password-error')).toHaveTextContent(
+          'Incorrect password or file could not be decrypted.'
+        );
       });
     });
   });
