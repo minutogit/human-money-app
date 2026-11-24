@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `cc02db3`
-- **Total Test Files:** 165 | **Total Test Functions:** 1320
+- **Updated at HEAD:** `82896e2`
+- **Total Test Files:** 165 | **Total Test Functions:** 1356
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -49,17 +49,17 @@
 | `src/components/auth/__tests__/WalletRecovery.test.tsx` | P1 | 9 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 9/9 (98 files / 779 tests full pass); short pw, single/empty profile & error paths; Revert-Red WalletRecovery.tsx newPassword.length < 8` |
 | `src/components/conflicts/__tests__/ConflictViews.test.tsx` | P1 | 16 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 16/16 pass; tested blockedByOffender 0-trusted warning, 512B UTF-8 cap, bare root DID revocation, SST & witness conflicts; Revert-Red ConflictDetailsView !blockedByOffender` |
 | `src/components/contacts/__tests__/WotContacts.test.tsx` | P1 | 19 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 19/19 pass; added ContactDialog self-active block, subaccount null trust, sibling inheritance & rejection tests; Revert-Red ContactDialog isExactSelf` |
-| `src/components/marketplace/__tests__/AdCard.test.tsx` | P1 | 12 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/marketplace/__tests__/AdEditorModal.test.tsx` | P1 | 10 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/marketplace/__tests__/AdCard.test.tsx` | P1 | 18 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 18/18 pass; Fail-First RED->GREEN AdCard manualLoadedKey across imageToken changes, hardened warning colors, resolveAuthorHops & cellular isOwn` |
+| `src/components/marketplace/__tests__/AdEditorModal.test.tsx` | P1 | 16 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 16/16 pass; added event date guards, 6h edit grace, length limits, preset chips, cardPublished=false & error paths; Revert-Red AdEditorModal maxEventSecs` |
 | `src/components/marketplace/__tests__/BoardTab.test.tsx` | P1 | 7 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/marketplace/__tests__/ImportCardModal.test.tsx` | P1 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/marketplace/__tests__/MarketPersonView.test.tsx` | P1 | 5 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/marketplace/__tests__/ImportCardModal.test.tsx` | P1 | 11 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 11/11 pass; hardened counter-scan QR SVG, covered contact URI sibling trust, Level-0 delete/clear & errors; Revert-Red ImportCardModal isExactSameUserId` |
+| `src/components/marketplace/__tests__/MarketPersonView.test.tsx` | P1 | 13 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 13/13 pass; Fail-First RED->GREEN openUrl scheme/normalization & address.fullAddress fallback, inquiry, forward & contact state` |
 | `src/components/marketplace/__tests__/MarketplaceView.test.tsx` | P1 | 13 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/marketplace/__tests__/MineTab.test.tsx` | P1 | 7 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/marketplace/__tests__/PeopleTab.test.tsx` | P1 | 4 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/marketplace/__tests__/ProfileCardEditor.test.tsx` | P1 | 11 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/marketplace/__tests__/RenewAdModal.test.tsx` | P1 | 3 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/marketplace/__tests__/ShareCardModal.test.tsx` | P1 | 5 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/marketplace/__tests__/RenewAdModal.test.tsx` | P1 | 7 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 7/7 pass; covered null ad, error rollback, in-flight duplicate guard, late close & live preview; Revert-Red RenewAdModal isSubmitting` |
+| `src/components/marketplace/__tests__/ShareCardModal.test.tsx` | P1 | 10 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 10/10 pass; hardened exact .hmcard bytes & path, covered null disable, write error, reset & unsafe SVG rejection; Revert-Red ShareCardPanel !fileWire` |
 | `src/components/settings/__tests__/BackupSettingsCard.test.tsx` | P1 | 18 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 18/18 pass; hardened password & try/finally listener cleanup, added toggle/unlink rollbacks, syncBackup & backup-now routing; Revert-Red BackupSettingsCard rollback` |
 | `src/components/settings/__tests__/ViewAndLockCard.test.tsx` | P1 | 5 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 5/5 pass; added decimal flooring, null/external sync, in-flight lock & disabled guard; Revert-Red ViewAndLockCard parsed >= 0` |
 | `src/components/ui/__tests__/L2QuorumBadge.test.tsx` | P1 | 14 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 16/16 pass (14 fn); hardened standalone props & added quorum precedence, yellow/0-node/NaN/100% clamp & rose conflict bar; Revert-Red L2QuorumBadge unsupportedConfirmation` |
