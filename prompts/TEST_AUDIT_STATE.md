@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `171f0d0`
-- **Total Test Files:** 165 | **Total Test Functions:** 1244
+- **Updated at HEAD:** `efd5939`
+- **Total Test Files:** 165 | **Total Test Functions:** 1251
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -20,15 +20,15 @@
 | `crates/humoco-market/tests/security_audit_s01_market_loop.rs` | P1 | 12 | 0/0/0 | 🟢 Verified | `171f0d0` | `cargo test (148/148 humoco-market pass, 12/12 s01_market_loop); cargo mutants recovery.rs: 12/30 CAUGHT` |
 | `src-tauri/src/commands/auth.rs` | P1 | 14 | 0/0/0 | 🟢 Verified | `171f0d0` | `cargo test --lib (359/359 pass, 14/14 commands::auth::tests); cargo mutants commands/auth.rs: 2/7 CAUGHT` |
 | `src-tauri/src/models/market.rs` | P1 | 1 | 0/0/0 | 🟢 Verified | `171f0d0` | `cargo test --lib (359/359 pass, 1/1 s11_tests); Revert-Red on FrontendSaveMyMarketProfileRequest deny_unknown_fields` |
-| `crates/humoco-market/tests/media_tests.rs` | P1 | 14 | 0/4/0 | ⚪ Pending | — | — |
+| `crates/humoco-market/tests/media_tests.rs` | P1 | 14 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test (150/150 humoco-market, 14/14 media_tests); fixed PNG short-len & avatar prefix placebos; cargo mutants media.rs: 52/52 CAUGHT` |
 | `src/components/auth/__tests__/CreateNewProfile.test.tsx` | P1 | 18 | 0/1/0 | ⚪ Pending | — | — |
-| `crates/humoco-market/tests/market_view_tests.rs` | P1 | 14 | 0/0/1 | ⚪ Pending | — | — |
+| `crates/humoco-market/tests/market_view_tests.rs` | P1 | 16 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test (150/150 humoco-market, 16/16 market_view_tests); cargo mutants market_view.rs: 14/14 viable CAUGHT (2 unviable)` |
 | `src-tauri/src/checkout/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/commands/integrity.rs` | P1 | 2 | 0/0/3 | ⚪ Pending | — | — |
-| `src-tauri/src/commands/l2.rs` | P1 | 4 | 0/0/3 | ⚪ Pending | — | — |
+| `src-tauri/src/commands/integrity.rs` | P1 | 4 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test --lib (364/364 pass, 4/4 commands::integrity::tests); cargo mutants commands/integrity.rs: 3/3 viable CAUGHT (2 unviable)` |
+| `src-tauri/src/commands/l2.rs` | P1 | 6 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test --lib (364/364 pass, 6/6 commands::l2::tests); cargo mutants commands/l2.rs: 4/4 viable CAUGHT (1 unviable)` |
 | `src-tauri/src/l2_lifecycle/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/l2_lifecycle/rotation_runner.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/models/conflicts.rs` | P1 | 1 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/models/conflicts.rs` | P1 | 2 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test --lib (364/364 pass, 2/2 models::conflicts::tests); fixed missing positive attribution baseline; cargo mutants models/conflicts.rs: 2/2 viable CAUGHT (4 unviable)` |
 | `src-tauri/src/services/backup_service/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/services/backup_service/tests.rs` | P1 | 26 | 0/0/0 | 🟢 Verified | `dbf62cf` | 0/0/0 C/H/M; 26/26 pass; 5/5 viable mutants caught + Revert-Red USB is_dir() |
 | `src-tauri/src/services/l2_anchor_service/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
