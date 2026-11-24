@@ -6,7 +6,7 @@ import { Ad, FrontendBoardItem, FrontendMarketPerson } from '../../types';
 import { AdCard, resolveAuthorHops } from './AdCard';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { calculateDistanceKm } from '../../utils/geoUtils';
+import { calculateDistanceKm, normalizeCoordinates } from '../../utils/geoUtils';
 
 export interface BoardTabProps {
     items: FrontendBoardItem[];
@@ -52,6 +52,7 @@ export const BoardTab: React.FC<BoardTabProps> = ({
 
     const effectiveMaxDistance = maxDistanceKm !== undefined ? maxDistanceKm : internalMaxDistance;
     const setEffectiveMaxDistance = onMaxDistanceChange || setInternalMaxDistance;
+    const hasCoords = Boolean(myCoordinates && normalizeCoordinates(myCoordinates));
 
     const hopsByDid = useMemo(() => {
         const map = new Map<string, number>();
@@ -85,7 +86,7 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                 }
             }
             // Distance filter
-            if (effectiveMaxDistance !== null && effectiveMaxDistance > 0 && myCoordinates) {
+            if (effectiveMaxDistance !== null && effectiveMaxDistance > 0 && hasCoords) {
                 if (item.isOwn) {
                     return true;
                 }
@@ -116,10 +117,9 @@ export const BoardTab: React.FC<BoardTabProps> = ({
         }
 
         return result;
-    }, [items, people, filterKind, searchQuery, effectiveMaxDistance, myCoordinates]);
+    }, [items, people, filterKind, searchQuery, effectiveMaxDistance, myCoordinates, hasCoords]);
 
     const isBoardEmptyOverall = items.length === 0;
-    const hasCoords = Boolean(myCoordinates?.trim());
 
     return (
         <div className="space-y-6">

@@ -8,7 +8,7 @@ import { UserAvatar } from '../ui/UserAvatar';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { truncateUserId } from '../../utils/userIdHelper';
-import { calculateDistanceKm } from '../../utils/geoUtils';
+import { calculateDistanceKm, normalizeCoordinates } from '../../utils/geoUtils';
 
 export interface PeopleTabProps {
     people: FrontendMarketPerson[];
@@ -31,6 +31,7 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
 
     const effectiveMaxDistance = maxDistanceKm !== undefined ? maxDistanceKm : internalMaxDistance;
     const setEffectiveMaxDistance = onMaxDistanceChange || setInternalMaxDistance;
+    const hasCoords = Boolean(myCoordinates && normalizeCoordinates(myCoordinates));
 
     const filteredPeople = useMemo(() => {
         return people.filter((p) => {
@@ -57,7 +58,7 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
             }
 
             // Distance filter
-            if (effectiveMaxDistance !== null && effectiveMaxDistance > 0 && myCoordinates) {
+            if (effectiveMaxDistance !== null && effectiveMaxDistance > 0 && hasCoords) {
                 const hasRemoteSkill = p.skills.some((s) => s.isRemote);
                 const hasRemoteAd = p.activeAds.some((a) => a.isRemote);
                 if (!hasRemoteSkill && !hasRemoteAd) {
@@ -70,10 +71,9 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
 
             return true;
         });
-    }, [people, searchQuery, effectiveMaxDistance, myCoordinates]);
+    }, [people, searchQuery, effectiveMaxDistance, myCoordinates, hasCoords]);
 
     const isPeopleEmptyOverall = people.length === 0;
-    const hasCoords = Boolean(myCoordinates?.trim());
 
     return (
         <div className="space-y-6">
