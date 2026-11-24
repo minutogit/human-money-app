@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `efd5939`
-- **Total Test Files:** 165 | **Total Test Functions:** 1251
+- **Updated at HEAD:** `9c2354c`
+- **Total Test Files:** 165 | **Total Test Functions:** 1260
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -21,7 +21,7 @@
 | `src-tauri/src/commands/auth.rs` | P1 | 14 | 0/0/0 | 🟢 Verified | `171f0d0` | `cargo test --lib (359/359 pass, 14/14 commands::auth::tests); cargo mutants commands/auth.rs: 2/7 CAUGHT` |
 | `src-tauri/src/models/market.rs` | P1 | 1 | 0/0/0 | 🟢 Verified | `171f0d0` | `cargo test --lib (359/359 pass, 1/1 s11_tests); Revert-Red on FrontendSaveMyMarketProfileRequest deny_unknown_fields` |
 | `crates/humoco-market/tests/media_tests.rs` | P1 | 14 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test (150/150 humoco-market, 14/14 media_tests); fixed PNG short-len & avatar prefix placebos; cargo mutants media.rs: 52/52 CAUGHT` |
-| `src/components/auth/__tests__/CreateNewProfile.test.tsx` | P1 | 18 | 0/1/0 | ⚪ Pending | — | — |
+| `src/components/auth/__tests__/CreateNewProfile.test.tsx` | P1 | 19 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 19/19 (98 files / 752 tests full pass); deferred seed promise replaces setTimeout sleep; Revert-Red CreateNewProfile.tsx password.length < 8` |
 | `crates/humoco-market/tests/market_view_tests.rs` | P1 | 16 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test (150/150 humoco-market, 16/16 market_view_tests); cargo mutants market_view.rs: 14/14 viable CAUGHT (2 unviable)` |
 | `src-tauri/src/checkout/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/commands/integrity.rs` | P1 | 4 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test --lib (364/364 pass, 4/4 commands::integrity::tests); cargo mutants commands/integrity.rs: 3/3 viable CAUGHT (2 unviable)` |
@@ -38,12 +38,12 @@
 | `src-tauri/src/services/recovery_service/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/services/wot_service.rs` | P1 | 14 | 0/0/0 | 🟢 Verified | `dbf62cf` | 0/0/0 C/H/M; 14/14 pass; 22/23 mutants caught (+1 equiv) + Revert-Red deny_unknown_fields |
 | `src/components/auth/__tests__/EmergencyKitModal.test.tsx` | P1 | 5 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/auth/__tests__/ForkLockOverlay.test.tsx` | P1 | 7 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/auth/__tests__/ForkLockOverlay.test.tsx` | P1 | 9 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 9/9 (752/752 pass); Revert-Red ForkLockOverlay.tsx needs_profile navigation on last profile delete` |
 | `src/components/auth/__tests__/GuardianReleaseModal.test.tsx` | P1 | 2 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/auth/__tests__/GuardianSetupModal.test.tsx` | P1 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/auth/__tests__/Login.test.tsx` | P1 | 8 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/auth/__tests__/Login.test.tsx` | P1 | 10 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 10/10 (752/752 pass); Revert-Red useLoginFlow.ts pinWipedMaxAttempts fallback & wrong-password clear` |
 | `src/components/auth/__tests__/RestoreBackupView.test.tsx` | P1 | 8 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/auth/__tests__/SecurityPinAndRehearsal.test.tsx` | P1 | 2 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/auth/__tests__/SecurityPinAndRehearsal.test.tsx` | P1 | 6 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 6/6 (752/752 pass); Revert-Red RecoveryRehearsalModal.tsx protectAction retry & QuickPinCard.tsx pin mismatch` |
 | `src/components/auth/__tests__/SeedPhraseInput.test.tsx` | P1 | 5 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/auth/__tests__/SocialRecoveryFlow.test.tsx` | P1 | 5 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/auth/__tests__/WalletRecovery.test.tsx` | P1 | 6 | 0/0/0 | ⚪ Pending | — | — |
@@ -63,7 +63,7 @@
 | `src/components/settings/__tests__/BackupSettingsCard.test.tsx` | P1 | 12 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/settings/__tests__/ViewAndLockCard.test.tsx` | P1 | 1 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/ui/__tests__/L2QuorumBadge.test.tsx` | P1 | 9 | 0/0/0 | ⚪ Pending | — | — |
-| `src/locales/__tests__/i18nIntegrity.test.ts` | P1 | 4 | 0/0/3 | ⚪ Pending | — | — |
+| `src/locales/__tests__/i18nIntegrity.test.ts` | P1 | 4 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 4/4 (752/752 pass); removed silent typeof skips & weak asserts; Revert-Red de.json missing anchorIssue key` |
 | `src/utils/__tests__/signatureHints.test.ts` | P1 | 7 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/sync_client/tests.rs` | P2 | 25 | 1/25/19 | ⚪ Pending | — | — |
 | `src-tauri/src/commands/vouchers.rs` | P2 | 6 | 1/2/13 | ⚪ Pending | — | — |
