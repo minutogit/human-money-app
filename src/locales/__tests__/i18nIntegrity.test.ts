@@ -28,6 +28,7 @@ describe('i18n Key & Placeholder Integrity', () => {
             ['it', itLocale],
         ];
         const enKeys = Object.keys(en);
+        expect(enKeys.length).toBeGreaterThan(500);
 
         for (const [lang, obj] of allLocales) {
             const keys = Object.keys(obj);
@@ -37,6 +38,11 @@ describe('i18n Key & Placeholder Integrity', () => {
             const extra = keys.filter((k) => !(k in en));
             expect(missing, `${lang}.json missing keys vs en.json`).toEqual([]);
             expect(extra, `${lang}.json extra keys vs en.json`).toEqual([]);
+
+            const invalidValues = Object.entries(obj)
+                .filter(([, val]) => typeof val !== 'string' || val.trim().length === 0)
+                .map(([key]) => `${lang}.${key}`);
+            expect(invalidValues, `${lang}.json contains non-string or blank values`).toEqual([]);
         }
     });
 
@@ -50,11 +56,17 @@ describe('i18n Key & Placeholder Integrity', () => {
         const mismatches: string[] = [];
 
         for (const [key, enVal] of Object.entries(en)) {
-            if (typeof enVal !== 'string') continue;
+            if (typeof enVal !== 'string') {
+                mismatches.push(`[en] ${key}: expected string value, got ${typeof enVal}`);
+                continue;
+            }
             const enPlaceholders = extractPlaceholders(enVal).join(',');
             for (const [lang, localeObj] of secondaryLocales) {
                 const val = localeObj[key];
-                if (typeof val !== 'string') continue;
+                if (typeof val !== 'string') {
+                    mismatches.push(`[${lang}] ${key}: expected string value, got ${typeof val}`);
+                    continue;
+                }
                 const langPlaceholders = extractPlaceholders(val).join(',');
                 if (langPlaceholders !== enPlaceholders) {
                     mismatches.push(
@@ -101,7 +113,7 @@ describe('i18n Key & Placeholder Integrity', () => {
 
         for (const [lang, obj] of locales) {
             for (const key of requiredKeys) {
-                expect(obj[key], `Missing key ${key} in ${lang}.json`).toBeDefined();
+                expect(typeof obj[key], `Missing key ${key} in ${lang}.json`).toBe('string');
                 expect(obj[key].trim().length, `Empty key ${key} in ${lang}.json`).toBeGreaterThan(0);
             }
         }
@@ -122,13 +134,20 @@ describe('i18n Key & Placeholder Integrity', () => {
         const listMatch = rustSrc.match(
             /pub const GUARANTOR_ANCHOR_ISSUE_CODES:\s*&\[&str\]\s*=\s*&\[([\s\S]*?)\];/,
         );
-        expect(listMatch, 'GUARANTOR_ANCHOR_ISSUE_CODES missing in vouchers.rs').toBeTruthy();
+        expect(listMatch, 'GUARANTOR_ANCHOR_ISSUE_CODES missing in vouchers.rs').not.toBeNull();
 
         const issueCodes = listMatch![1]
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean)
-            .map((ident) => constValues.get(ident) ?? ident.replace(/^"|"$/g, ''));
+            .map((ident) => {
+                if (ident.startsWith('"') && ident.endsWith('"')) {
+                    return ident.slice(1, -1);
+                }
+                const resolved = constValues.get(ident);
+                expect(typeof resolved, `Unresolved Rust constant ${ident}`).toBe('string');
+                return resolved!;
+            });
 
         expect(issueCodes.length).toBeGreaterThanOrEqual(5);
 
@@ -143,7 +162,7 @@ describe('i18n Key & Placeholder Integrity', () => {
         for (const code of issueCodes) {
             const key = `voucher.signRequest.anchorIssue.${code}`;
             for (const [lang, obj] of locales) {
-                expect(obj[key], `Missing F2 anchor issue key ${key} in ${lang}.json`).toBeDefined();
+                expect(typeof obj[key], `Missing F2 anchor issue key ${key} in ${lang}.json`).toBe('string');
                 expect(obj[key].trim().length, `Empty key ${key} in ${lang}.json`).toBeGreaterThan(0);
             }
         }

@@ -6,14 +6,20 @@ import { authService } from '../../../services/authService';
 import { recoveryService } from '../../../services/recoveryService';
 
 const mockElevateSession = vi.fn().mockResolvedValue(undefined);
+const mockRefreshSessionStatus = vi.fn().mockResolvedValue(undefined);
+const mockProtectAction = vi.fn();
+
+let mockAccessMode: 'full' | 'dailyPay' = 'full';
+let mockOptionalSession: { protectAction: typeof mockProtectAction } | null = null;
 
 vi.mock('../../../context/SessionContext', () => ({
     useSession: () => ({
         folderName: 'alice_folder',
-        accessMode: 'full',
+        accessMode: mockAccessMode,
         elevateSession: mockElevateSession,
+        refreshSessionStatus: mockRefreshSessionStatus,
     }),
-    useOptionalSession: () => null,
+    useOptionalSession: () => mockOptionalSession,
 }));
 
 vi.mock('../../../services/authService', () => ({
@@ -34,10 +40,15 @@ vi.mock('../../../services/recoveryService', () => ({
 describe('QuickPinCard & RecoveryRehearsalModal', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        mockAccessMode = 'full';
+        mockOptionalSession = null;
+        mockElevateSession.mockResolvedValue(undefined);
+        mockRefreshSessionStatus.mockResolvedValue(undefined);
         vi.mocked(recoveryService.snoozeRecoveryRehearsal).mockResolvedValue(Date.now() + 86400);
     });
 
-    it('QuickPinCard shows disabled status initially, validates PIN mismatch, enables DailyPay PIN, and disables PIN', async () => {
+    it('QuickPinCard sanitizes non-digits, validates mismatch and backend errors, enables DailyPay PIN, and elevates non-full sessions', async () => {
+        mockAccessMode = 'dailyPay';
         vi.mocked(authService.getProfilePinStatus).mockResolvedValue({
             enabled: false,
             scope: null,
@@ -45,14 +56,15 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
             maxAttempts: 5,
             remainingAttempts: 5,
         });
-        vi.mocked(authService.enableProfilePin).mockResolvedValue({
-            enabled: true,
-            scope: 'dailyPay',
-            failedAttempts: 0,
-            maxAttempts: 5,
-            remainingAttempts: 5,
-        });
-        vi.mocked(authService.disableProfilePin).mockResolvedValue(undefined);
+        vi.mocked(authService.enableProfilePin)
+            .mockRejectedValueOnce(new Error('Wrong master password'))
+            .mockResolvedValueOnce({
+                enabled: true,
+                scope: 'dailyPay',
+                failedAttempts: 0,
+                maxAttempts: 5,
+                remainingAttempts: 5,
+            });
 
         render(<QuickPinCard />);
 
@@ -62,18 +74,34 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
         fireEvent.click(screen.getByTestId('quick-pin-configure-btn'));
         expect(screen.queryByTestId('pin-scope-receive-only')).not.toBeInTheDocument();
 
-        // Mismatch validation
-        fireEvent.change(screen.getByTestId('quick-pin-input'), { target: { value: '123456' } });
-        fireEvent.change(screen.getByTestId('quick-pin-confirm-input'), { target: { value: '654321' } });
-        fireEvent.change(screen.getByTestId('quick-pin-master-password-input'), { target: { value: 'MasterPass123' } });
-        fireEvent.click(screen.getByTestId('quick-pin-save-btn'));
+        const pinInput = screen.getByTestId('quick-pin-input');
+        const confirmInput = screen.getByTestId('quick-pin-confirm-input');
+        const masterInput = screen.getByTestId('quick-pin-master-password-input');
+        const saveBtn = screen.getByTestId('quick-pin-save-btn');
+
+        // Non-digit characters are stripped; < 6 digits keeps save disabled
+        fireEvent.change(pinInput, { target: { value: '12ab345' } });
+        expect(pinInput).toHaveValue('12345');
+        fireEvent.change(confirmInput, { target: { value: '12345' } });
+        fireEvent.change(masterInput, { target: { value: 'MasterPass123' } });
+        expect(saveBtn).toBeDisabled();
+
+        // Mismatch validation blocks service call
+        fireEvent.change(pinInput, { target: { value: '123456' } });
+        fireEvent.change(confirmInput, { target: { value: '654321' } });
+        fireEvent.click(saveBtn);
 
         expect(await screen.findByText('The two PIN entries do not match.')).toBeInTheDocument();
         expect(authService.enableProfilePin).not.toHaveBeenCalled();
 
-        // Matching PIN saves and updates status badge to DailyPay
-        fireEvent.change(screen.getByTestId('quick-pin-confirm-input'), { target: { value: '123456' } });
-        fireEvent.click(screen.getByTestId('quick-pin-save-btn'));
+        // Backend error keeps status disabled
+        fireEvent.change(confirmInput, { target: { value: '123456' } });
+        fireEvent.click(saveBtn);
+        expect(await screen.findByText('Wrong master password')).toBeInTheDocument();
+        expect(screen.getByTestId('quick-pin-status-badge')).toHaveTextContent('Not configured');
+
+        // Matching valid credentials save PIN, elevate non-full session, and update status badge
+        fireEvent.click(saveBtn);
 
         await waitFor(() => {
             expect(authService.enableProfilePin).toHaveBeenCalledWith(
@@ -82,21 +110,61 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
                 'dailyPay',
                 'alice_folder'
             );
+            expect(mockElevateSession).toHaveBeenCalledWith('MasterPass123');
+            expect(mockRefreshSessionStatus).toHaveBeenCalled();
         });
         expect(await screen.findByTestId('quick-pin-status-badge')).toHaveTextContent('Daily PIN');
+        expect(
+            screen.getByText('Quick PIN has been securely configured for this device.')
+        ).toBeInTheDocument();
+    });
 
-        // Disable active PIN
+    it('QuickPinCard keeps Daily PIN enabled when disable fails and removes it on valid master password', async () => {
+        vi.mocked(authService.getProfilePinStatus).mockResolvedValue({
+            enabled: true,
+            scope: 'dailyPay',
+            failedAttempts: 0,
+            maxAttempts: 5,
+            remainingAttempts: 5,
+        });
+        vi.mocked(authService.disableProfilePin)
+            .mockRejectedValueOnce(new Error('Wrong master password'))
+            .mockResolvedValueOnce(undefined);
+
+        render(<QuickPinCard />);
+
+        expect(await screen.findByTestId('quick-pin-status-badge')).toHaveTextContent('Daily PIN');
+
         fireEvent.click(screen.getByTestId('quick-pin-disable-open-btn'));
-        fireEvent.change(screen.getByTestId('quick-pin-disable-password-input'), { target: { value: 'MasterPass123' } });
+        fireEvent.change(screen.getByTestId('quick-pin-disable-password-input'), {
+            target: { value: 'WrongPass' },
+        });
+        fireEvent.click(screen.getByTestId('quick-pin-disable-confirm-btn'));
+
+        expect(await screen.findByText('Wrong master password')).toBeInTheDocument();
+        expect(screen.getByTestId('quick-pin-status-badge')).toHaveTextContent('Daily PIN');
+
+        fireEvent.change(screen.getByTestId('quick-pin-disable-password-input'), {
+            target: { value: 'MasterPass123' },
+        });
         fireEvent.click(screen.getByTestId('quick-pin-disable-confirm-btn'));
 
         await waitFor(() => {
-            expect(authService.disableProfilePin).toHaveBeenCalledWith('MasterPass123', 'alice_folder');
+            expect(authService.disableProfilePin).toHaveBeenCalledWith(
+                'MasterPass123',
+                'alice_folder'
+            );
+            expect(mockRefreshSessionStatus).toHaveBeenCalled();
         });
-        expect(await screen.findByTestId('quick-pin-status-badge')).toHaveTextContent('Not configured');
+        expect(await screen.findByTestId('quick-pin-status-badge')).toHaveTextContent(
+            'Not configured'
+        );
+        expect(
+            screen.getByText('Quick PIN removed. Sign-in now requires your master password.')
+        ).toBeInTheDocument();
     });
 
-    it('RecoveryRehearsalModal renders 3 configured questions, displays partial mismatches, verifies full match, and handles snooze', async () => {
+    it('RecoveryRehearsalModal requires all 3 answers, sends exact answers, shows mismatch badges, and verifies full match', async () => {
         const onClose = vi.fn();
         const onVerified = vi.fn();
         const onResetQuestions = vi.fn();
@@ -114,12 +182,20 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
         expect(screen.getByText(/First true love/i)).toBeInTheDocument();
         expect(screen.getByText(/Personal passphrase/i)).toBeInTheDocument();
 
+        const submitBtn = screen.getByRole('button', { name: 'Verify Answers' });
+        expect(submitBtn).toBeDisabled();
+
         const inputs = screen.getAllByPlaceholderText('Enter your answer');
         expect(inputs).toHaveLength(3);
 
+        // Whitespace-only answers keep submit disabled
         fireEvent.change(inputs[0], { target: { value: 'OakStreet' } });
-        fireEvent.change(inputs[1], { target: { value: 'WrongLove' } });
+        fireEvent.change(inputs[1], { target: { value: '   ' } });
         fireEvent.change(inputs[2], { target: { value: 'BlueSky42' } });
+        expect(submitBtn).toBeDisabled();
+
+        fireEvent.change(inputs[1], { target: { value: 'WrongLove' } });
+        expect(submitBtn).not.toBeDisabled();
 
         vi.mocked(recoveryService.verifyRecoveryRehearsal).mockResolvedValueOnce({
             allCorrect: false,
@@ -128,14 +204,21 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
             nextRehearsalAt: 1000,
         });
 
-        fireEvent.click(screen.getByRole('button', { name: 'Verify Answers' }));
+        fireEvent.click(submitBtn);
 
+        await waitFor(() => {
+            expect(recoveryService.verifyRecoveryRehearsal).toHaveBeenCalledWith([
+                'OakStreet',
+                'WrongLove',
+                'BlueSky42',
+            ]);
+        });
         expect(await screen.findByText('Mismatch')).toBeInTheDocument();
         expect(screen.getAllByText('Match')).toHaveLength(2);
         expect(screen.getByText('Reset security questions now')).toBeInTheDocument();
         expect(onVerified).not.toHaveBeenCalled();
 
-        // Correct answer succeeds and calls onVerified
+        // Fixing mismatched answer succeeds and calls onVerified
         fireEvent.change(inputs[1], { target: { value: 'Anna' } });
         vi.mocked(recoveryService.verifyRecoveryRehearsal).mockResolvedValueOnce({
             allCorrect: true,
@@ -147,12 +230,57 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Verify Answers' }));
 
         await waitFor(() => {
+            expect(recoveryService.verifyRecoveryRehearsal).toHaveBeenLastCalledWith([
+                'OakStreet',
+                'Anna',
+                'BlueSky42',
+            ]);
             expect(onVerified).toHaveBeenCalledTimes(1);
         });
         expect(await screen.findByText('Great! All 3 answers verified')).toBeInTheDocument();
+    });
 
-        // Re-render for snooze test
-        vi.clearAllMocks();
+    it('RecoveryRehearsalModal invokes onClose and onResetQuestions from partial mismatch reset action', async () => {
+        const onClose = vi.fn();
+        const onVerified = vi.fn();
+        const onResetQuestions = vi.fn();
+
+        vi.mocked(recoveryService.verifyRecoveryRehearsal).mockResolvedValueOnce({
+            allCorrect: false,
+            questionMatches: [false, true, true],
+            rehearsalStage: 0,
+            nextRehearsalAt: 1000,
+        });
+
+        render(
+            <RecoveryRehearsalModal
+                isOpen={true}
+                questionIds={[1, 7, 12]}
+                onClose={onClose}
+                onVerified={onVerified}
+                onResetQuestions={onResetQuestions}
+            />
+        );
+
+        const inputs = screen.getAllByPlaceholderText('Enter your answer');
+        fireEvent.change(inputs[0], { target: { value: 'WrongStreet' } });
+        fireEvent.change(inputs[1], { target: { value: 'Anna' } });
+        fireEvent.change(inputs[2], { target: { value: 'BlueSky42' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Verify Answers' }));
+
+        const resetLink = await screen.findByText('Reset security questions now');
+        fireEvent.click(resetLink);
+
+        expect(onClose).toHaveBeenCalledTimes(1);
+        expect(onResetQuestions).toHaveBeenCalledTimes(1);
+        expect(onVerified).not.toHaveBeenCalled();
+    });
+
+    it('RecoveryRehearsalModal snoozes rehearsal for 24h and notifies callbacks', async () => {
+        const onClose = vi.fn();
+        const onVerified = vi.fn();
+        const onResetQuestions = vi.fn();
+
         render(
             <RecoveryRehearsalModal
                 isOpen={true}
@@ -164,9 +292,66 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
         );
 
         fireEvent.click(screen.getByRole('button', { name: 'Remind me later' }));
+
         await waitFor(() => {
             expect(recoveryService.snoozeRecoveryRehearsal).toHaveBeenCalledWith(24);
-            expect(onClose).toHaveBeenCalled();
+            expect(onVerified).toHaveBeenCalledTimes(1);
+            expect(onClose).toHaveBeenCalledTimes(1);
         });
+    });
+
+    it('RecoveryRehearsalModal retries verifyRecoveryRehearsal via session.protectAction when session is locked', async () => {
+        const onClose = vi.fn();
+        const onVerified = vi.fn();
+        const onResetQuestions = vi.fn();
+
+        mockProtectAction.mockImplementation(
+            async (fn: (pwd?: string) => Promise<unknown>) => await fn('UnlockedMasterPw')
+        );
+        mockOptionalSession = { protectAction: mockProtectAction };
+
+        vi.mocked(recoveryService.verifyRecoveryRehearsal)
+            .mockRejectedValueOnce({
+                code: 'error.auth.sessionLocked',
+                message: 'Session locked',
+            })
+            .mockResolvedValueOnce({
+                allCorrect: true,
+                questionMatches: [true, true, true],
+                rehearsalStage: 1,
+                nextRehearsalAt: 2000,
+            });
+
+        render(
+            <RecoveryRehearsalModal
+                isOpen={true}
+                questionIds={[1, 7, 12]}
+                onClose={onClose}
+                onVerified={onVerified}
+                onResetQuestions={onResetQuestions}
+            />
+        );
+
+        const inputs = screen.getAllByPlaceholderText('Enter your answer');
+        fireEvent.change(inputs[0], { target: { value: 'OakStreet' } });
+        fireEvent.change(inputs[1], { target: { value: 'Anna' } });
+        fireEvent.change(inputs[2], { target: { value: 'BlueSky42' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Verify Answers' }));
+
+        await waitFor(() => {
+            expect(mockProtectAction).toHaveBeenCalledTimes(1);
+            expect(recoveryService.verifyRecoveryRehearsal).toHaveBeenNthCalledWith(1, [
+                'OakStreet',
+                'Anna',
+                'BlueSky42',
+            ]);
+            expect(recoveryService.verifyRecoveryRehearsal).toHaveBeenNthCalledWith(
+                2,
+                ['OakStreet', 'Anna', 'BlueSky42'],
+                'UnlockedMasterPw'
+            );
+            expect(onVerified).toHaveBeenCalledTimes(1);
+        });
+        expect(await screen.findByText('Great! All 3 answers verified')).toBeInTheDocument();
     });
 });

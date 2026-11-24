@@ -165,8 +165,16 @@ describe('CreateNewProfile Component', () => {
       });
     });
 
-    it('disables button while loading', async () => {
-      (invoke as Mock).mockImplementation(() => new Promise(resolve => setTimeout(() => resolve(mockSeed12), 100)));
+    it('disables button while loading and re-enables once seed generation resolves', async () => {
+      let resolveSeed!: (val: string) => void;
+      const seedPromise = new Promise<string>((resolve) => {
+        resolveSeed = resolve;
+      });
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'generate_mnemonic') return seedPromise;
+        if (cmd === 'get_local_instance_id') return Promise.resolve('test-instance-id');
+        return Promise.resolve([]);
+      });
 
       render(
         <CreateNewProfile
@@ -176,9 +184,14 @@ describe('CreateNewProfile Component', () => {
         />
       );
 
+      const nextButton = await screen.findByText("I've Saved My Seed Phrase");
+      expect(nextButton).toBeDisabled();
+
+      resolveSeed(mockSeed12);
+
       await waitFor(() => {
-        const nextButton = screen.getByText("I've Saved My Seed Phrase");
-        expect(nextButton).toBeDisabled();
+        expect(screen.getByTestId('word-display-0')).toHaveTextContent(/1\s*apple/);
+        expect(screen.getByText("I've Saved My Seed Phrase")).not.toBeDisabled();
       });
     });
   });
@@ -252,6 +265,8 @@ describe('CreateNewProfile Component', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/Error: One or more words are incorrect/i)).toBeInTheDocument();
+        expect(screen.getByText('Step 2: Confirm Your Seed Phrase')).toBeInTheDocument();
+        expect(screen.queryByText(/Step 3:/i)).not.toBeInTheDocument();
       }, { timeout: 3000 });
     });
 
@@ -275,18 +290,17 @@ describe('CreateNewProfile Component', () => {
         expect(screen.getByText('Step 2: Confirm Your Seed Phrase')).toBeInTheDocument();
       });
 
-      // Get the word numbers being asked
+      // Get the word numbers being asked and fail loudly if test IDs are malformed
       const wordLabels = screen.getAllByTestId(/word-input-/);
+      expect(wordLabels).toHaveLength(3);
       const words = mockSeed12.split(' ');
-      
-      // Fill with correct words based on the labels
+
       wordLabels.forEach((input) => {
         const testId = input.getAttribute('data-testid') || '';
         const indexMatch = testId.match(/word-input-(\d+)/);
-        if (indexMatch) {
-          const wordIndex = parseInt(indexMatch[1]);
-          fireEvent.change(input, { target: { value: words[wordIndex] } });
-        }
+        expect(indexMatch).not.toBeNull();
+        const wordIndex = parseInt(indexMatch![1], 10);
+        fireEvent.change(input, { target: { value: words[wordIndex] } });
       });
 
       await waitFor(() => {
@@ -417,6 +431,8 @@ describe('CreateNewProfile Component', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/Error: The phrase does not match/i)).toBeInTheDocument();
+        expect(screen.getByText('Step 2: Confirm Your Seed Phrase')).toBeInTheDocument();
+        expect(screen.queryByText(/Step 3:/i)).not.toBeInTheDocument();
       });
     });
   });
@@ -504,6 +520,22 @@ describe('CreateNewProfile Component', () => {
     });
 
     it('submits standard profile creation with default medium reach preset and retainMnemonic = true', async () => {
+      let profileCreated = false;
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'generate_mnemonic') return Promise.resolve(mockSeed12);
+        if (cmd === 'get_local_instance_id') return Promise.resolve('test-instance-id');
+        if (cmd === 'create_profile') {
+          profileCreated = true;
+          return Promise.resolve(undefined);
+        }
+        if (cmd === 'list_profiles') {
+          return Promise.resolve(
+            profileCreated ? [{ profileName: 'Alice', folderName: 'alice_folder' }] : []
+          );
+        }
+        return Promise.resolve(undefined);
+      });
+
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
@@ -528,12 +560,89 @@ describe('CreateNewProfile Component', () => {
       fireEvent.click(screen.getByTestId('onboarding-finish-button'));
 
       await waitFor(() => {
-        expect(invoke).toHaveBeenCalledWith('create_profile', expect.objectContaining({
+        expect(invoke).toHaveBeenCalledWith('create_profile', {
           profileName: 'Alice',
+          mnemonic: mockSeed12,
+          passphrase: undefined,
+          userPrefix: undefined,
           password: 'password123',
+          localInstanceId: 'test-instance-id',
+          language: 'english',
           retainMnemonic: true,
           initialReachPreset: 'medium',
-        }));
+          initialSyncTargets: null,
+        });
+        expect(mockOnProfileCreated).toHaveBeenCalledWith('Alice', 'alice_folder');
+      });
+    });
+
+    it('blocks quick profile creation on blank name, password mismatch, and < 8 char password until exact 8-char boundary passes', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'generate_mnemonic') return Promise.resolve(mockSeed12);
+        if (cmd === 'get_local_instance_id') return Promise.resolve('test-instance-id');
+        if (cmd === 'list_profiles') return Promise.resolve([]);
+        if (cmd === 'create_profile') return Promise.resolve(undefined);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <CreateNewProfile
+          onProfileCreated={mockOnProfileCreated}
+          onSwitchToLogin={mockOnSwitchToLogin}
+        />
+      );
+
+      const nameInput = await screen.findByPlaceholderText(/My Secure Profile/i);
+      const passwordInputs = screen.getAllByPlaceholderText('••••••••');
+      const finishBtn = screen.getByTestId('onboarding-finish-button');
+
+      // Wait for initial mnemonic generation to finish
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('generate_mnemonic', {
+          wordCount: 12,
+          language: 'english',
+        });
+      });
+
+      // 1. Blank/whitespace profile name is rejected before create_profile
+      fireEvent.change(nameInput, { target: { value: '   ' } });
+      fireEvent.change(passwordInputs[0], { target: { value: '12345678' } });
+      fireEvent.change(passwordInputs[1], { target: { value: '12345678' } });
+      fireEvent.click(finishBtn);
+      expect(await screen.findByText('Please enter a profile name.')).toBeInTheDocument();
+      expect(invoke).not.toHaveBeenCalledWith('create_profile', expect.anything());
+
+      // 2. Password mismatch disables submit button and rejects form submit
+      fireEvent.change(nameInput, { target: { value: 'Alice' } });
+      fireEvent.change(passwordInputs[0], { target: { value: '12345678' } });
+      fireEvent.change(passwordInputs[1], { target: { value: '12345679' } });
+      expect(finishBtn).toBeDisabled();
+      fireEvent.submit(finishBtn.closest('form')!);
+      expect(await screen.findByText('Error: The passwords do not match')).toBeInTheDocument();
+      expect(invoke).not.toHaveBeenCalledWith('create_profile', expect.anything());
+
+      // 3. 7-char password fails minimum 8-char check
+      fireEvent.change(passwordInputs[0], { target: { value: '1234567' } });
+      fireEvent.change(passwordInputs[1], { target: { value: '1234567' } });
+      fireEvent.click(finishBtn);
+      expect(
+        await screen.findByText('Error: Password must be at least 8 characters')
+      ).toBeInTheDocument();
+      expect(invoke).not.toHaveBeenCalledWith('create_profile', expect.anything());
+
+      // 4. Positive boundary: exact 8-char matching password creates profile
+      fireEvent.change(passwordInputs[0], { target: { value: '12345678' } });
+      fireEvent.change(passwordInputs[1], { target: { value: '12345678' } });
+      fireEvent.click(finishBtn);
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith(
+          'create_profile',
+          expect.objectContaining({
+            profileName: 'Alice',
+            password: '12345678',
+          })
+        );
         expect(mockOnProfileCreated).toHaveBeenCalled();
       });
     });

@@ -103,6 +103,7 @@ describe('ForkLockOverlay Component', () => {
     fireEvent.click(logoutBtn);
 
     await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('logout');
       expect(mockNotifyLogout).toHaveBeenCalled();
       expect(mockClearLocks).toHaveBeenCalled();
       expect(mockNavigate).toHaveBeenCalledWith({ view: 'needs_login' });
@@ -188,10 +189,11 @@ describe('ForkLockOverlay Component', () => {
     fireEvent.change(passwordInput, { target: { value: 'secret' } });
     fireEvent.click(screen.getByRole('button', { name: /Reclaim (Profile|Wallet) on This Device/i }));
 
-    // Shows explicit error when no profile has been chosen yet
+    // Shows explicit error when no profile has been chosen yet and does not invoke handover
     await waitFor(() => {
       expect(screen.getByText(/No profile selected|Kein Profil ausgewählt/i)).toBeInTheDocument();
     });
+    expect(invoke).not.toHaveBeenCalledWith('handover_to_this_device', expect.anything());
 
     fireEvent.change(selector, { target: { value: 'alice_2' } });
     fireEvent.click(screen.getByRole('button', { name: /Reclaim (Profile|Wallet) on This Device/i }));
@@ -202,6 +204,90 @@ describe('ForkLockOverlay Component', () => {
         password: 'secret',
         localInstanceId: 'inst_123',
       });
+    });
+  });
+
+  it('shows error and keeps locks intact when handover reclaim fails', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'list_profiles') {
+        return Promise.resolve([{ profileName: 'Alice', folderName: 'alice_folder' }]);
+      }
+      if (cmd === 'get_local_instance_id') {
+        return Promise.resolve('inst_123');
+      }
+      if (cmd === 'handover_to_this_device') {
+        return Promise.reject(new Error('Bad master password'));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<ForkLockOverlay onStartRecovery={mockOnStartRecovery} />);
+
+    fireEvent.click(await screen.findByText(/Reactivate (Profile|Wallet) on This Device/i));
+    const passwordInput = await screen.findByPlaceholderText(/Password/i);
+    fireEvent.change(passwordInput, { target: { value: 'wrongpass' } });
+    fireEvent.click(screen.getByRole('button', { name: /Reclaim (Profile|Wallet) on This Device/i }));
+
+    expect(await screen.findByText('Bad master password')).toBeInTheDocument();
+    expect(mockClearLocks).not.toHaveBeenCalled();
+    expect(mockNotifyLogin).not.toHaveBeenCalled();
+  });
+
+  it('deletes local profile with password verification and navigates to needs_profile while keeping locks on failure', async () => {
+    let profileDeleted = false;
+    let shouldFailDelete = true;
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'list_profiles') {
+        return Promise.resolve(
+          profileDeleted ? [] : [{ profileName: 'Alice', folderName: 'alice_folder' }]
+        );
+      }
+      if (cmd === 'get_local_instance_id') {
+        return Promise.resolve('inst_123');
+      }
+      if (cmd === 'delete_profile') {
+        if (shouldFailDelete) {
+          return Promise.reject(new Error('Invalid password'));
+        }
+        profileDeleted = true;
+        return Promise.resolve(undefined);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<ForkLockOverlay onStartRecovery={mockOnStartRecovery} />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Remove Local Profile from This Device/i })
+    );
+
+    const confirmDeleteBtn = await screen.findByRole('button', { name: /Delete Profile/i });
+    expect(confirmDeleteBtn).toBeDisabled();
+
+    const passwordInput = screen.getByPlaceholderText(/Password/i);
+
+    // Negative baseline: wrong password displays error and leaves locks/navigation untouched
+    fireEvent.change(passwordInput, { target: { value: 'wrong' } });
+    fireEvent.click(confirmDeleteBtn);
+
+    expect(await screen.findByText('Invalid password')).toBeInTheDocument();
+    expect(mockClearLocks).not.toHaveBeenCalled();
+    expect(mockNotifyLogout).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+
+    // Positive path: valid password deletes profile, clears locks, and opens onboarding when none remain
+    shouldFailDelete = false;
+    fireEvent.change(passwordInput, { target: { value: 'secret' } });
+    fireEvent.click(confirmDeleteBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('delete_profile', {
+        folderName: 'alice_folder',
+        password: 'secret',
+      });
+      expect(mockClearLocks).toHaveBeenCalled();
+      expect(mockNotifyLogout).toHaveBeenCalled();
+      expect(mockNavigate).toHaveBeenCalledWith({ view: 'needs_profile' });
     });
   });
 });

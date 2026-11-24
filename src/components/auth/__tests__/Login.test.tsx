@@ -135,7 +135,13 @@ describe('Login Component', () => {
 
     await waitFor(
       () => {
-        expect(onSuccess).toHaveBeenCalled();
+        expect(invoke).toHaveBeenCalledWith('login', {
+          folderName: 'profile1',
+          password: 'password123',
+          cleanupOnLogin: true,
+          localInstanceId: 'test-instance-id',
+        });
+        expect(onSuccess).toHaveBeenCalledWith('Test Profile 1', 'profile1');
       },
       { timeout: 3000 }
     );
@@ -174,7 +180,12 @@ describe('Login Component', () => {
     fireEvent.click(verifyButton);
 
     await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('verify_profile_password', {
+        folderName: 'profile1',
+        password: 'wrong-password',
+      });
       expect(screen.getByText(/Authentication Error: Invalid password/i)).toBeInTheDocument();
+      expect(invoke).not.toHaveBeenCalledWith('delete_profile', expect.anything());
     });
   });
 
@@ -217,6 +228,7 @@ describe('Login Component', () => {
       expect(screen.getByText(/Payments on this device are paused/i)).toBeInTheDocument();
       expect(screen.queryByText(/Epoch 3/i)).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Switch Profile/i })).toBeInTheDocument();
+      expect(mockOnLoginSuccess).not.toHaveBeenCalled();
     });
   });
 
@@ -255,6 +267,7 @@ describe('Login Component', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Multi-Device Conflict Detected/i)).toBeInTheDocument();
+      expect(mockOnLoginSuccess).not.toHaveBeenCalled();
     });
 
     fireEvent.click(
@@ -307,6 +320,112 @@ describe('Login Component', () => {
           password: 'SecretPass-1',
         })
       );
+    });
+  });
+
+  it('clears password input and shows verification error when login rejects with wrong password', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'list_profiles') return Promise.resolve(mockProfiles);
+      if (cmd === 'get_local_instance_id') return Promise.resolve('test-instance-id');
+      if (cmd === 'login') return Promise.reject(new Error('Wrong password'));
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <Login
+        onLoginSuccess={mockOnLoginSuccess}
+        onSwitchToCreate={mockOnSwitchToCreate}
+        onSwitchToRestoreBackup={mockOnSwitchToRestoreBackup}
+        onSwitchToReset={mockOnSwitchToReset}
+      />
+    );
+
+    const passwordInput = await screen.findByLabelText(/Password/i);
+    const loginButton = screen.getByRole('button', { name: /Login/i });
+
+    fireEvent.change(passwordInput, { target: { value: 'WrongSecret-1' } });
+    await waitFor(() => expect(loginButton).not.toBeDisabled());
+    fireEvent.click(loginButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('Verification Failure: Wrong password')).toBeInTheDocument();
+      expect(passwordInput).toHaveValue('');
+      expect(mockOnLoginSuccess).not.toHaveBeenCalled();
+    });
+  });
+
+  it('handles PIN login failure counter and falls back to master password on pinWipedMaxAttempts', async () => {
+    let pinAttempts = 0;
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'list_profiles') return Promise.resolve(mockProfiles);
+      if (cmd === 'get_local_instance_id') return Promise.resolve('test-instance-id');
+      if (cmd === 'get_profile_pin_status') {
+        return Promise.resolve({
+          enabled: true,
+          scope: 'dailyPay',
+          failedAttempts: 0,
+          maxAttempts: 5,
+          remainingAttempts: 5,
+        });
+      }
+      if (cmd === 'login_with_pin') {
+        pinAttempts += 1;
+        if (pinAttempts === 1) {
+          return Promise.reject({
+            code: 'error.auth.invalidPin',
+            message: 'Invalid PIN',
+            details: { remaining: '4' },
+          });
+        }
+        return Promise.reject({
+          code: 'error.auth.pinWipedMaxAttempts',
+          message: 'PIN slot wiped',
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <Login
+        onLoginSuccess={mockOnLoginSuccess}
+        onSwitchToCreate={mockOnSwitchToCreate}
+        onSwitchToRestoreBackup={mockOnSwitchToRestoreBackup}
+        onSwitchToReset={mockOnSwitchToReset}
+      />
+    );
+
+    const pinInput = await screen.findByTestId('login-pin-input');
+    const submitBtn = screen.getByRole('button', { name: /Login/i });
+
+    // 1st failed attempt: decrements counter, clears PIN, stays in PIN mode
+    fireEvent.change(pinInput, { target: { value: '111111' } });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('login_with_pin', {
+        folderName: 'profile1',
+        pin: '111111',
+        cleanupOnLogin: true,
+        localInstanceId: 'test-instance-id',
+      });
+      expect(screen.getByText('Incorrect PIN. 4 attempt(s) remaining.')).toBeInTheDocument();
+      expect(pinInput).toHaveValue('');
+      expect(screen.getByTestId('login-pin-input')).toBeInTheDocument();
+    });
+
+    // Final attempt wipes PIN slot and switches auth mode back to master password
+    fireEvent.change(screen.getByTestId('login-pin-input'), { target: { value: '222222' } });
+    fireEvent.click(screen.getByRole('button', { name: /Login/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'PIN removed after 5 failed attempts for your security. Please sign in with your master password.'
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId('login-pin-input')).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/Password/i)).toBeInTheDocument();
+      expect(mockOnLoginSuccess).not.toHaveBeenCalled();
     });
   });
 });
