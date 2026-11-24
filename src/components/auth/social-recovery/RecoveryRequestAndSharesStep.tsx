@@ -15,6 +15,7 @@ import type { ActiveRecoverySessionDto } from '../../../types';
 import { AlertBanner } from '../../ui/AlertBanner';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
+import { QrCodeDisplay } from '../../ui/QrCodeDisplay';
 
 interface RecoveryRequestAndSharesStepProps {
     session: ActiveRecoverySessionDto;
@@ -117,9 +118,12 @@ export const RecoveryRequestAndSharesStep: React.FC<RecoveryRequestAndSharesStep
                 </div>
                 {showRequestQr && requestQrSvg && (
                     <div className="pt-2 flex flex-col items-center gap-2">
-                        <div
-                            className="w-48 h-48 p-2 bg-white rounded-xl border border-theme-subtle shadow-xs [&>svg]:w-full [&>svg]:h-full"
-                            dangerouslySetInnerHTML={{ __html: requestQrSvg }}
+                        <QrCodeDisplay
+                            svg={requestQrSvg}
+                            value={session.requestUri}
+                            size={192}
+                            ariaLabel={t('backup.socialStep1Title')}
+                            qrTestId="social-request-qr"
                         />
                     </div>
                 )}

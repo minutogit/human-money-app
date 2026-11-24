@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ModalShell } from '../ui/ModalShell';
 import { QrScannerModal } from '../ui/QrScannerModal';
+import { QrCodeDisplay } from '../ui/QrCodeDisplay';
 import { CopyButton } from '../ui/CopyButton';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -264,10 +265,13 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                         )}
 
                         {approvalResult.replyQrSvg && (
-                            <div className="flex justify-center p-3 bg-white rounded-2xl border border-theme-subtle shadow-sm">
-                                <div
-                                    className="w-48 h-48"
-                                    dangerouslySetInnerHTML={{ __html: approvalResult.replyQrSvg }}
+                            <div className="flex justify-center">
+                                <QrCodeDisplay
+                                    svg={approvalResult.replyQrSvg}
+                                    value={approvalResult.replyUri}
+                                    size={192}
+                                    ariaLabel={t('backup.releaseSuccessTitle')}
+                                    qrTestId="guardian-reply-qr"
                                 />
                             </div>
                         )}
