@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `82896e2`
-- **Total Test Files:** 165 | **Total Test Functions:** 1356
+- **Updated at HEAD:** `bb8e068`
+- **Total Test Files:** 165 | **Total Test Functions:** 1383
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -51,13 +51,13 @@
 | `src/components/contacts/__tests__/WotContacts.test.tsx` | P1 | 19 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 19/19 pass; added ContactDialog self-active block, subaccount null trust, sibling inheritance & rejection tests; Revert-Red ContactDialog isExactSelf` |
 | `src/components/marketplace/__tests__/AdCard.test.tsx` | P1 | 18 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 18/18 pass; Fail-First RED->GREEN AdCard manualLoadedKey across imageToken changes, hardened warning colors, resolveAuthorHops & cellular isOwn` |
 | `src/components/marketplace/__tests__/AdEditorModal.test.tsx` | P1 | 16 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 16/16 pass; added event date guards, 6h edit grace, length limits, preset chips, cardPublished=false & error paths; Revert-Red AdEditorModal maxEventSecs` |
-| `src/components/marketplace/__tests__/BoardTab.test.tsx` | P1 | 7 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/marketplace/__tests__/BoardTab.test.tsx` | P1 | 12 | 0/0/0 | 🟢 Verified | `bb8e068` | `vitest 12/12 pass; Fail-First RED->GREEN BoardTab normalizeCoordinates guard, hardened search/filter chips, reset filters, subaccount coords & hop deferral` |
 | `src/components/marketplace/__tests__/ImportCardModal.test.tsx` | P1 | 11 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 11/11 pass; hardened counter-scan QR SVG, covered contact URI sibling trust, Level-0 delete/clear & errors; Revert-Red ImportCardModal isExactSameUserId` |
 | `src/components/marketplace/__tests__/MarketPersonView.test.tsx` | P1 | 13 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 13/13 pass; Fail-First RED->GREEN openUrl scheme/normalization & address.fullAddress fallback, inquiry, forward & contact state` |
-| `src/components/marketplace/__tests__/MarketplaceView.test.tsx` | P1 | 13 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/marketplace/__tests__/MineTab.test.tsx` | P1 | 7 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/marketplace/__tests__/PeopleTab.test.tsx` | P1 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/marketplace/__tests__/ProfileCardEditor.test.tsx` | P1 | 11 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/marketplace/__tests__/MarketplaceView.test.tsx` | P1 | 19 | 0/0/0 | 🟢 Verified | `bb8e068` | `vitest 19/19 pass; hardened loading state deferred promise, manual sync toast/error matrix, board/inquiry navigation, events & IPC; Revert-Red useMarketplaceView !hasNewItems` |
+| `src/components/marketplace/__tests__/MineTab.test.tsx` | P1 | 12 | 0/0/0 | 🟢 Verified | `bb8e068` | `vitest 12/12 pass; hardened share/publish toggles, delete modal in-flight state, empty states, expired renew & inquiry thread ops; Revert-Red MineTab isExpiredEventDraft` |
+| `src/components/marketplace/__tests__/PeopleTab.test.tsx` | P1 | 10 | 0/0/0 | 🟢 Verified | `bb8e068` | `vitest 10/10 pass; Fail-First RED->GREEN PeopleTab normalizeCoordinates guard, hardened badge/location assertions, multi-field search & overflow cap` |
+| `src/components/marketplace/__tests__/ProfileCardEditor.test.tsx` | P1 | 16 | 0/0/0 | 🟢 Verified | `bb8e068` | `vitest 16/16 pass; removed dup beforeEach, added skill limits/reordering, forwarded preview filter, errors & preset/rerender state; Revert-Red clampStreetVisibility` |
 | `src/components/marketplace/__tests__/RenewAdModal.test.tsx` | P1 | 7 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 7/7 pass; covered null ad, error rollback, in-flight duplicate guard, late close & live preview; Revert-Red RenewAdModal isSubmitting` |
 | `src/components/marketplace/__tests__/ShareCardModal.test.tsx` | P1 | 10 | 0/0/0 | 🟢 Verified | `82896e2` | `vitest 10/10 pass; hardened exact .hmcard bytes & path, covered null disable, write error, reset & unsafe SVG rejection; Revert-Red ShareCardPanel !fileWire` |
 | `src/components/settings/__tests__/BackupSettingsCard.test.tsx` | P1 | 18 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 18/18 pass; hardened password & try/finally listener cleanup, added toggle/unlink rollbacks, syncBackup & backup-now routing; Revert-Red BackupSettingsCard rollback` |
