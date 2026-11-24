@@ -78,11 +78,9 @@ export const AdCard: React.FC<AdCardProps> = ({
     const shouldAutoLoad = Boolean(
         isOwn || (!isWifiBlocked && effectiveAuthorHops <= mediaAutoLoadMaxHops)
     );
-    const [manualLoadRequested, setManualLoadRequested] = useState(false);
-
-    useEffect(() => {
-        setManualLoadRequested(false);
-    }, [ownerDid, imageToken]);
+    const imageCacheKey = imageToken ? `${ownerDid}:${imageToken}` : null;
+    const [manualLoadedKey, setManualLoadedKey] = useState<string | null>(null);
+    const manualLoadRequested = Boolean(imageCacheKey && manualLoadedKey === imageCacheKey);
 
     const [imageUri, setImageUri] = useState<string | null>(() => {
         if (!imageToken) return null;
@@ -280,7 +278,7 @@ export const AdCard: React.FC<AdCardProps> = ({
                                 type="button"
                                 size="xs"
                                 variant="outline"
-                                onClick={() => setManualLoadRequested(true)}
+                                onClick={() => setManualLoadedKey(imageCacheKey)}
                                 data-testid="ad-card-load-image-btn"
                                 className="shrink-0 self-start sm:self-auto"
                             >

@@ -205,9 +205,22 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
     };
 
     const handleOpenWebsite = async (url: string) => {
+        const trimmed = url.trim();
+        if (!trimmed) return;
+        const candidate = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed) ? trimmed : `https://${trimmed}`;
+        let parsed: URL;
         try {
-            const fullUrl = url.startsWith('http://') || url.startsWith('https://') ? url : `https://${url}`;
-            await openUrl(fullUrl);
+            parsed = new URL(candidate);
+        } catch {
+            logger.warn(`Refused to open invalid website URL: ${url}`);
+            return;
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            logger.warn(`Refused to open website with unsupported scheme: ${parsed.protocol}`);
+            return;
+        }
+        try {
+            await openUrl(parsed.toString());
         } catch (err) {
             logger.warn(`Failed to open website ${url}: ${stringifyError(err)}`);
         }
@@ -292,7 +305,8 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
     const address = currentPerson.profile.address;
     const addressLine1 = [address?.street, address?.houseNumber].filter(Boolean).join(' ');
     const addressLine2 = [address?.zipCode, address?.city].filter(Boolean).join(' ');
-    const hasAddress = !!(address?.fullAddress || addressLine1 || addressLine2 || address?.country);
+    const hasStructuredAddress = !!(addressLine1 || addressLine2 || address?.country);
+    const hasAddress = !!(address?.fullAddress || hasStructuredAddress);
 
     return (
         <div className="max-w-4xl mx-auto space-y-6">
@@ -536,9 +550,15 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                             <div className="flex items-start gap-2">
                                 <MapPin size={15} className="shrink-0 text-theme-primary mt-0.5" />
                                 <div>
-                                    {addressLine1 && <div>{addressLine1}</div>}
-                                    {addressLine2 && <div>{addressLine2}</div>}
-                                    {address?.country && <div>{address.country}</div>}
+                                    {hasStructuredAddress ? (
+                                        <>
+                                            {addressLine1 && <div>{addressLine1}</div>}
+                                            {addressLine2 && <div>{addressLine2}</div>}
+                                            {address?.country && <div>{address.country}</div>}
+                                        </>
+                                    ) : (
+                                        address?.fullAddress && <div>{address.fullAddress}</div>
+                                    )}
                                 </div>
                             </div>
                         )}
