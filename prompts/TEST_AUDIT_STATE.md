@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `c29e83a`
-- **Total Test Files:** 165 | **Total Test Functions:** 1287
+- **Updated at HEAD:** `cc02db3`
+- **Total Test Files:** 165 | **Total Test Functions:** 1320
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -47,8 +47,8 @@
 | `src/components/auth/__tests__/SeedPhraseInput.test.tsx` | P1 | 8 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 8/8 (98 files / 779 tests full pass); 11-lang invalid path, kit error & allowKitUri=false guard; Revert-Red SeedPhraseInput.tsx allowKitUri check` |
 | `src/components/auth/__tests__/SocialRecoveryFlow.test.tsx` | P1 | 11 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 11/11 (98 files / 779 tests full pass); link rejection, pw/passphrase/unreachable errors & Fail-First RED->GREEN request QR-SVG fix (RecoveryRequestAndSharesStep.tsx QrCodeDisplay)` |
 | `src/components/auth/__tests__/WalletRecovery.test.tsx` | P1 | 9 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 9/9 (98 files / 779 tests full pass); short pw, single/empty profile & error paths; Revert-Red WalletRecovery.tsx newPassword.length < 8` |
-| `src/components/conflicts/__tests__/ConflictViews.test.tsx` | P1 | 10 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/contacts/__tests__/WotContacts.test.tsx` | P1 | 15 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/conflicts/__tests__/ConflictViews.test.tsx` | P1 | 16 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 16/16 pass; tested blockedByOffender 0-trusted warning, 512B UTF-8 cap, bare root DID revocation, SST & witness conflicts; Revert-Red ConflictDetailsView !blockedByOffender` |
+| `src/components/contacts/__tests__/WotContacts.test.tsx` | P1 | 19 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 19/19 pass; added ContactDialog self-active block, subaccount null trust, sibling inheritance & rejection tests; Revert-Red ContactDialog isExactSelf` |
 | `src/components/marketplace/__tests__/AdCard.test.tsx` | P1 | 12 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/marketplace/__tests__/AdEditorModal.test.tsx` | P1 | 10 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/marketplace/__tests__/BoardTab.test.tsx` | P1 | 7 | 0/0/0 | ⚪ Pending | — | — |
@@ -60,11 +60,11 @@
 | `src/components/marketplace/__tests__/ProfileCardEditor.test.tsx` | P1 | 11 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/marketplace/__tests__/RenewAdModal.test.tsx` | P1 | 3 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/marketplace/__tests__/ShareCardModal.test.tsx` | P1 | 5 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/settings/__tests__/BackupSettingsCard.test.tsx` | P1 | 12 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/settings/__tests__/ViewAndLockCard.test.tsx` | P1 | 1 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/ui/__tests__/L2QuorumBadge.test.tsx` | P1 | 9 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/settings/__tests__/BackupSettingsCard.test.tsx` | P1 | 18 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 18/18 pass; hardened password & try/finally listener cleanup, added toggle/unlink rollbacks, syncBackup & backup-now routing; Revert-Red BackupSettingsCard rollback` |
+| `src/components/settings/__tests__/ViewAndLockCard.test.tsx` | P1 | 5 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 5/5 pass; added decimal flooring, null/external sync, in-flight lock & disabled guard; Revert-Red ViewAndLockCard parsed >= 0` |
+| `src/components/ui/__tests__/L2QuorumBadge.test.tsx` | P1 | 14 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 16/16 pass (14 fn); hardened standalone props & added quorum precedence, yellow/0-node/NaN/100% clamp & rose conflict bar; Revert-Red L2QuorumBadge unsupportedConfirmation` |
 | `src/locales/__tests__/i18nIntegrity.test.ts` | P1 | 4 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 4/4 (752/752 pass); removed silent typeof skips & weak asserts; Revert-Red de.json missing anchorIssue key` |
-| `src/utils/__tests__/signatureHints.test.ts` | P1 | 7 | 0/0/0 | ⚪ Pending | — | — |
+| `src/utils/__tests__/signatureHints.test.ts` | P1 | 15 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 15/15 pass; removed eslint-disable/any, covered 2-field and, whitespace/address, deduplication, ISO-5218 rules & gentle hints; Revert-Red signatureHints genderBalanceMale` |
 | `src-tauri/src/sync_client/tests.rs` | P2 | 25 | 1/25/19 | ⚪ Pending | — | — |
 | `src-tauri/src/commands/vouchers.rs` | P2 | 6 | 1/2/13 | ⚪ Pending | — | — |
 | `src-tauri/src/services/sync_engine/channel_reader.rs` | P2 | 5 | 1/0/14 | ⚪ Pending | — | — |
