@@ -2,6 +2,8 @@ import { render, screen, waitFor, fireEvent, within } from '@testing-library/rea
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { MarketplaceView } from '../MarketplaceView';
 import { UiModeProvider } from '../../../context/UiModeContext';
+import { APP_EVENTS, emitAppEvent } from '../../../utils/appEvents';
+import { notifyMyProfileUpdated } from '../../../utils/syncEvents';
 import { invoke } from '@tauri-apps/api/core';
 import {
   AppConfigDto,
@@ -291,7 +293,21 @@ describe('MarketplaceView Component', () => {
   });
 
   it('renders loading state initially, then displays board tab by default with ads', async () => {
+    let resolveMarketView!: (val: FrontendMarketSnapshot) => void;
+    const baseImpl = (invoke as Mock).getMockImplementation()!;
+    (invoke as Mock).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'get_market_view') {
+        return new Promise<FrontendMarketSnapshot>((resolve) => {
+          resolveMarketView = resolve;
+        });
+      }
+      return baseImpl(cmd, args);
+    });
+
     render(<MarketplaceView />);
+    expect(screen.getByText(/Laden\.\.\.|Loading\.\.\./i)).toBeInTheDocument();
+
+    resolveMarketView(mockSnapshot);
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('get_market_view', {});
@@ -853,5 +869,288 @@ describe('MarketplaceView Component', () => {
     } finally {
       window.removeEventListener('humoco:transient-sync-toast', onToast);
     }
+  });
+
+  it('displays error banner when initial load fails and dismisses it cleanly', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation()!;
+    (invoke as Mock).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'get_market_view') {
+        return Promise.reject(new Error('Database unavailable'));
+      }
+      return baseImpl(cmd, args);
+    });
+
+    render(<MarketplaceView />);
+
+    expect(await screen.findByText('Database unavailable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Ausblenden|Dismiss/i }));
+    expect(screen.queryByText('Database unavailable')).not.toBeInTheDocument();
+  });
+
+  it('handles manual sync errors, cooldown toast, empty up-to-date toast, and suppresses toast when newAds arrive', async () => {
+    let syncStep = 0;
+    const baseImpl = (invoke as Mock).getMockImplementation()!;
+    (invoke as Mock).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'sync_market_channels') {
+        syncStep += 1;
+        if (syncStep === 1) {
+          return Promise.resolve({
+            status: 'completed',
+            uploadedTo: 0,
+            polledSyncs: 1,
+            decryptedSlots: 0,
+            importedCards: 0,
+            newAds: 0,
+            importedWotLists: 0,
+            retryAfterSecs: 45,
+            errors: ['Sync timeout'],
+          });
+        }
+        if (syncStep === 2) {
+          return Promise.resolve({
+            status: 'skippedCooldown',
+            uploadedTo: 0,
+            polledSyncs: 0,
+            decryptedSlots: 0,
+            importedCards: 0,
+            newAds: 0,
+            importedWotLists: 0,
+            errors: [],
+          });
+        }
+        if (syncStep === 3) {
+          return Promise.resolve({
+            status: 'completed',
+            uploadedTo: 0,
+            polledSyncs: 1,
+            decryptedSlots: 0,
+            importedCards: 0,
+            newAds: 0,
+            importedWotLists: 0,
+            errors: [],
+          });
+        }
+        return Promise.resolve({
+          status: 'completed',
+          uploadedTo: 0,
+          polledSyncs: 1,
+          decryptedSlots: 0,
+          importedCards: 0,
+          newAds: 1,
+          importedWotLists: 0,
+          errors: [],
+        });
+      }
+      if (cmd === 'sync_post_channels') {
+        return Promise.resolve({
+          uploadedTo: 0,
+          polledSyncs: 0,
+          importedPayments: 0,
+          importedReceipts: 0,
+          importedSignatures: 0,
+          newSignRequests: 0,
+          newWotHandshakes: 0,
+          newInquiries: 0,
+          newInquiryMessages: 0,
+          errors: [],
+        });
+      }
+      return baseImpl(cmd, args);
+    });
+
+    const toasts: Array<{ message: string; variant?: string }> = [];
+    const onToast = (e: Event) => {
+      toasts.push((e as CustomEvent<{ message: string; variant?: string }>).detail);
+    };
+    window.addEventListener('humoco:transient-sync-toast', onToast);
+    try {
+      render(<MarketplaceView />);
+      const syncBtn = await screen.findByTestId('refresh-marketplace-button');
+
+      // 1) Error + retryAfterSecs
+      fireEvent.click(syncBtn);
+      expect(await screen.findByText(/Sync timeout/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Ausblenden|Dismiss/i }));
+
+      // 2) skippedCooldown
+      fireEvent.click(syncBtn);
+      await waitFor(() => {
+        expect(toasts.some((item) => /cooldown|Abkühlzeit|kürzlich durchgeführt/i.test(item.message))).toBe(true);
+      });
+
+      // 3) Empty clean sync -> up-to-date toast
+      toasts.length = 0;
+      fireEvent.click(syncBtn);
+      await waitFor(() => {
+        expect(toasts.some((item) => /up to date|Alles aktuell/i.test(item.message))).toBe(true);
+      });
+
+      // 4) newAds: 1 -> NO up-to-date toast
+      toasts.length = 0;
+      fireEvent.click(syncBtn);
+      await waitFor(() => {
+        expect(syncStep).toBe(4);
+      });
+      await Promise.resolve();
+      expect(toasts.some((item) => /up to date|Alles aktuell/i.test(item.message))).toBe(false);
+    } finally {
+      window.removeEventListener('humoco:transient-sync-toast', onToast);
+    }
+  });
+
+  it('wires Board Pay, Board Inquire with ad preselection, and redirects own board ad click to Mine tab', async () => {
+    const boardWithOwn: FrontendMarketSnapshot = {
+      ...mockSnapshot,
+      board: [
+        mockBoardItems[0],
+        {
+          ownerDid: 'did:key:z6MkuSelf',
+          ownerName: 'Me Self',
+          trust: 'trusted',
+          isOwn: true,
+          ad: { ...mockMyProfile.ads[0], id: 'ad-own-on-board', title: 'Eigenes Brett-Angebot' },
+          daysLeft: 25,
+        },
+      ],
+    };
+    const baseImpl = (invoke as Mock).getMockImplementation()!;
+    (invoke as Mock).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'get_market_view') return Promise.resolve(boardWithOwn);
+      return baseImpl(cmd, args);
+    });
+
+    render(<MarketplaceView />);
+    const aliceCard = await screen.findByTestId('ad-card-ad-alice-1');
+
+    // Pay on Alice card navigates to send_vouchers
+    fireEvent.click(within(aliceCard).getByRole('button', { name: /Gutschein senden|Send voucher/i }));
+    expect(mockNavigate).toHaveBeenCalledWith({
+      view: 'send_vouchers',
+      initialRecipientId: 'did:key:z6MkuAlice',
+    });
+
+    // Inquire on Alice card opens MarketPersonView with inquiry modal for her ad
+    fireEvent.click(within(aliceCard).getByRole('button', { name: /^Anfragen$|^Inquire$/i }));
+    expect(await screen.findByText(/Inserat: Bio Honey 500g/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Abbrechen$|^Cancel$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Zurück|Back/i }));
+
+    // Clicking owner button on own board ad navigates directly to Mine tab
+    const ownCard = await screen.findByTestId('ad-card-ad-own-on-board');
+    fireEvent.click(within(ownCard).getByText('Me Self'));
+    await waitFor(() => {
+      expect(screen.getByTestId('my-published-card-summary')).toBeInTheDocument();
+    });
+  });
+
+  it('displays unread inquiry badge, navigates with paymentUri on inquiry Pay, and dismisses inquiry via IPC', async () => {
+    const inboxWithUnread: FrontendPostInboxSummary = {
+      ...mockInbox,
+      inquiries: [
+        {
+          inquiryId: 'inq-badge-1',
+          role: 'buyer',
+          counterpartyDid: 'did:key:z6MkuAlice',
+          counterpartyName: 'Alice Honey Farm',
+          isContact: true,
+          status: 'confirmed',
+          paymentUri: 'humoco://pay?to=did:key:z6MkuAlice&amount=5',
+          target: { kind: 'ad', adId: 'ad-alice-1', adTitle: 'Bio Honey 500g' },
+          createdAt: nowSecs - 600,
+          updatedAt: nowSecs - 300,
+          unread: true,
+          replySyncs: [],
+          messages: [
+            { msgId: 'm1', sender: 'them', text: 'Gerne!', decision: 'confirm', createdAt: nowSecs - 300 },
+          ],
+        },
+      ],
+    };
+
+    const baseImpl = (invoke as Mock).getMockImplementation()!;
+    (invoke as Mock).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'get_post_inbox_summary') return Promise.resolve(inboxWithUnread);
+      return baseImpl(cmd, args);
+    });
+
+    render(<MarketplaceView />);
+    const unreadBadge = await screen.findByTestId('marketplace-unread-inquiries-badge');
+    expect(unreadBadge).toHaveTextContent('1');
+
+    fireEvent.click(screen.getByRole('button', { name: /Meins|Mine/i }));
+    const payBtn = await screen.findByTestId('inquiry-pay-btn-inq-badge-1');
+    fireEvent.click(payBtn);
+
+    expect(mockNavigate).toHaveBeenCalledWith({
+      view: 'send_vouchers',
+      initialRecipientId: 'did:key:z6MkuAlice',
+      initialPaymentUri: 'humoco://pay?to=did:key:z6MkuAlice&amount=5',
+    });
+
+    const thread = screen.getByTestId('inquiry-thread-inq-badge-1');
+    fireEvent.click(within(thread).getByTitle(/Entfernen|Remove/i));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('dismiss_pending_post_item', {
+        itemKind: 'inquiry',
+        id: 'inq-badge-1',
+        password: undefined,
+      });
+    });
+  });
+
+  it('reacts to MY_PROFILE_UPDATED_EVENT and MARKET_CARD_UPDATED window events and ignores events after unmount', async () => {
+    const { unmount } = render(<MarketplaceView initialTab="mine" />);
+    await screen.findByTestId('my-published-card-summary');
+
+    notifyMyProfileUpdated({
+      ...mockMyProfile,
+      profile: { ...mockMyProfile.profile, firstName: 'Updated', lastName: 'User' },
+    });
+
+    expect(await screen.findByText('Updated User')).toBeInTheDocument();
+
+    (invoke as Mock).mockClear();
+    emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('get_market_view', {});
+    });
+
+    unmount();
+    (invoke as Mock).mockClear();
+    emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
+    await Promise.resolve();
+    expect(invoke).not.toHaveBeenCalledWith('get_market_view', {});
+  });
+
+  it('opens ProfileCardEditor on initialOpenEditor and invokes quick renew and delete_ad from MineTab', async () => {
+    render(<MarketplaceView initialTab="mine" initialOpenEditor={true} />);
+
+    expect(await screen.findByTestId('save-profile-card-button')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Abbrechen$|^Cancel$/i }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('save-profile-card-button')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('quick-renew-ad-my-ad-1'));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('renew_ad', {
+        id: 'my-ad-1',
+        durationDays: 90,
+        password: undefined,
+      });
+    });
+
+    const row = screen.getByTestId('my-active-ad-my-ad-1');
+    fireEvent.click(within(row).getByTitle(/Löschen|Delete/i));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Löschen$|^Delete$/i }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('delete_ad', {
+        id: 'my-ad-1',
+        password: undefined,
+      });
+    });
   });
 });

@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ProfileCardEditor } from '../ProfileCardEditor';
+import { ProfileCardEditor, detectCardPreset } from '../ProfileCardEditor';
 import { UiModeProvider } from '../../../context/UiModeContext';
 import { FrontendMyMarketProfile } from '../../../types';
 
@@ -64,11 +64,6 @@ describe('ProfileCardEditor Component', () => {
     published: true,
     qrIsPartial: false,
   };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    localStorage.clear();
-  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -536,5 +531,204 @@ describe('ProfileCardEditor Component', () => {
       getSpy.mockRestore();
       saveSpy.mockRestore();
     }
+  });
+
+  it('validates skill required title and length limits for title, text, and pricing', () => {
+    const onSave = vi.fn();
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{ ...mockMyProfile, skills: [{ title: 'Init' }] }}
+        onSave={onSave}
+      />
+    );
+
+    const titleInput = screen.getByTestId('skill-title-0');
+    const textInput = screen.getByTestId('skill-text-0');
+    const pricingInput = screen.getByTestId('skill-pricing-0');
+    const form = screen.getByTestId('save-profile-card-button').closest('form')!;
+
+    fireEvent.change(titleInput, { target: { value: '   ' } });
+    fireEvent.submit(form);
+    expect(screen.getByText(/Titel der Fähigkeit ist erforderlich|Skill title is required|Jede Fähigkeit benötigt einen Titel/i)).toBeInTheDocument();
+
+    fireEvent.change(titleInput, { target: { value: 'S'.repeat(61) } });
+    fireEvent.submit(form);
+    expect(screen.getByText(/maximal 60 Zeichen|not exceed 60 characters/i)).toBeInTheDocument();
+
+    fireEvent.change(titleInput, { target: { value: 'Gültig' } });
+    fireEvent.change(textInput, { target: { value: 'D'.repeat(161) } });
+    fireEvent.submit(form);
+    expect(screen.getByText(/maximal 160 Zeichen|not exceed 160 characters/i)).toBeInTheDocument();
+
+    fireEvent.change(textInput, { target: { value: 'Kurze Beschreibung' } });
+    fireEvent.change(pricingInput, { target: { value: 'P'.repeat(41) } });
+    fireEvent.submit(form);
+    expect(screen.getByText(/Maximal 40 Zeichen erlaubt|Maximum 40 characters allowed/i)).toBeInTheDocument();
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('caps skills at 8 and supports moving skills up and down with edited text and pricing', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{
+          ...mockMyProfile,
+          skills: [
+            { title: 'Erste Fähigkeit', text: 'Alt 1', pricing: '10 Minuto' },
+            { title: 'Zweite Fähigkeit', text: 'Alt 2', pricing: '20 Minuto' },
+          ],
+        }}
+        onSave={onSave}
+      />
+    );
+
+    const addBtn = screen.getByTestId('add-skill-button');
+    for (let i = 0; i < 6; i += 1) {
+      fireEvent.click(addBtn);
+    }
+    expect(addBtn).toBeDisabled();
+    expect(screen.getAllByTestId(/^skill-title-/).length).toBe(8);
+
+    // Trim back down to 2 skills and swap order
+    const deleteBtns = screen.getAllByRole('button', { name: /Fähigkeit entfernen|Remove skill/i });
+    for (let i = 7; i >= 2; i -= 1) {
+      fireEvent.click(deleteBtns[i]);
+    }
+    expect(addBtn).toBeEnabled();
+
+    fireEvent.change(screen.getByTestId('skill-text-0'), { target: { value: '  Neu 1  ' } });
+    fireEvent.change(screen.getByTestId('skill-pricing-1'), { target: { value: ' 25 FreeTaler ' } });
+
+    const moveDownBtns = screen.getAllByTitle(/Nach unten|Move down/i);
+    fireEvent.click(moveDownBtns[0]);
+
+    fireEvent.click(screen.getByTestId('save-profile-card-button'));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+        skills: [
+          expect.objectContaining({ title: 'Zweite Fähigkeit', text: 'Alt 2', pricing: '25 FreeTaler' }),
+          expect.objectContaining({ title: 'Erste Fähigkeit', text: 'Neu 1', pricing: '10 Minuto' }),
+        ],
+      }));
+    });
+  });
+
+  it('hides contacts-only fields when switching live preview perspective to forwarded in Expert mode', () => {
+    render(
+      <UiModeProvider initialMode="expert">
+        <ProfileCardEditor
+          isOpen={true}
+          onClose={vi.fn()}
+          myProfile={mockMyProfile}
+          onSave={vi.fn()}
+        />
+      </UiModeProvider>
+    );
+
+    // Direct contact perspective shows both everyone fields and contacts-only fields
+    expect(screen.getByText('max@holz.de')).toBeInTheDocument();
+    expect(screen.getByText('+49170123456')).toBeInTheDocument();
+    expect(screen.getByText('Waldweg 1')).toBeInTheDocument();
+
+    // Forwarded perspective hides contacts-only fields while preserving everyone fields
+    fireEvent.click(screen.getByRole('tab', { name: /Über Empfehlung|Via recommendation|Forwarded/i }));
+    expect(screen.queryByText('max@holz.de')).not.toBeInTheDocument();
+    expect(screen.queryByText('+49170123456')).not.toBeInTheDocument();
+    expect(screen.queryByText('Waldweg 1')).not.toBeInTheDocument();
+    expect(screen.getByText('Max Mustermann')).toBeInTheDocument();
+    expect(screen.getByText('Mustermann Holz')).toBeInTheDocument();
+  });
+
+  it('surfaces onSave, GPS lookup, and avatar compression errors without closing modal', async () => {
+    const geoModule = await import('../../../utils/geoUtils');
+    const imgModule = await import('../../../utils/imageCompression');
+    vi.mocked(geoModule.getCurrentLocation).mockRejectedValueOnce(new Error('GPS permission denied'));
+    vi.mocked(imgModule.compressAvatarToWebpDataUri).mockRejectedValueOnce(new Error('Corrupt image file'));
+
+    const onSave = vi.fn().mockRejectedValueOnce(new Error('Card storage failed'));
+    const onClose = vi.fn();
+
+    render(
+      <UiModeProvider initialMode="expert">
+        <ProfileCardEditor
+          isOpen={true}
+          onClose={onClose}
+          myProfile={mockMyProfile}
+          onSave={onSave}
+        />
+      </UiModeProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('fetch-gps-btn'));
+    expect(await screen.findByText('GPS permission denied')).toBeInTheDocument();
+
+    const badFile = new File(['x'], 'bad.jpg', { type: 'image/jpeg' });
+    fireEvent.change(screen.getByTestId('avatar-file-input'), { target: { files: [badFile] } });
+    expect(await screen.findByText('Corrupt image file')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('save-profile-card-button'));
+    expect(await screen.findByText('Card storage failed')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('classifies presets in detectCardPreset, clamps street off everyone on save, and preserves edits across rerender', async () => {
+    expect(detectCardPreset({
+      name: 'everyone', city: 'everyone', coordinates: 'everyone',
+      organization: 'contacts', community: 'contacts', email: 'contacts',
+      phone: 'contacts', picture: 'contacts', url: 'contacts',
+      street: 'nobody', gender: 'nobody',
+    })).toBe('private');
+    expect(detectCardPreset({
+      name: 'everyone', organization: 'everyone', community: 'everyone',
+      city: 'everyone', picture: 'everyone', url: 'everyone', coordinates: 'everyone',
+      street: 'contacts', email: 'contacts', phone: 'contacts', gender: 'nobody',
+    })).toBe('local');
+    expect(detectCardPreset(mockMyProfile.visibility)).toBe('custom');
+
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const unsafeStreetProfile: FrontendMyMarketProfile = {
+      ...mockMyProfile,
+      profile: { ...mockMyProfile.profile, coordinates: '52.52, 13.40' },
+      visibility: { ...mockMyProfile.visibility, street: 'everyone' as unknown as 'contacts' },
+    };
+
+    const { rerender } = render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={unsafeStreetProfile}
+        onSave={onSave}
+      />
+    );
+
+    const firstNameInput = screen.getByPlaceholderText(/Vorname|First Name/i);
+    fireEvent.change(firstNameInput, { target: { value: 'Unsaved Name' } });
+
+    rerender(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{
+          ...unsafeStreetProfile,
+          profile: { ...unsafeStreetProfile.profile, firstName: 'Background Sync Name' },
+        }}
+        onSave={onSave}
+      />
+    );
+
+    expect(screen.getByPlaceholderText(/Vorname|First Name/i)).toHaveValue('Unsaved Name');
+
+    fireEvent.click(screen.getByTestId('save-profile-card-button'));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+        profile: expect.objectContaining({ firstName: 'Unsaved Name' }),
+        visibility: expect.objectContaining({ street: 'contacts' }),
+      }));
+    });
   });
 });
