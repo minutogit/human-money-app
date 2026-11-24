@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `9c2354c`
-- **Total Test Files:** 165 | **Total Test Functions:** 1260
+- **Updated at HEAD:** `c29e83a`
+- **Total Test Files:** 165 | **Total Test Functions:** 1287
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -37,16 +37,16 @@
 | `src-tauri/src/services/market_service/view_and_import.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/services/recovery_service/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/services/wot_service.rs` | P1 | 14 | 0/0/0 | 🟢 Verified | `dbf62cf` | 0/0/0 C/H/M; 14/14 pass; 22/23 mutants caught (+1 equiv) + Revert-Red deny_unknown_fields |
-| `src/components/auth/__tests__/EmergencyKitModal.test.tsx` | P1 | 5 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/auth/__tests__/EmergencyKitModal.test.tsx` | P1 | 8 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 8/8 (98 files / 779 tests full pass); deterministic word idx, baseElement portal SVG check & null/error guards; Revert-Red EmergencyKitModal.tsx not-retained guard` |
 | `src/components/auth/__tests__/ForkLockOverlay.test.tsx` | P1 | 9 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 9/9 (752/752 pass); Revert-Red ForkLockOverlay.tsx needs_profile navigation on last profile delete` |
-| `src/components/auth/__tests__/GuardianReleaseModal.test.tsx` | P1 | 2 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/auth/__tests__/GuardianSetupModal.test.tsx` | P1 | 4 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/auth/__tests__/GuardianReleaseModal.test.tsx` | P1 | 6 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 6/6 (98 files / 779 tests full pass); approve IPC, error paths & Fail-First RED->GREEN QR-SVG sanitization fix (GuardianReleaseModal.tsx QrCodeDisplay)` |
+| `src/components/auth/__tests__/GuardianSetupModal.test.tsx` | P1 | 8 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 8/8 (98 files / 779 tests full pass); trust-level filter, answer bounds & zero-server warning; Revert-Red GuardianSetupModal.tsx areAnswersValid` |
 | `src/components/auth/__tests__/Login.test.tsx` | P1 | 10 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 10/10 (752/752 pass); Revert-Red useLoginFlow.ts pinWipedMaxAttempts fallback & wrong-password clear` |
-| `src/components/auth/__tests__/RestoreBackupView.test.tsx` | P1 | 8 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/auth/__tests__/RestoreBackupView.test.tsx` | P1 | 12 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 12/12 (98 files / 779 tests full pass); collision replace, retry probe & pw/inspect validation; Revert-Red useRestoreBackupFlow.ts replaceFolderName` |
 | `src/components/auth/__tests__/SecurityPinAndRehearsal.test.tsx` | P1 | 6 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 6/6 (752/752 pass); Revert-Red RecoveryRehearsalModal.tsx protectAction retry & QuickPinCard.tsx pin mismatch` |
-| `src/components/auth/__tests__/SeedPhraseInput.test.tsx` | P1 | 5 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/auth/__tests__/SocialRecoveryFlow.test.tsx` | P1 | 5 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/auth/__tests__/WalletRecovery.test.tsx` | P1 | 6 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/auth/__tests__/SeedPhraseInput.test.tsx` | P1 | 8 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 8/8 (98 files / 779 tests full pass); 11-lang invalid path, kit error & allowKitUri=false guard; Revert-Red SeedPhraseInput.tsx allowKitUri check` |
+| `src/components/auth/__tests__/SocialRecoveryFlow.test.tsx` | P1 | 11 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 11/11 (98 files / 779 tests full pass); link rejection, pw/passphrase/unreachable errors & Fail-First RED->GREEN request QR-SVG fix (RecoveryRequestAndSharesStep.tsx QrCodeDisplay)` |
+| `src/components/auth/__tests__/WalletRecovery.test.tsx` | P1 | 9 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 9/9 (98 files / 779 tests full pass); short pw, single/empty profile & error paths; Revert-Red WalletRecovery.tsx newPassword.length < 8` |
 | `src/components/conflicts/__tests__/ConflictViews.test.tsx` | P1 | 10 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/contacts/__tests__/WotContacts.test.tsx` | P1 | 15 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/marketplace/__tests__/AdCard.test.tsx` | P1 | 12 | 0/0/0 | ⚪ Pending | — | — |
