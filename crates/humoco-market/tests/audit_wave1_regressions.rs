@@ -21,6 +21,39 @@ fn make_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&[seed; 32])
 }
 
+fn assert_validation_err<T: std::fmt::Debug>(
+    res: Result<T, MarketError>,
+    expected_substr: &str,
+) {
+    let err = res.expect_err("expected MarketError::Validation");
+    assert!(
+        matches!(&err, MarketError::Validation(msg) if msg.contains(expected_substr)),
+        "expected MarketError::Validation containing {:?}, got {:?}",
+        expected_substr,
+        err
+    );
+}
+
+fn assert_crypto_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    let err = res.expect_err("expected MarketError::Crypto");
+    assert!(
+        matches!(&err, MarketError::Crypto(msg) if msg.contains(expected_substr)),
+        "expected MarketError::Crypto containing {:?}, got {:?}",
+        expected_substr,
+        err
+    );
+}
+
+fn assert_slot_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    let err = res.expect_err("expected MarketError::Slot");
+    assert!(
+        matches!(&err, MarketError::Slot(msg) if msg.contains(expected_substr)),
+        "expected MarketError::Slot containing {:?}, got {:?}",
+        expected_substr,
+        err
+    );
+}
+
 fn minimal_webp(width: u16, height: u16) -> Vec<u8> {
     let mut buf = Vec::with_capacity(30);
     buf.extend_from_slice(b"RIFF");
@@ -49,25 +82,25 @@ fn test_h20_strict_picture_data_uri_and_media_owner_binding() {
     };
 
     // Plain URL / free-form string in CardItem::Picture MUST be rejected (strict data-URI only).
-    assert!(matches!(
+    assert_validation_err(
         sign_sd_card(
             payload.clone(),
             vec![(
                 CardItem::Picture("https://evil.example/avatar.png".to_string()),
-                1
+                1,
             )],
-            &sk
+            &sk,
         ),
-        Err(MarketError::Validation(_))
-    ));
-    assert!(matches!(
+        "Avatar data URI must start with",
+    );
+    assert_validation_err(
         sign_sd_card(
             payload.clone(),
             vec![(CardItem::Picture("not-a-data-uri".to_string()), 1)],
-            &sk
+            &sk,
         ),
-        Err(MarketError::Validation(_))
-    ));
+        "Avatar data URI must start with",
+    );
 
     // Valid 96x96 WebP data URI succeeds.
     let avatar_uri = format!(
@@ -82,7 +115,10 @@ fn test_h20_strict_picture_data_uri_and_media_owner_binding() {
     let webp = minimal_webp(320, 240);
     let (token, _blob_id, ct) = seal_media_blob(&did, &webp).unwrap();
     assert_eq!(open_media_blob(&did, &token, &ct).unwrap(), webp);
-    assert!(open_media_blob(&other_did, &token, &ct).is_err());
+    assert_crypto_err(
+        open_media_blob(&other_did, &token, &ct),
+        "Media image_token does not match owner DID and content",
+    );
 }
 
 #[test]
@@ -119,7 +155,10 @@ fn test_h21_card_store_future_bounds_and_inquiry_message_validation() {
         None,
         &no_offender,
     );
-    assert!(matches!(res, AcceptOutcome::Invalid(_)));
+    assert_eq!(
+        res,
+        AcceptOutcome::Invalid("Card version timestamp exceeds allowed skew".to_string())
+    );
 
     // 2. Immortal card.payload.valid_until > now + 4y rejected.
     let card_immortal = sign_sd_card(
@@ -147,7 +186,10 @@ fn test_h21_card_store_future_bounds_and_inquiry_message_validation() {
         None,
         &no_offender,
     );
-    assert!(matches!(res, AcceptOutcome::Invalid(_)));
+    assert_eq!(
+        res,
+        AcceptOutcome::Invalid("Card valid_until exceeds maximum allowed lifetime".to_string())
+    );
 
     // 3. Future Ad published_at > now + 300 rejected.
     let ad = Ad {
@@ -190,7 +232,10 @@ fn test_h21_card_store_future_bounds_and_inquiry_message_validation() {
         None,
         &no_offender,
     );
-    assert!(matches!(res, AcceptOutcome::Invalid(_)));
+    assert_eq!(
+        res,
+        AcceptOutcome::Invalid("Ad timestamps exceed allowed future bounds".to_string())
+    );
 
     // 4. Inquiry payment_uri / amount_hint / standard_uuid bounds.
     let base_msg = MarketInquiryMessage {
@@ -207,15 +252,24 @@ fn test_h21_card_store_future_bounds_and_inquiry_message_validation() {
 
     let mut bad_scheme = base_msg.clone();
     bad_scheme.payment_uri = Some("https://evil.com/pay".into());
-    assert!(validate_market_inquiry_message(&bad_scheme).is_err());
+    assert_validation_err(
+        validate_market_inquiry_message(&bad_scheme),
+        "payment_uri must start with 'humoco://pay?'",
+    );
 
     let mut long_uri = base_msg.clone();
     long_uri.payment_uri = Some(format!("humoco://pay?{}", "a".repeat(520)));
-    assert!(validate_market_inquiry_message(&long_uri).is_err());
+    assert_validation_err(
+        validate_market_inquiry_message(&long_uri),
+        "payment_uri exceeds maximum length 512",
+    );
 
     let mut long_hint = base_msg;
     long_hint.amount_hint = Some("9".repeat(65));
-    assert!(validate_market_inquiry_message(&long_hint).is_err());
+    assert_validation_err(
+        validate_market_inquiry_message(&long_hint),
+        "amount_hint must be 1..=64 characters",
+    );
 }
 
 #[test]
@@ -273,9 +327,9 @@ fn test_h16_guardian_vault_equivocation_and_share_commitment_mismatch() {
     // 1. GuardianVaultStore::upsert_ward must reject equivocating commitments at same epoch.
     let mut store = GuardianVaultStore::default();
     store.upsert_ward(bundle_a[0].clone()).unwrap();
-    assert!(
-        store.upsert_ward(bundle_b[0].clone()).is_err(),
-        "Different share_commitments at same epoch must fail"
+    assert_validation_err(
+        store.upsert_ward(bundle_b[0].clone()),
+        "Equivocating share commitments or r_enc for same rotation epoch",
     );
 
     // Older updated_at with identical commitments must NOT overwrite newer descriptors.
@@ -304,7 +358,10 @@ fn test_h16_guardian_vault_equivocation_and_share_commitment_mismatch() {
 
     // 2. recover_master_payload_from_shares must reject mixed bundles at the same epoch.
     let mixed = vec![bundle_a[0].clone(), bundle_b[1].clone()];
-    assert!(recover_master_payload_from_shares(&mixed, &answers).is_err());
+    assert_validation_err(
+        recover_master_payload_from_shares(&mixed, &answers),
+        "Mismatched share_commitments in entry 1",
+    );
 }
 
 #[test]
@@ -321,12 +378,18 @@ fn test_f8_and_f9_uri_boundaries_loopback_host_decode_cap_and_kit_limits() {
     // 2. decode_post_slot must fail cleanly on spoofed count = 65535 without OOM.
     let mut bogus_slot = POST_SLOT_MAGIC.to_vec();
     bogus_slot.extend_from_slice(&u16::MAX.to_be_bytes());
-    assert!(decode_post_slot(&bogus_slot).is_err());
+    assert_slot_err(
+        decode_post_slot(&bogus_slot),
+        "Truncated post box header at entry 0",
+    );
 
     // 3. Recovery URI boundary, #, typographic quotes, and hard-wrap checks.
     let req = build_recovery_request_uri(&[9u8; 32], 1_700_000_000, Some("Alice"));
     let embedded = format!("https://evil.example/evil{}", req);
-    assert!(parse_recovery_request_uri(&embedded).is_err());
+    assert_validation_err(
+        parse_recovery_request_uri(&embedded),
+        "Invalid recovery request URI: missing 'recovery-req?'",
+    );
     let quoted_with_frag = format!("„{}#ignored-frag“", req);
     let parsed_req = parse_recovery_request_uri(&quoted_with_frag).unwrap();
     assert_eq!(parsed_req.name_hint.as_deref(), Some("Alice"));
@@ -358,10 +421,16 @@ fn test_f8_and_f9_uri_boundaries_loopback_host_decode_cap_and_kit_limits() {
         })
         .collect();
     let uri_too_many = build_emergency_kit_uri(&kit_too_many_syncs).unwrap();
-    assert!(parse_emergency_kit_uri(&uri_too_many).is_err());
+    assert_validation_err(
+        parse_emergency_kit_uri(&uri_too_many),
+        "kit sync descriptor count 9 exceeds maximum 8",
+    );
 
     let mut kit_bad_prefix = kit_ok;
     kit_bad_prefix.user_prefix = Some("bad_underscore".into());
     let uri_bad_prefix = build_emergency_kit_uri(&kit_bad_prefix).unwrap();
-    assert!(parse_emergency_kit_uri(&uri_bad_prefix).is_err());
+    assert_validation_err(
+        parse_emergency_kit_uri(&uri_bad_prefix),
+        "Sync prefix contains invalid characters: 'bad_underscore'",
+    );
 }

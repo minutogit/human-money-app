@@ -6,8 +6,21 @@ use humoco_market::{
     derive_public_drop_keypair, format_admin_request_message, format_member_request_message,
     format_slot_id, parse_slot_id, sign_admin_request, sign_delete_account_request,
     sign_member_request_direct, sign_member_request_stealth, sign_member_stealth_message,
-    validate_sync_prefix, MemberPolicy, SignedDropHeaders,
+    validate_sync_prefix, MarketError, MemberPolicy, SignedDropHeaders,
 };
+
+fn assert_validation_err<T: std::fmt::Debug>(
+    res: Result<T, MarketError>,
+    expected_substr: &str,
+) {
+    let err = res.expect_err("expected MarketError::Validation");
+    assert!(
+        matches!(&err, MarketError::Validation(msg) if msg.contains(expected_substr)),
+        "expected MarketError::Validation containing {:?}, got {:?}",
+        expected_substr,
+        err
+    );
+}
 
 fn verify_ed25519_detached_hex(
     pubkey_hex64: &str,
@@ -167,12 +180,8 @@ fn test_drop_access_deterministic_vectors() {
     };
 
     let vector_path = "tests/vectors/sync_access.json";
-    if !std::path::Path::new(vector_path).exists() {
-        let json = serde_json::to_string_pretty(&vectors).unwrap();
-        std::fs::write(vector_path, json).unwrap();
-    }
-
-    let loaded_content = std::fs::read_to_string(vector_path).unwrap();
+    let loaded_content = std::fs::read_to_string(vector_path)
+        .expect("Golden vector file tests/vectors/sync_access.json must exist");
     let loaded: DropAccessVectors = serde_json::from_str(&loaded_content).unwrap();
     assert_eq!(vectors, loaded);
 }
@@ -245,10 +254,13 @@ fn test_canonicalize_write_url_edge_cases() {
     );
 
     // Unsupported scheme rejected
-    assert!(canonicalize_write_url("ftp://example.com/sync.php").is_err());
+    assert_validation_err(
+        canonicalize_write_url("ftp://example.com/sync.php"),
+        "Unsupported scheme 'ftp'",
+    );
 
     // Empty URL rejected
-    assert!(canonicalize_write_url("   ").is_err());
+    assert_validation_err(canonicalize_write_url("   "), "write_url cannot be empty");
 }
 
 #[test]
@@ -395,22 +407,32 @@ fn test_validate_sync_prefix_rules() {
 
     // > 63 chars rejected
     let too_long_64 = "a".repeat(64);
-    assert!(validate_sync_prefix(Some(&too_long_64)).is_err());
+    assert_validation_err(
+        validate_sync_prefix(Some(&too_long_64)),
+        "Sync prefix must be 1..=63 characters, got 64",
+    );
 
     // Leading and trailing hyphens rejected
-    assert!(validate_sync_prefix(Some("-alice")).is_err());
-    assert!(validate_sync_prefix(Some("alice-")).is_err());
-    assert!(validate_sync_prefix(Some("-")).is_err());
+    for bad in ["-alice", "alice-", "-"] {
+        assert_validation_err(
+            validate_sync_prefix(Some(bad)),
+            "Sync prefix must not start or end with a hyphen",
+        );
+    }
 
     // Consecutive hyphens rejected
-    assert!(validate_sync_prefix(Some("alice--bob")).is_err());
+    assert_validation_err(
+        validate_sync_prefix(Some("alice--bob")),
+        "Sync prefix must not contain consecutive hyphens ('--')",
+    );
 
     // Invalid characters rejected
-    assert!(validate_sync_prefix(Some("Alice")).is_err());
-    assert!(validate_sync_prefix(Some("alice_bob")).is_err());
-    assert!(validate_sync_prefix(Some("alice.bob")).is_err());
-    assert!(validate_sync_prefix(Some("alice@bob")).is_err());
-    assert!(validate_sync_prefix(Some("alice bob")).is_err());
+    for bad in ["Alice", "alice_bob", "alice.bob", "alice@bob", "alice bob"] {
+        assert_validation_err(
+            validate_sync_prefix(Some(bad)),
+            "Sync prefix contains invalid characters",
+        );
+    }
 }
 
 #[test]
@@ -553,10 +575,22 @@ fn test_format_and_parse_slot_id() {
         (pk_hex.clone(), Some("alice-1".to_string()))
     );
 
-    assert!(parse_slot_id(&format!("{}_", pk_hex)).is_err());
-    assert!(parse_slot_id(&format!("{}_BAD", pk_hex)).is_err());
-    assert!(parse_slot_id(&format!("{}_a_b", pk_hex)).is_err());
-    assert!(parse_slot_id("not-a-pubkey").is_err());
+    assert_validation_err(
+        parse_slot_id(&format!("{}_", pk_hex)),
+        "slot_id must not end with '_' without a prefix",
+    );
+    assert_validation_err(
+        parse_slot_id(&format!("{}_BAD", pk_hex)),
+        "Sync prefix contains invalid characters: 'BAD'",
+    );
+    assert_validation_err(
+        parse_slot_id(&format!("{}_a_b", pk_hex)),
+        "Sync prefix contains invalid characters: 'a_b'",
+    );
+    assert_validation_err(
+        parse_slot_id("not-a-pubkey"),
+        "Public key must be a 64-character lowercase hex string",
+    );
 }
 
 #[test]

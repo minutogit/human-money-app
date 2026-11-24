@@ -6,11 +6,24 @@ use humoco_market::{
     accept_envelope, accept_envelope_manual, derive_effective_hops, encode_qr_svg, haversine_km,
     mark_card_deleted, mark_sent, merge, new_ad_id, next_card_version, parse_coordinates_pair,
     render_wire, should_attach_card, sign_sd_card, verify_sd_card, AcceptOutcome, Ad, AdKind,
-    CardEnvelope, CardItem, CardPayloadInput, CardStore, DropDescriptor, Skill, WireFilter,
-    CARD_SD_PADDED_LEN, MAX_BUNDLE_CARD_WIRE_BYTES, MAX_PRICING_CHARS, MAX_QR_SHARE_BYTES,
-    MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
+    CardEnvelope, CardItem, CardPayloadInput, CardStore, DropDescriptor, MarketError, Skill,
+    WireFilter, CARD_SD_PADDED_LEN, MAX_BUNDLE_CARD_WIRE_BYTES, MAX_PRICING_CHARS,
+    MAX_QR_SHARE_BYTES, MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
 };
 use proptest::prelude::*;
+
+fn assert_validation_err<T: std::fmt::Debug>(
+    res: Result<T, MarketError>,
+    expected_substr: &str,
+) {
+    let err = res.expect_err("expected MarketError::Validation");
+    assert!(
+        matches!(&err, MarketError::Validation(msg) if msg.contains(expected_substr)),
+        "expected MarketError::Validation containing {:?}, got {:?}",
+        expected_substr,
+        err
+    );
+}
 
 fn make_key(seed: u8) -> SigningKey {
     let mut bytes = [0u8; 32];
@@ -113,7 +126,7 @@ fn test_sd_card_manipulation_rejection() {
     let corrupted = format!("{}XYZ", parts[1]);
     parts[1] = &corrupted;
     let corrupted_wire = parts.join("~");
-    assert!(verify_sd_card(&corrupted_wire).is_err());
+    assert_validation_err(verify_sd_card(&corrupted_wire), "is not present in _sd");
 
     // 2. Foreign disclosure token (from another card, not in _sd) -> verify fails
     let foreign_sk = make_key(99);
@@ -129,7 +142,10 @@ fn test_sd_card_manipulation_rejection() {
     let mut parts2: Vec<&str> = wire.split('~').collect();
     parts2.insert(1, foreign_disc);
     let foreign_injected_wire = parts2.join("~");
-    assert!(verify_sd_card(&foreign_injected_wire).is_err());
+    assert_validation_err(
+        verify_sd_card(&foreign_injected_wire),
+        "is not present in _sd",
+    );
 
     // 3. Removed disclosure token -> MUST remain valid! (Selective Disclosure)
     let parts3: Vec<&str> = wire.split('~').collect();
@@ -388,11 +404,17 @@ fn test_receiver_rule_strip_contacts_at_hop2() {
         hops: 2,
     };
 
+    let did_key = create_user_id(&sk.verifying_key(), None).unwrap();
     let outcome = accept_envelope(&mut store, &env, 1700000000, 2000, None, &no_offender);
-    assert!(matches!(outcome, AcceptOutcome::Accepted { .. }));
+    assert_eq!(
+        outcome,
+        AcceptOutcome::Accepted {
+            did: did_key.clone(),
+            replaced: false,
+        }
+    );
 
     // Honest app stripped Phone because max_distance (1) < hops (2)
-    let did_key = create_user_id(&sk.verifying_key(), None).unwrap();
     let stored = store.cards.get(&did_key).unwrap();
     let decoded = humoco_market::sd_card::decoded_items(&stored.card);
     assert!(!decoded
@@ -448,7 +470,10 @@ fn test_limits_skills_and_ads() {
         }),
         2,
     ));
-    assert!(sign_sd_card(payload.clone(), items, &sk).is_err());
+    assert_validation_err(
+        sign_sd_card(payload.clone(), items, &sk),
+        "Skill count exceeds MAX_SKILLS_PER_CARD",
+    );
 
     // 10 ads ok
     let mut ad_items: Vec<(CardItem, u8)> = (0..10)
@@ -494,7 +519,10 @@ fn test_limits_skills_and_ads() {
         }),
         2,
     ));
-    assert!(sign_sd_card(payload, ad_items, &sk).is_err());
+    assert_validation_err(
+        sign_sd_card(payload, ad_items, &sk),
+        "Ad count exceeds MAX_ADS_PER_CARD",
+    );
 }
 
 #[test]
@@ -543,7 +571,10 @@ fn test_event_ad_validation_and_500_char_text() {
         }),
         2,
     );
-    assert!(sign_sd_card(payload.clone(), vec![missing_event_at], &sk).is_err());
+    assert_validation_err(
+        sign_sd_card(payload.clone(), vec![missing_event_at], &sk),
+        "Event ad must specify event_at",
+    );
 
     // Event with event_at > expires_at must fail
     let event_after_expiry = (
@@ -564,7 +595,10 @@ fn test_event_ad_validation_and_500_char_text() {
         }),
         2,
     );
-    assert!(sign_sd_card(payload.clone(), vec![event_after_expiry], &sk).is_err());
+    assert_validation_err(
+        sign_sd_card(payload.clone(), vec![event_after_expiry], &sk),
+        "cannot exceed expires_at",
+    );
 
     // Offer with event_at or event_all_day must fail
     let offer_with_event_at = (
@@ -585,7 +619,10 @@ fn test_event_ad_validation_and_500_char_text() {
         }),
         2,
     );
-    assert!(sign_sd_card(payload, vec![offer_with_event_at], &sk).is_err());
+    assert_validation_err(
+        sign_sd_card(payload, vec![offer_with_event_at], &sk),
+        "must not specify event_at or event_all_day",
+    );
 }
 
 #[test]
@@ -613,7 +650,10 @@ fn test_ad_duration_and_validity_invariants() {
         }),
         2,
     );
-    assert!(sign_sd_card(payload.clone(), vec![bad_duration_ad], &sk).is_err());
+    assert_validation_err(
+        sign_sd_card(payload.clone(), vec![bad_duration_ad], &sk),
+        "exceeds AD_MAX_DURATION_SECS",
+    );
 
     // Ad expires_at > valid_until -> err
     let beyond_valid_ad = (
@@ -634,7 +674,10 @@ fn test_ad_duration_and_validity_invariants() {
         }),
         2,
     );
-    assert!(sign_sd_card(payload.clone(), vec![beyond_valid_ad], &sk).is_err());
+    assert_validation_err(
+        sign_sd_card(payload.clone(), vec![beyond_valid_ad], &sk),
+        "exceeds card valid_until",
+    );
 
     // Duplicate Ad ID on same card -> err
     let duplicate_id = new_ad_id();
@@ -674,7 +717,10 @@ fn test_ad_duration_and_validity_invariants() {
         }),
         2,
     );
-    assert!(sign_sd_card(payload.clone(), vec![ad1, ad2], &sk).is_err());
+    assert_validation_err(
+        sign_sd_card(payload.clone(), vec![ad1, ad2], &sk),
+        "Duplicate Ad id on card:",
+    );
 
     // Expired ad (expires_at <= now) is NOT a validation error on verify
     let expired_ad = (
@@ -859,49 +905,65 @@ fn test_geo_eviction_remote_protection() {
     .unwrap();
     let wire_c = render_wire(&card_c, 2, WireFilter::Full).unwrap();
 
+    let did_a = create_user_id(&sk_a.verifying_key(), None).unwrap();
+    let did_b = create_user_id(&sk_b.verifying_key(), None).unwrap();
+    let did_c = create_user_id(&sk_c.verifying_key(), None).unwrap();
+
     // Insert A and B with max_stored_cards = 2
-    accept_envelope(
-        &mut store,
-        &CardEnvelope {
-            card_wire: wire_a,
-            hops: 2,
-        },
-        1700000000,
-        2,
-        own_coords,
-        &no_offender,
+    assert_eq!(
+        accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire_a,
+                hops: 2,
+            },
+            1700000000,
+            2,
+            own_coords,
+            &no_offender,
+        ),
+        AcceptOutcome::Accepted {
+            did: did_a.clone(),
+            replaced: false,
+        }
     );
-    accept_envelope(
-        &mut store,
-        &CardEnvelope {
-            card_wire: wire_b,
-            hops: 2,
-        },
-        1700000000,
-        2,
-        own_coords,
-        &no_offender,
+    assert_eq!(
+        accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire_b,
+                hops: 2,
+            },
+            1700000000,
+            2,
+            own_coords,
+            &no_offender,
+        ),
+        AcceptOutcome::Accepted {
+            did: did_b.clone(),
+            replaced: false,
+        }
     );
     assert_eq!(store.cards.len(), 2);
 
     // Insert C with max_stored_cards = 2
     // B is protected (remote skill), so between A (dist ~0) and C (dist ~150), C is evicted!
-    accept_envelope(
-        &mut store,
-        &CardEnvelope {
-            card_wire: wire_c,
-            hops: 2,
-        },
-        1700000000,
-        2,
-        own_coords,
-        &no_offender,
+    assert_eq!(
+        accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire_c,
+                hops: 2,
+            },
+            1700000000,
+            2,
+            own_coords,
+            &no_offender,
+        ),
+        AcceptOutcome::IgnoredStale
     );
 
     assert_eq!(store.cards.len(), 2);
-    let did_a = create_user_id(&sk_a.verifying_key(), None).unwrap();
-    let did_b = create_user_id(&sk_b.verifying_key(), None).unwrap();
-    let did_c = create_user_id(&sk_c.verifying_key(), None).unwrap();
 
     assert!(
         store.cards.contains_key(&did_a),
@@ -986,47 +1048,66 @@ fn test_geo_eviction_hop1_protection() {
     .unwrap();
     let wire3 = render_wire(&card3, 2, WireFilter::Full).unwrap();
 
-    accept_envelope(
-        &mut store,
-        &CardEnvelope {
-            card_wire: wire1,
-            hops: 1,
-        },
-        1700000000,
-        2,
-        own_coords,
-        &no_offender,
+    let did1 = create_user_id(&sk1.verifying_key(), None).unwrap();
+    let did2 = create_user_id(&sk2.verifying_key(), None).unwrap();
+    let did3 = create_user_id(&sk3.verifying_key(), None).unwrap();
+
+    assert_eq!(
+        accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire1,
+                hops: 1,
+            },
+            1700000000,
+            2,
+            own_coords,
+            &no_offender,
+        ),
+        AcceptOutcome::Accepted {
+            did: did1.clone(),
+            replaced: false,
+        }
     );
-    accept_envelope(
-        &mut store,
-        &CardEnvelope {
-            card_wire: wire2,
-            hops: 2,
-        },
-        1700000000,
-        2,
-        own_coords,
-        &no_offender,
+    assert_eq!(
+        accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire2,
+                hops: 2,
+            },
+            1700000000,
+            2,
+            own_coords,
+            &no_offender,
+        ),
+        AcceptOutcome::Accepted {
+            did: did2.clone(),
+            replaced: false,
+        }
     );
     assert_eq!(store.cards.len(), 2);
 
     // Insert Card 3: Card 1 is hop 1 (protected), so Card 2 (hop 2, farther than Card 3) is evicted.
-    accept_envelope(
-        &mut store,
-        &CardEnvelope {
-            card_wire: wire3,
-            hops: 2,
-        },
-        1700000000,
-        2,
-        own_coords,
-        &no_offender,
+    assert_eq!(
+        accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire3,
+                hops: 2,
+            },
+            1700000000,
+            2,
+            own_coords,
+            &no_offender,
+        ),
+        AcceptOutcome::Accepted {
+            did: did3.clone(),
+            replaced: false,
+        }
     );
 
     assert_eq!(store.cards.len(), 2);
-    let did1 = create_user_id(&sk1.verifying_key(), None).unwrap();
-    let did2 = create_user_id(&sk2.verifying_key(), None).unwrap();
-    let did3 = create_user_id(&sk3.verifying_key(), None).unwrap();
 
     assert!(
         store.cards.contains_key(&did1),
@@ -1111,47 +1192,66 @@ fn test_geo_eviction_far_vs_near() {
     .unwrap();
     let wire3 = render_wire(&card3, 2, WireFilter::Full).unwrap();
 
-    accept_envelope(
-        &mut store,
-        &CardEnvelope {
-            card_wire: wire1,
-            hops: 2,
-        },
-        1700000000,
-        2,
-        own_coords,
-        &no_offender,
+    let did1 = create_user_id(&sk1.verifying_key(), None).unwrap();
+    let did2 = create_user_id(&sk2.verifying_key(), None).unwrap();
+    let did3 = create_user_id(&sk3.verifying_key(), None).unwrap();
+
+    assert_eq!(
+        accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire1,
+                hops: 2,
+            },
+            1700000000,
+            2,
+            own_coords,
+            &no_offender,
+        ),
+        AcceptOutcome::Accepted {
+            did: did1.clone(),
+            replaced: false,
+        }
     );
-    accept_envelope(
-        &mut store,
-        &CardEnvelope {
-            card_wire: wire2,
-            hops: 2,
-        },
-        1700000000,
-        2,
-        own_coords,
-        &no_offender,
+    assert_eq!(
+        accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire2,
+                hops: 2,
+            },
+            1700000000,
+            2,
+            own_coords,
+            &no_offender,
+        ),
+        AcceptOutcome::Accepted {
+            did: did2.clone(),
+            replaced: false,
+        }
     );
     assert_eq!(store.cards.len(), 2);
 
     // Insert Card 3 (Berlin): Munich (Card 1, ~504 km) is farthest, evicted!
-    accept_envelope(
-        &mut store,
-        &CardEnvelope {
-            card_wire: wire3,
-            hops: 2,
-        },
-        1700000000,
-        2,
-        own_coords,
-        &no_offender,
+    assert_eq!(
+        accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire3,
+                hops: 2,
+            },
+            1700000000,
+            2,
+            own_coords,
+            &no_offender,
+        ),
+        AcceptOutcome::Accepted {
+            did: did3.clone(),
+            replaced: false,
+        }
     );
 
     assert_eq!(store.cards.len(), 2);
-    let did1 = create_user_id(&sk1.verifying_key(), None).unwrap();
-    let did2 = create_user_id(&sk2.verifying_key(), None).unwrap();
-    let did3 = create_user_id(&sk3.verifying_key(), None).unwrap();
 
     assert!(
         !store.cards.contains_key(&did1),
@@ -1181,9 +1281,14 @@ proptest! {
         let env = CardEnvelope { card_wire: wire, hops };
 
         let outcome = accept_envelope(&mut store, &env, 1700000000, 2000, None, &|_| false);
-        let is_accepted = matches!(outcome, AcceptOutcome::Accepted { .. });
         if hops <= card.payload.max_hops {
-            prop_assert!(is_accepted);
+            prop_assert_eq!(
+                outcome,
+                AcceptOutcome::Accepted {
+                    did: card.payload.recipient_id().to_string(),
+                    replaced: false,
+                }
+            );
         } else {
             prop_assert_eq!(outcome, AcceptOutcome::RejectedHops);
         }
@@ -1218,7 +1323,18 @@ fn test_card_accepts_prefixed_slot_id_and_rejects_malformed_slot_id() {
         slot_id: Some(format!("{}_INVALID_PREFIX", slot_pk_hex)),
         drop_pub: valid_vk_hex,
     }];
-    assert!(sign_sd_card(bad_payload, sample_items(), &sk).is_err());
+    let err = sign_sd_card(bad_payload, sample_items(), &sk)
+        .expect_err("malformed drop slot_id prefix must be rejected");
+    assert!(
+        matches!(
+            &err,
+            MarketError::Validation(msg)
+                if msg.contains("drop[0] slot_id error")
+                    && msg.contains("Sync prefix contains invalid characters: 'INVALID_PREFIX'")
+        ),
+        "unexpected error for malformed slot_id: {:?}",
+        err
+    );
 }
 
 #[test]
@@ -1266,10 +1382,13 @@ fn test_per_pubkey_card_cap_expiry_and_tombstone_first_eviction() {
 
     // 1. Expired card is purged before cap check and never blocks a 3rd active card
     let (did_exp, env_exp) = make_wire(Some("old"), 50, now + 100, 1, false);
-    assert!(matches!(
+    assert_eq!(
         accept_envelope(&mut store, &env_exp, now, 100, None, &|_| false),
-        AcceptOutcome::Accepted { .. }
-    ));
+        AcceptOutcome::Accepted {
+            did: did_exp.clone(),
+            replaced: false,
+        }
+    );
     let (d1, e1) = make_wire(None, 100, now + 10_000, 1, false);
     let (d2, e2) = make_wire(Some("laden"), 110, now + 10_000, 1, false);
     let (d3, e3) = make_wire(Some("privat"), 120, now + 10_000, 1, false);
@@ -1372,10 +1491,13 @@ fn test_card_deletion_tombstone_prevents_sync_resurrection_but_allows_newer_or_m
         hops: 1,
     };
 
-    assert!(matches!(
+    assert_eq!(
         accept_envelope(&mut store, &env_v2, now, 100, None, &|_| false),
-        AcceptOutcome::Accepted { .. }
-    ));
+        AcceptOutcome::Accepted {
+            did: key.clone(),
+            replaced: false,
+        }
+    );
 
     // Delete v2
     store.cards.remove(&key);
@@ -1389,10 +1511,13 @@ fn test_card_deletion_tombstone_prevents_sync_resurrection_but_allows_newer_or_m
     assert!(!store.cards.contains_key(&key));
 
     // Explicit manual QR import overrides tombstone for v2
-    assert!(matches!(
+    assert_eq!(
         accept_envelope_manual(&mut store, &env_v2, now + 6, 100, None, &|_| false),
-        AcceptOutcome::Accepted { .. }
-    ));
+        AcceptOutcome::Accepted {
+            did: key.clone(),
+            replaced: false,
+        }
+    );
     assert!(store.cards.contains_key(&key));
     assert!(!store.deleted_card_versions.contains_key(&key));
 
@@ -1407,10 +1532,13 @@ fn test_card_deletion_tombstone_prevents_sync_resurrection_but_allows_newer_or_m
         card_wire: render_wire(&card_v3, 1, WireFilter::Full).unwrap(),
         hops: 1,
     };
-    assert!(matches!(
+    assert_eq!(
         accept_envelope(&mut store, &env_v3, now + 10, 100, None, &|_| false),
-        AcceptOutcome::Accepted { .. }
-    ));
+        AcceptOutcome::Accepted {
+            did: key.clone(),
+            replaced: false,
+        }
+    );
     assert!(store.cards.contains_key(&key));
     assert!(!store.deleted_card_versions.contains_key(&key));
 }
