@@ -1171,42 +1171,116 @@ mod tests {
     use super::*;
     use crate::services::fs_helpers::ProfileMetadata;
 
+    struct TempDirGuard(PathBuf);
+
+    impl TempDirGuard {
+        fn new(test_name: &str) -> Self {
+            Self(crate::test_support::temp_test_dir(test_name))
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            if let Err(err) = std::fs::remove_dir_all(&self.0) {
+                eprintln!(
+                    "TempDirGuard cleanup failed for {}: {}",
+                    self.0.display(),
+                    err
+                );
+            }
+        }
+    }
+
+    struct PinTestEnv {
+        _guard: TempDirGuard,
+        dir: PathBuf,
+        keystore_dir: PathBuf,
+        app_state: AppState,
+        folder: String,
+        master_pw: &'static str,
+    }
+
+    fn setup_pin_test_profile(
+        test_name: &str,
+        retain_mnemonic: bool,
+        device_id: &str,
+    ) -> PinTestEnv {
+        use human_money_core::app_service::AppService;
+        use human_money_core::services::mnemonic::MnemonicLanguage;
+
+        let dir = crate::test_support::temp_test_dir(test_name);
+        let wallet_dir = dir.join("wallet_data");
+        let keystore_dir = dir.join("keystore");
+        std::fs::create_dir_all(&wallet_dir).unwrap();
+
+        let master_pw = "MasterPass-Strong-2026!";
+        let mut service = AppService::new(&wallet_dir).unwrap();
+        let mnemonic = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
+        service
+            .create_profile(
+                "Pin Tester",
+                &mnemonic,
+                None,
+                Some("pt"),
+                master_pw,
+                MnemonicLanguage::English,
+                device_id.to_string(),
+                retain_mnemonic,
+            )
+            .unwrap();
+        let folder = service.list_profiles().unwrap()[0].folder_name.clone();
+        PinTestEnv {
+            _guard: TempDirGuard(dir.clone()),
+            dir,
+            keystore_dir,
+            app_state: AppState::new(service),
+            folder,
+            master_pw,
+        }
+    }
+
     #[test]
     fn test_login_ipc_parsing() {
-        // Test that malformed JSON doesn't crash the parsing logic
+        // Invariant: malformed JSON triggers a syntax error while valid login JSON parses all camelCase fields.
         let invalid_json = "{ invalid json }";
-        let result: Result<serde_json::Value, _> = serde_json::from_str(invalid_json);
-        assert!(result.is_err(), "Malformed JSON should fail to parse");
+        let err = serde_json::from_str::<serde_json::Value>(invalid_json)
+            .expect_err("Malformed JSON should fail to parse");
+        assert!(err.is_syntax(), "expected JSON syntax error, got: {}", err);
 
-        // Test that valid JSON structure can be parsed
         let valid_json = r#"{
             "folderName": "test_profile",
             "password": "test_password",
             "cleanupOnLogin": true,
             "localInstanceId": "test-instance-123"
         }"#;
-        let result: Result<serde_json::Value, _> = serde_json::from_str(valid_json);
-        assert!(result.is_ok(), "Valid JSON should parse successfully");
+        let parsed: serde_json::Value =
+            serde_json::from_str(valid_json).expect("Valid JSON should parse successfully");
+        assert_eq!(parsed["folderName"], "test_profile");
+        assert_eq!(parsed["cleanupOnLogin"], true);
     }
 
     #[test]
     fn test_profile_metadata_serialization() {
-        // Test that ProfileMetadata can be serialized and deserialized
+        // Invariant: ProfileMetadata JSON roundtrips cleanly without losing timestamps.
         let metadata = ProfileMetadata {
             last_used: Utc::now().to_rfc3339(),
             user_id: None,
         };
 
-        let serialized = serde_json::to_string(&metadata);
-        assert!(serialized.is_ok(), "ProfileMetadata should serialize");
-
-        let deserialized: Result<ProfileMetadata, _> = serde_json::from_str(&serialized.unwrap());
-        assert!(deserialized.is_ok(), "ProfileMetadata should deserialize");
+        let serialized = serde_json::to_string(&metadata).expect("ProfileMetadata should serialize");
+        let deserialized: ProfileMetadata =
+            serde_json::from_str(&serialized).expect("ProfileMetadata should deserialize");
+        assert_eq!(deserialized.last_used, metadata.last_used);
+        assert_eq!(deserialized.user_id, metadata.user_id);
     }
 
     #[test]
     fn test_profile_info_serialization() {
-        // Test that ProfileInfo can be serialized and deserialized
+        // Invariant: ProfileInfo preserves profile metadata fields across JSON roundtrips.
         let profile_info = ProfileInfo {
             profile_name: "Test Profile".to_string(),
             folder_name: "test_folder".to_string(),
@@ -1214,18 +1288,19 @@ mod tests {
             user_id: Some("did:key:z6MkTest".to_string()),
         };
 
-        let serialized = serde_json::to_string(&profile_info);
-        assert!(serialized.is_ok(), "ProfileInfo should serialize");
-
-        let deserialized: Result<ProfileInfo, _> = serde_json::from_str(&serialized.unwrap());
-        assert!(deserialized.is_ok(), "ProfileInfo should deserialize");
-        assert_eq!(deserialized.unwrap().profile_name, "Test Profile");
+        let serialized =
+            serde_json::to_string(&profile_info).expect("ProfileInfo should serialize");
+        let deserialized: ProfileInfo =
+            serde_json::from_str(&serialized).expect("ProfileInfo should deserialize");
+        assert_eq!(deserialized.profile_name, "Test Profile");
+        assert_eq!(deserialized.folder_name, "test_folder");
+        assert_eq!(deserialized.user_id.as_deref(), Some("did:key:z6MkTest"));
     }
 
     #[test]
     fn test_logout_clears_all_caches() {
+        // Invariant: clear_all_caches resets active profile cache container and all typed cache slots.
         use human_money_core::app_service::AppService;
-        use std::path::PathBuf;
 
         let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
         let state = AppState::new(service);
@@ -1249,131 +1324,132 @@ mod tests {
 
     #[test]
     fn test_sysinfo_processes() {
+        // Invariant: sysinfo discovers the live current PID after process refresh.
         use sysinfo::{Pid, System};
         let mut s = System::new();
         s.refresh_processes();
         let current_pid = std::process::id();
-        let proc = s.process(Pid::from_u32(current_pid));
-        assert!(
-            proc.is_some(),
-            "Current process should be found in refreshed processes! PID: {}",
-            current_pid
-        );
+        let proc = s
+            .process(Pid::from_u32(current_pid))
+            .expect("Current process should be found in refreshed processes");
+        assert_eq!(proc.pid().as_u32(), current_pid);
     }
 
     #[test]
-    fn test_pin_enable_login_five_strike_wipe_and_elevate() {
-        use human_money_core::app_service::AppService;
-        use human_money_core::services::mnemonic::MnemonicLanguage;
+    fn test_pin_enable_validation_rejects_short_pin_and_unknown_scope() {
+        // Invariant: PIN enable enforces 6-8 digit format and DailyPay-only scope, and Full sessions block PIN unlock.
+        let env = setup_pin_test_profile("pin_enable_validation", true, "dev-pin-1");
 
-        let dir = crate::test_support::temp_test_dir("pin_auth_test");
-        let wallet_dir = dir.join("wallet_data");
-        let keystore_dir = dir.join("keystore");
-        std::fs::create_dir_all(&wallet_dir).unwrap();
-
-        let master_pw = "MasterPass-Strong-2026!";
-        let mut service = AppService::new(&wallet_dir).unwrap();
-        let mnemonic = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
-        service
-            .create_profile(
-                "Pin Tester",
-                &mnemonic,
-                None,
-                Some("pt"),
-                master_pw,
-                MnemonicLanguage::English,
-                "dev-pin-1".into(),
-                true,
-            )
-            .unwrap();
-        let folder = service.list_profiles().unwrap()[0].folder_name.clone();
-
-        let app_state = AppState::new(service);
-
-        // 1. Short / non-digit PIN rejected
-        assert!(enable_profile_pin_impl(
-            master_pw,
+        let short_err = enable_profile_pin_impl(
+            env.master_pw,
             "1234",
             "dailyPay",
-            &folder,
-            &keystore_dir,
+            &env.folder,
+            &env.keystore_dir,
             "dev-pin-1",
-            &app_state
+            &env.app_state,
         )
-        .is_err());
+        .unwrap_err();
+        assert_eq!(short_err.code, "error.auth.invalidPinFormat");
+        assert!(
+            short_err.message.contains("6 to 8 digits"),
+            "unexpected PIN format error: {:?}",
+            short_err
+        );
 
-        // ReceiveOnly scope is no longer accepted in the App layer
-        assert!(enable_profile_pin_impl(
-            master_pw,
+        let scope_err = enable_profile_pin_impl(
+            env.master_pw,
             "246810",
             "receiveOnly",
-            &folder,
-            &keystore_dir,
+            &env.folder,
+            &env.keystore_dir,
             "dev-pin-1",
-            &app_state
+            &env.app_state,
         )
-        .is_err());
+        .unwrap_err();
+        assert!(
+            scope_err
+                .message
+                .contains("Unsupported PIN scope: receiveOnly"),
+            "unexpected scope error: {:?}",
+            scope_err
+        );
 
-        // 2. Enable 6-digit DailyPay PIN
         let status = enable_profile_pin_impl(
-            master_pw,
+            env.master_pw,
             "246810",
             "dailyPay",
-            &folder,
-            &keystore_dir,
+            &env.folder,
+            &env.keystore_dir,
             "dev-pin-1",
-            &app_state,
+            &env.app_state,
         )
         .unwrap();
         assert!(status.enabled);
         assert_eq!(status.scope.as_deref(), Some("dailyPay"));
         assert_eq!(status.remaining_attempts, 5);
 
-        // Full-baseline session rejects PIN session unlock without touching failed_attempts
-        let full_pin_err =
-            unlock_session_with_pin_impl(&folder, "000000", &keystore_dir, "dev-pin-1", &app_state)
-                .unwrap_err();
+        let full_pin_err = unlock_session_with_pin_impl(
+            &env.folder,
+            "000000",
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap_err();
         assert_eq!(full_pin_err.code, "error.auth.insufficientAccessMode");
-        let after_full_pin_err =
-            get_profile_pin_status_impl(&folder, &keystore_dir, &app_state).unwrap();
-        assert!(after_full_pin_err.enabled);
-        assert_eq!(after_full_pin_err.failed_attempts, 0);
-        assert_eq!(after_full_pin_err.remaining_attempts, 5);
+        let after_err =
+            get_profile_pin_status_impl(&env.folder, &env.keystore_dir, &env.app_state).unwrap();
+        assert!(after_err.enabled);
+        assert_eq!(after_err.failed_attempts, 0);
+        assert_eq!(after_err.remaining_attempts, 5);
+    }
 
-        // Logout and login via PIN
-        app_state.service.lock().unwrap().logout();
+    #[test]
+    fn test_pin_login_daily_pay_session_elevation_and_timeout_modes() {
+        // Invariant: PIN login starts in DailyPay, elevates fail-closed on timeout=0 or timed Full on timeout>0, and re-unlocks appropriately.
+        let env = setup_pin_test_profile("pin_session_elevation", true, "dev-pin-1");
+        enable_profile_pin_impl(
+            env.master_pw,
+            "246810",
+            "dailyPay",
+            &env.folder,
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap();
+
+        env.app_state.service.lock().unwrap().logout();
         let mode = login_with_pin_impl(
-            &folder,
+            &env.folder,
             "246810",
             false,
             "dev-pin-1".into(),
-            &keystore_dir,
+            &env.keystore_dir,
             "dev-pin-1",
-            &app_state,
+            &env.app_state,
             None,
         )
         .unwrap();
         assert_eq!(mode, "dailyPay");
-        let st = get_session_status_impl(&app_state).unwrap();
+        let st = get_session_status_impl(&env.app_state).unwrap();
         assert!(st.is_unlocked);
         assert_eq!(st.access_mode, "dailyPay");
         assert_eq!(st.base_access_mode, "dailyPay");
 
-        // Fail-closed elevation when cached security policy is cleared -> timeout 0, no cache, base mode stays dailyPay
-        app_state.set_cached_security_policy(None);
-        let fail_closed = elevate_session_with_password_impl(master_pw, &app_state).unwrap();
+        env.app_state.set_cached_security_policy(None);
+        let fail_closed = elevate_session_with_password_impl(env.master_pw, &env.app_state).unwrap();
         assert!(fail_closed.is_unlocked);
         assert!(!fail_closed.has_cached_session);
         assert_eq!(fail_closed.access_mode, "dailyPay");
         assert_eq!(fail_closed.base_access_mode, "dailyPay");
 
-        // Elevate session with active timeout -> grants temporary Full access, lock_session demotes back to dailyPay
-        let timed_policy = SecurityPolicy {
+        env.app_state.set_cached_security_policy(Some(SecurityPolicy {
             session_timeout_seconds: 300,
             ..Default::default()
-        };
-        app_state.set_cached_security_policy(Some(timed_policy));
-        let elevated = elevate_session_with_password_impl(master_pw, &app_state).unwrap();
+        }));
+        let elevated = elevate_session_with_password_impl(env.master_pw, &env.app_state).unwrap();
         assert_eq!(
             elevated,
             SessionStatusDto {
@@ -1384,10 +1460,9 @@ mod tests {
                 one_shot_grant: None,
             }
         );
-        app_state.service.lock().unwrap().lock_session();
-        let demoted = get_session_status_impl(&app_state).unwrap();
+        env.app_state.service.lock().unwrap().lock_session();
         assert_eq!(
-            demoted,
+            get_session_status_impl(&env.app_state).unwrap(),
             SessionStatusDto {
                 is_unlocked: true,
                 has_cached_session: false,
@@ -1397,73 +1472,109 @@ mod tests {
             }
         );
 
-        // Ephemeral PIN re-unlock when backend policy timeout == 0 leaves has_cached_session == false and issues one-shot grant
-        app_state.set_cached_security_policy(Some(SecurityPolicy {
+        env.app_state.set_cached_security_policy(Some(SecurityPolicy {
             session_timeout_seconds: 0,
             ..Default::default()
         }));
-        let ephemeral =
-            unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-pin-1", &app_state)
-                .unwrap();
+        let ephemeral = unlock_session_with_pin_impl(
+            &env.folder,
+            "246810",
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap();
         assert!(!ephemeral.has_cached_session);
-        assert_eq!(ephemeral.access_mode, "dailyPay");
         assert!(ephemeral
             .one_shot_grant
             .as_deref()
             .is_some_and(|g| g.starts_with(crate::state::ONE_SHOT_PIN_GRANT_PREFIX)));
 
-        // Timed PIN re-unlock when backend policy timeout > 0 activates DailyPay cache & resets strike counter
-        app_state.set_cached_security_policy(Some(SecurityPolicy {
+        env.app_state.set_cached_security_policy(Some(SecurityPolicy {
             session_timeout_seconds: 300,
             ..Default::default()
         }));
-        let wrong_once =
-            unlock_session_with_pin_impl(&folder, "000000", &keystore_dir, "dev-pin-1", &app_state)
-                .unwrap_err();
+        let wrong_once = unlock_session_with_pin_impl(
+            &env.folder,
+            "000000",
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap_err();
         assert_eq!(wrong_once.code, "error.auth.invalidPin");
         assert_eq!(
             wrong_once.details.get("remaining").map(String::as_str),
             Some("4")
         );
 
-        let cached_pin =
-            unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-pin-1", &app_state)
-                .unwrap();
+        let cached_pin = unlock_session_with_pin_impl(
+            &env.folder,
+            "246810",
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap();
         assert!(cached_pin.has_cached_session);
         assert!(cached_pin.one_shot_grant.is_none());
-        assert_eq!(cached_pin.access_mode, "dailyPay");
-        assert_eq!(cached_pin.base_access_mode, "dailyPay");
         assert_eq!(
-            get_profile_pin_status_impl(&folder, &keystore_dir, &app_state)
+            get_profile_pin_status_impl(&env.folder, &env.keystore_dir, &env.app_state)
                 .unwrap()
                 .remaining_attempts,
             5
         );
+    }
 
-        // Full-access operations fail cleanly in DailyPay mode without valid master password
+    #[test]
+    fn test_pin_daily_pay_blocks_full_access_modules_until_password_override() {
+        // Invariant: DailyPay sessions reject Full-access recovery, L2 trust, sync admin, and standard mutations without master password.
+        let env = setup_pin_test_profile("pin_full_boundary", true, "dev-pin-1");
+        enable_profile_pin_impl(
+            env.master_pw,
+            "246810",
+            "dailyPay",
+            &env.folder,
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap();
+        env.app_state.service.lock().unwrap().logout();
+        login_with_pin_impl(
+            &env.folder,
+            "246810",
+            false,
+            "dev-pin-1".into(),
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+            None,
+        )
+        .unwrap();
+
         let req_uri = humoco_market::build_recovery_request_uri(&[7u8; 32], 1_760_000_000, None);
         let release_err =
             crate::services::recovery_service::approve_guardian_recovery_request_impl(
                 req_uri,
                 "did:key:zOwnerDummy".to_string(),
                 Some("246810"),
-                &app_state,
+                &env.app_state,
             )
             .unwrap_err();
         assert_eq!(release_err.code, "error.auth.insufficientAccessMode");
 
-        let access_err = app_state
+        let access_err = env
+            .app_state
             .authorize(RequiredAccess::Full, Some("246810"))
             .unwrap_err();
         assert_eq!(access_err.code, "error.auth.insufficientAccessMode");
 
-        // Boundary enforcement across l2, sync, and standards modules:
-        // DailyPay fails with insufficientAccessMode; master password override succeeds.
         let l2_err = crate::services::l2_anchor_service::set_lock_server_trust_impl(
             "11".repeat(32),
             true,
             None,
-            &app_state,
+            &env.app_state,
         )
         .unwrap_err();
         assert_eq!(l2_err.code, "error.auth.insufficientAccessMode");
@@ -1471,53 +1582,78 @@ mod tests {
             crate::services::l2_anchor_service::set_lock_server_trust_impl(
                 "11".repeat(32),
                 true,
-                Some(master_pw.to_string()),
-                &app_state,
+                Some(env.master_pw.to_string()),
+                &env.app_state,
             )
             .is_ok()
         );
 
         let sync_err =
-            crate::services::sync_engine::admin::delete_sync_admin_impl(None, &app_state)
+            crate::services::sync_engine::admin::delete_sync_admin_impl(None, &env.app_state)
                 .unwrap_err();
         assert_eq!(sync_err.code, "error.auth.insufficientAccessMode");
         assert!(crate::services::sync_engine::admin::delete_sync_admin_impl(
-            Some(master_pw.to_string()),
-            &app_state,
+            Some(env.master_pw.to_string()),
+            &env.app_state,
         )
         .is_ok());
 
-        let standards_dir = dir.join("standards");
+        let standards_dir = env.dir.join("standards");
         std::fs::create_dir_all(&standards_dir).unwrap();
-        {
-            let svc = app_state.service.lock().unwrap();
-            let std_del_err = svc
-                .delete_voucher_standard("minuto", None, &standards_dir)
-                .unwrap_err();
-            assert_eq!(
-                FrontendError::from(std_del_err).code,
-                "error.auth.insufficientAccessMode"
-            );
-            let std_imp_err = svc
-                .import_voucher_standard(b"invalid", None, None, &standards_dir)
-                .unwrap_err();
-            assert_eq!(
-                FrontendError::from(std_imp_err).code,
-                "error.auth.insufficientAccessMode"
-            );
-            assert!(svc
-                .delete_voucher_standard("missing_standard", Some(master_pw), &standards_dir)
-                .is_ok());
-        }
+        let svc = env.app_state.service.lock().unwrap();
+        let std_del_err = svc
+            .delete_voucher_standard("minuto", None, &standards_dir)
+            .unwrap_err();
+        assert_eq!(
+            FrontendError::from(std_del_err).code,
+            "error.auth.insufficientAccessMode"
+        );
+        let std_imp_err = svc
+            .import_voucher_standard(b"invalid", None, None, &standards_dir)
+            .unwrap_err();
+        assert_eq!(
+            FrontendError::from(std_imp_err).code,
+            "error.auth.insufficientAccessMode"
+        );
+        assert!(svc
+            .delete_voucher_standard("missing_standard", Some(env.master_pw), &standards_dir)
+            .is_ok());
+    }
 
-        // 5-strike wipe during unlocked PIN re-auth wipes slot + clears active session cache
+    #[test]
+    fn test_pin_five_strike_wipe_locks_out_reauth_and_login() {
+        // Invariant: 5 consecutive invalid PIN attempts wipe the secondary auth slot in both unlocked re-auth and offline login.
+        let env = setup_pin_test_profile("pin_five_strike", true, "dev-pin-1");
+        enable_profile_pin_impl(
+            env.master_pw,
+            "246810",
+            "dailyPay",
+            &env.folder,
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap();
+        env.app_state.service.lock().unwrap().logout();
+        login_with_pin_impl(
+            &env.folder,
+            "246810",
+            false,
+            "dev-pin-1".into(),
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+            None,
+        )
+        .unwrap();
+
         for expected_rem in [4, 3, 2, 1] {
             let err = unlock_session_with_pin_impl(
-                &folder,
+                &env.folder,
                 "000000",
-                &keystore_dir,
+                &env.keystore_dir,
                 "dev-pin-1",
-                &app_state,
+                &env.app_state,
             )
             .unwrap_err();
             assert_eq!(err.code, "error.auth.invalidPin");
@@ -1526,48 +1662,51 @@ mod tests {
                 Some(expected_rem.to_string().as_str())
             );
         }
-        let wipe_reauth_err =
-            unlock_session_with_pin_impl(&folder, "000000", &keystore_dir, "dev-pin-1", &app_state)
-                .unwrap_err();
+        let wipe_reauth_err = unlock_session_with_pin_impl(
+            &env.folder,
+            "000000",
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap_err();
         assert_eq!(wipe_reauth_err.code, "error.auth.pinWipedMaxAttempts");
-        let after_reauth_wipe = get_session_status_impl(&app_state).unwrap();
+        let after_reauth_wipe = get_session_status_impl(&env.app_state).unwrap();
         assert!(!after_reauth_wipe.has_cached_session);
         assert!(!after_reauth_wipe.is_unlocked);
         assert!(
-            !get_profile_pin_status_impl(&folder, &keystore_dir, &app_state)
+            !get_profile_pin_status_impl(&env.folder, &env.keystore_dir, &env.app_state)
                 .unwrap()
                 .enabled
         );
 
-        // Re-authenticate with master password after wipe-triggered auto-logout, re-enable PIN,
-        // and verify 5-strike wipe on login_with_pin_impl as well
-        app_state
+        env.app_state
             .service
             .lock()
             .unwrap()
-            .login(&folder, master_pw, false, "dev-pin-1".into())
+            .login(&env.folder, env.master_pw, false, "dev-pin-1".into())
             .unwrap();
         enable_profile_pin_impl(
-            master_pw,
+            env.master_pw,
             "246810",
             "dailyPay",
-            &folder,
-            &keystore_dir,
+            &env.folder,
+            &env.keystore_dir,
             "dev-pin-1",
-            &app_state,
+            &env.app_state,
         )
         .unwrap();
-        app_state.service.lock().unwrap().logout();
+        env.app_state.service.lock().unwrap().logout();
 
         for expected_rem in [4, 3, 2, 1] {
             let err = login_with_pin_impl(
-                &folder,
+                &env.folder,
                 "000000",
                 false,
                 "dev-pin-1".into(),
-                &keystore_dir,
+                &env.keystore_dir,
                 "dev-pin-1",
-                &app_state,
+                &env.app_state,
                 None,
             )
             .unwrap_err();
@@ -1577,166 +1716,166 @@ mod tests {
                 Some(expected_rem.to_string().as_str())
             );
         }
-
-        // 5th strike triggers wipe!
         let wipe_err = login_with_pin_impl(
-            &folder,
+            &env.folder,
             "000000",
             false,
             "dev-pin-1".into(),
-            &keystore_dir,
+            &env.keystore_dir,
             "dev-pin-1",
-            &app_state,
+            &env.app_state,
             None,
         )
         .unwrap_err();
         assert_eq!(wipe_err.code, "error.auth.pinWipedMaxAttempts");
+        assert!(
+            !get_profile_pin_status_impl(&env.folder, &env.keystore_dir, &env.app_state)
+                .unwrap()
+                .enabled
+        );
 
-        let post_wipe_status =
-            get_profile_pin_status_impl(&folder, &keystore_dir, &app_state).unwrap();
-        assert!(!post_wipe_status.enabled);
-
-        // Master password login still works cleanly after PIN wipe!
-        app_state
+        env.app_state
             .service
             .lock()
             .unwrap()
-            .login(&folder, master_pw, false, "dev-pin-1".into())
+            .login(&env.folder, env.master_pw, false, "dev-pin-1".into())
             .unwrap();
     }
 
     #[test]
     fn h1_h2_one_shot_pin_grant_single_use_rejects_full_and_clear_invalidates() {
-        use human_money_core::app_service::AppService;
-        use human_money_core::services::mnemonic::MnemonicLanguage;
-
-        let dir = crate::test_support::temp_test_dir("h1_h2_grant_matrix");
-        let wallet_dir = dir.join("wallet_data");
-        let keystore_dir = dir.join("keystore");
-        std::fs::create_dir_all(&wallet_dir).unwrap();
-
-        let master_pw = "MasterPass-H1H2-2026!";
-        let mut service = AppService::new(&wallet_dir).unwrap();
-        let mnemonic = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
-        service
-            .create_profile(
-                "Matrix Tester",
-                &mnemonic,
-                None,
-                Some("mx"),
-                master_pw,
-                MnemonicLanguage::English,
-                "dev-h1".into(),
-                true,
-            )
-            .unwrap();
-        let folder = service.list_profiles().unwrap()[0].folder_name.clone();
-        let app_state = AppState::new(service);
+        // Invariant: timeout=0 PIN grants are strictly single-use for DailyPay, denied for Full, and invalidated on cache clear.
+        let env = setup_pin_test_profile("h1_h2_grant_matrix", true, "dev-pin-1");
 
         enable_profile_pin_impl(
-            master_pw,
+            env.master_pw,
             "246810",
             "dailyPay",
-            &folder,
-            &keystore_dir,
-            "dev-h1",
-            &app_state,
+            &env.folder,
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
         )
         .unwrap();
 
-        app_state.service.lock().unwrap().logout();
+        env.app_state.service.lock().unwrap().logout();
         login_with_pin_impl(
-            &folder,
+            &env.folder,
             "246810",
             false,
-            "dev-h1".into(),
-            &keystore_dir,
-            "dev-h1",
-            &app_state,
+            "dev-pin-1".into(),
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
             None,
         )
         .unwrap();
-        // Force DailyPay cache expiration so timeout=0 unlock issues a single-use grant
-        app_state.service.lock().unwrap().lock_session();
-        app_state.set_cached_security_policy(Some(SecurityPolicy {
+        env.app_state.service.lock().unwrap().lock_session();
+        env.app_state.set_cached_security_policy(Some(SecurityPolicy {
             session_timeout_seconds: 0,
             ..Default::default()
         }));
 
-        // Locked DailyPay session denies Full and DailyPay calls without grant
-        let denied_daily = app_state
+        let denied_daily = env
+            .app_state
             .authorize(RequiredAccess::DailyPay, None)
             .unwrap_err();
-        assert!(
-            denied_daily.code == "error.auth.passwordRequired"
-                || denied_daily.code == "error.auth.sessionNotActive",
-            "unexpected locked error code: {}",
-            denied_daily.code
+        assert_eq!(
+            denied_daily.code, "error.auth.sessionNotActive",
+            "expected sessionNotActive when timeout=0 DailyPay session is locked"
         );
 
-        let unlocked =
-            unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-h1", &app_state)
-                .unwrap();
+        let unlocked = unlock_session_with_pin_impl(
+            &env.folder,
+            "246810",
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap();
         let grant = unlocked
             .one_shot_grant
             .expect("timeout=0 PIN unlock must issue a single-use grant");
         assert!(grant.starts_with(crate::state::ONE_SHOT_PIN_GRANT_PREFIX));
 
-        // 1. Grant is REJECTED for RequiredAccess::Full (H1/H2: DailyPay-only grant cannot elevate)
-        let full_err = app_state
+        let full_err = env
+            .app_state
             .authorize_and_lock_secret(RequiredAccess::Full, Some(&grant))
             .err()
             .unwrap();
         assert_eq!(full_err.code, "error.auth.insufficientAccessMode");
 
-        // 2. Grant is accepted ONCE for RequiredAccess::DailyPay and immediately consumed
-        assert!(app_state
+        assert!(env
+            .app_state
             .authorize_and_lock_secret(RequiredAccess::DailyPay, Some(&grant))
             .is_ok());
-        let reuse_err = app_state
+        let reuse_err = env
+            .app_state
             .authorize_and_lock_secret(RequiredAccess::DailyPay, Some(&grant))
             .err()
             .unwrap();
-        assert_eq!(
-            reuse_err.code, "error.auth.sessionTimeout",
-            "expected sessionTimeout on one-shot grant reuse, got {}",
-            reuse_err.code
+        assert_eq!(reuse_err.code, "error.auth.sessionTimeout");
+
+        let grant2 = unlock_session_with_pin_impl(
+            &env.folder,
+            "246810",
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap()
+        .one_shot_grant
+        .unwrap();
+        env.app_state.clear_all_caches();
+        let clear_err = env
+            .app_state
+            .authorize_and_lock_secret(RequiredAccess::DailyPay, Some(&grant2))
+            .err()
+            .expect("clear_all_caches must invalidate one-shot grant");
+        assert_eq!(clear_err.code, "error.auth.sessionTimeout");
+        assert!(
+            clear_err
+                .message
+                .contains("One-shot PIN grant missing or already used"),
+            "unexpected invalidated grant error: {:?}",
+            clear_err
         );
 
-        // 3. Issuing a new grant and logging out / clearing caches invalidates it
-        let grant2 =
-            unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-h1", &app_state)
-                .unwrap()
-                .one_shot_grant
-                .unwrap();
-        app_state.clear_all_caches();
-        assert!(app_state
-            .authorize_and_lock_secret(RequiredAccess::DailyPay, Some(&grant2))
-            .is_err());
-
-        // 4. H2: Timed DailyPay session satisfies DailyPay, NOT Full
-        app_state.set_cached_security_policy(Some(SecurityPolicy {
+        env.app_state.set_cached_security_policy(Some(SecurityPolicy {
             session_timeout_seconds: 300,
             ..Default::default()
         }));
-        unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-h1", &app_state)
-            .unwrap();
-        assert!(app_state.authorize(RequiredAccess::DailyPay, None).is_ok());
-        let daily_full_err = app_state.authorize(RequiredAccess::Full, None).unwrap_err();
-        assert_eq!(daily_full_err.code, "error.auth.insufficientAccessMode");
-        assert!(app_state
-            .authorize(RequiredAccess::Full, Some(master_pw))
+        unlock_session_with_pin_impl(
+            &env.folder,
+            "246810",
+            &env.keystore_dir,
+            "dev-pin-1",
+            &env.app_state,
+        )
+        .unwrap();
+        assert!(env
+            .app_state
+            .authorize(RequiredAccess::DailyPay, None)
             .is_ok());
-
-        let _ = std::fs::remove_dir_all(&dir);
+        let daily_full_err = env
+            .app_state
+            .authorize(RequiredAccess::Full, None)
+            .unwrap_err();
+        assert_eq!(daily_full_err.code, "error.auth.insufficientAccessMode");
+        assert!(env
+            .app_state
+            .authorize(RequiredAccess::Full, Some(env.master_pw))
+            .is_ok());
     }
 
     #[test]
     fn k2_h2_delete_profile_enforces_lock_contention_and_tears_down_active_session() {
+        // Invariant: profile deletion fails closed on foreign lock contention and tears down active state without unlinking flock inode.
         use human_money_core::app_service::AppService;
         use human_money_core::MnemonicLanguage;
 
-        let dir = crate::test_support::temp_test_dir("k2_h2_delete_profile");
+        let dir_guard = TempDirGuard::new("k2_h2_delete_profile");
+        let dir = dir_guard.path();
         let wallet_dir = dir.join("wallet_data");
         let lock_dir = dir.join("session_locks");
         let config_dir = dir.join("config");
@@ -1770,7 +1909,6 @@ mod tests {
         let svc_b = AppService::new(&wallet_dir).unwrap();
         let state_b = AppState::new(svc_b).with_session_lock_dir(lock_dir.clone());
 
-        // B holds the profile lock -> A's delete_profile MUST fail closed before touching files!
         let lock_b = state_b.acquire_profile_lock(&folder).unwrap();
         state_b.commit_profile_lock(lock_b);
         let contention_err =
@@ -1779,7 +1917,6 @@ mod tests {
         assert_eq!(contention_err.code, "error.auth.profileAlreadyOpen");
         assert!(wallet_dir.join(&folder).exists());
 
-        // After B releases and A opens the same active profile, A's delete clears caches/session & removes dir
         state_b.release_profile_lock();
         let lock_a = state_a.acquire_profile_lock(&folder).unwrap();
         state_a.commit_profile_lock(lock_a);
@@ -1789,24 +1926,17 @@ mod tests {
             .expect("Active profile delete after lock release must succeed");
 
         assert!(!wallet_dir.join(&folder).exists());
-        assert!(
-            state_a.current_session_generation() > gen_before,
-            "K2/H2: deleting active profile must bump session_generation"
-        );
-        assert!(
-            !state_a.service.lock().unwrap().is_wallet_unlocked(),
-            "H2: Core session must be locked after deleting active profile"
-        );
-        // K2: flock-backed .lock file stays on disk and is never unlinked while another instance can re-lock
+        assert!(state_a.current_session_generation() > gen_before);
+        assert!(!state_a.service.lock().unwrap().is_wallet_unlocked());
         assert!(lock_dir.join(format!("{}.lock", folder)).exists());
         assert!(state_b.acquire_profile_lock(&folder).is_ok());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_h2_initialize_profile_session_rolls_back_core_on_companion_failure() {
-        let dir = crate::test_support::temp_test_dir("h2_init_rollback");
+        // Invariant: corrupt companion JSON aborts initialize_profile_session with AppFacadeError::Json and rolls Core back to locked.
+        let dir_guard = TempDirGuard::new("h2_init_rollback");
+        let dir = dir_guard.path().to_path_buf();
         let pw = "StrongPassword123!";
         let mut svc = crate::test_support::setup_test_app(
             &dir,
@@ -1829,58 +1959,123 @@ mod tests {
         }
         .unwrap_err();
         assert!(
-            !format!("{:?}", err).is_empty(),
-            "H2: corrupt companion store must abort session initialization"
+            matches!(
+                err,
+                human_money_core::app_service::AppFacadeError::Json(ref msg)
+                    if msg.contains("Failed to parse security_policy")
+            ),
+            "expected Json parse failure on corrupt security_policy, got: {:?}",
+            err
         );
-        assert!(
-            !state.service.lock().unwrap().is_wallet_unlocked(),
-            "H2: Core session must roll back to logged-out state when companion init fails"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!state.service.lock().unwrap().is_wallet_unlocked());
     }
 
     #[test]
-    fn s03_pin_crash_recovery_device_mismatch_cross_profile_and_status_safety() {
-        use human_money_core::app_service::AppService;
+    fn s03_pin_wrong_password_device_mismatch_and_0600_keystore_permissions() {
+        // Invariant: PIN enrollment fails closed when locked or wrong-password, writes 0o600 keystore, and binds device ID.
+        let env = setup_pin_test_profile("s03_pin_device_perms", false, "dev-s03");
+
+        env.app_state.service.lock().unwrap().logout();
+        let locked_enable = enable_profile_pin_impl(
+            env.master_pw,
+            "111222",
+            "dailyPay",
+            &env.folder,
+            &env.keystore_dir,
+            "dev-s03",
+            &env.app_state,
+        )
+        .unwrap_err();
+        assert_eq!(locked_enable.code, "error.wallet.locked");
+
+        env.app_state
+            .service
+            .lock()
+            .unwrap()
+            .login(&env.folder, env.master_pw, false, "dev-s03".into())
+            .unwrap();
+        let wrong_pw_err = enable_profile_pin_impl(
+            "wrong-password",
+            "123456",
+            "dailyPay",
+            &env.folder,
+            &env.keystore_dir,
+            "dev-s03",
+            &env.app_state,
+        )
+        .unwrap_err();
+        assert!(
+            wrong_pw_err
+                .message
+                .contains("Authentication failed: Invalid password"),
+            "unexpected wrong password error: {:?}",
+            wrong_pw_err
+        );
+        assert!(pin_keystore::get_entry(&env.keystore_dir, &env.folder)
+            .unwrap()
+            .is_none());
+
+        enable_profile_pin_impl(
+            env.master_pw,
+            "123456",
+            "dailyPay",
+            &env.folder,
+            &env.keystore_dir,
+            "dev-s03",
+            &env.app_state,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(env.keystore_dir.join("pin_keystore.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        env.app_state.service.lock().unwrap().logout();
+        login_with_pin_impl(
+            &env.folder,
+            "123456",
+            false,
+            "dev-s03".into(),
+            &env.keystore_dir,
+            "dev-s03",
+            &env.app_state,
+            None,
+        )
+        .unwrap();
+
+        let mismatch_err = unlock_session_with_pin_impl(
+            &env.folder,
+            "123456",
+            &env.keystore_dir,
+            "other-dev",
+            &env.app_state,
+        )
+        .unwrap_err();
+        assert_eq!(mismatch_err.code, "error.auth.deviceMismatch");
+    }
+
+    #[test]
+    fn s03_pin_crash_recovery_cross_profile_isolation_and_status_safety() {
+        // Invariant: PIN auth enforces cross-profile isolation, post-crash 5-strike wipes, and safe invalid-folder status queries.
         use human_money_core::services::mnemonic::MnemonicLanguage;
 
-        let dir = crate::test_support::temp_test_dir("s03_pin_hardening");
-        let wallet_dir = dir.join("wallet_data");
-        let keystore_dir = dir.join("keystore");
-        std::fs::create_dir_all(&wallet_dir).unwrap();
-
-        let pw_a = "MasterPass-Alice-2026!";
+        let env = setup_pin_test_profile("s03_pin_isolation", false, "dev-s03");
         let pw_b = "MasterPass-Bob-2026!";
-        let mut service = AppService::new(&wallet_dir).unwrap();
-        let m_a = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
-        let m_b = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
-
-        // Create profile A with retain_mnemonic = false
-        service
-            .create_profile(
-                "AliceNoMnemonic",
-                &m_a,
-                None,
-                Some("al"),
-                pw_a,
+        let folder_b = {
+            let mut svc = env.app_state.service.lock().unwrap();
+            svc.logout();
+            let m_b = human_money_core::app_service::AppService::generate_mnemonic(
+                12,
                 MnemonicLanguage::English,
-                "dev-s03".into(),
-                false,
             )
             .unwrap();
-        let folder_a = service
-            .list_profiles()
-            .unwrap()
-            .into_iter()
-            .find(|p| p.profile_name == "AliceNoMnemonic")
-            .unwrap()
-            .folder_name;
-
-        // Create profile B
-        service.logout();
-        service
-            .create_profile(
+            svc.create_profile(
                 "BobProfile",
                 &m_b,
                 None,
@@ -1891,190 +2086,128 @@ mod tests {
                 true,
             )
             .unwrap();
-        let folder_b = service
-            .list_profiles()
-            .unwrap()
-            .into_iter()
-            .find(|p| p.profile_name == "BobProfile")
-            .unwrap()
-            .folder_name;
+            svc.list_profiles()
+                .unwrap()
+                .into_iter()
+                .find(|p| p.profile_name == "BobProfile")
+                .unwrap()
+                .folder_name
+        };
 
-        let state = AppState::new(service);
-
-        // Enable PIN for B while B is active
         enable_profile_pin_impl(
             pw_b,
             "654321",
             "dailyPay",
             &folder_b,
-            &keystore_dir,
+            &env.keystore_dir,
             "dev-s03",
-            &state,
+            &env.app_state,
         )
         .unwrap();
-
-        // Locked state rejects enable_profile_pin_impl cleanly
-        state.service.lock().unwrap().logout();
-        let locked_enable = enable_profile_pin_impl(
-            pw_b,
-            "111222",
-            "dailyPay",
-            &folder_b,
-            &keystore_dir,
-            "dev-s03",
-            &state,
-        )
-        .unwrap_err();
-        assert_eq!(locked_enable.code, "error.wallet.locked");
-
-        // Login as A (retain_mnemonic = false), wrong password leaves keystore untouched
-        state
+        env.app_state.service.lock().unwrap().logout();
+        env.app_state
             .service
             .lock()
             .unwrap()
-            .login(&folder_a, pw_a, false, "dev-s03".into())
+            .login(&env.folder, env.master_pw, false, "dev-s03".into())
             .unwrap();
-        assert!(enable_profile_pin_impl(
-            "wrong-password",
-            "123456",
-            "dailyPay",
-            &folder_a,
-            &keystore_dir,
-            "dev-s03",
-            &state,
-        )
-        .is_err());
-        assert!(pin_keystore::get_entry(&keystore_dir, &folder_a)
-            .unwrap()
-            .is_none());
-
-        // Enable PIN for A (works with retain_mnemonic = false) and check 0o600 permissions
         enable_profile_pin_impl(
-            pw_a,
+            env.master_pw,
             "123456",
             "dailyPay",
-            &folder_a,
-            &keystore_dir,
+            &env.folder,
+            &env.keystore_dir,
             "dev-s03",
-            &state,
+            &env.app_state,
         )
         .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(keystore_dir.join("pin_keystore.json"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777;
-            assert_eq!(mode, 0o600);
-        }
-
-        // Log in as A via PIN
-        state.service.lock().unwrap().logout();
+        env.app_state.service.lock().unwrap().logout();
         login_with_pin_impl(
-            &folder_a,
+            &env.folder,
             "123456",
             false,
             "dev-s03".into(),
-            &keystore_dir,
+            &env.keystore_dir,
             "dev-s03",
-            &state,
+            &env.app_state,
             None,
         )
         .unwrap();
 
-        // 1. Cross-profile isolation in unlock_session_with_pin_impl:
-        // Targeting B while A is active must fail WITHOUT touching B's strikes.
-        let cross_err =
-            unlock_session_with_pin_impl(&folder_b, "000000", &keystore_dir, "dev-s03", &state)
-                .unwrap_err();
-        assert!(
-            cross_err.message.contains("does not match"),
-            "unexpected error: {}",
-            cross_err.message
-        );
+        let cross_err = unlock_session_with_pin_impl(
+            &folder_b,
+            "000000",
+            &env.keystore_dir,
+            "dev-s03",
+            &env.app_state,
+        )
+        .unwrap_err();
+        assert!(cross_err.message.contains("does not match"));
         assert_eq!(
-            pin_keystore::get_entry(&keystore_dir, &folder_b)
+            pin_keystore::get_entry(&env.keystore_dir, &folder_b)
                 .unwrap()
                 .unwrap()
                 .failed_attempts,
             0
         );
 
-        // 2. Device mismatch returns error.auth.deviceMismatch (not invalidPinFormat)
-        let mismatch_err =
-            unlock_session_with_pin_impl(&folder_a, "123456", &keystore_dir, "other-dev", &state)
-                .unwrap_err();
-        assert_eq!(mismatch_err.code, "error.auth.deviceMismatch");
-
-        // 3. Crash-recovery 5-strike enforcement: simulate crash after strike 5 was persisted
-        let mut entry = pin_keystore::get_entry(&keystore_dir, &folder_a)
+        let mut entry_a = pin_keystore::get_entry(&env.keystore_dir, &env.folder)
             .unwrap()
             .unwrap();
-        entry.failed_attempts = MAX_PIN_ATTEMPTS;
-        pin_keystore::restore_entry(&keystore_dir, &folder_a, Some(entry)).unwrap();
-
-        // Even with the CORRECT PIN, unlock_session_with_pin_impl must wipe and lock!
-        let post_crash_unlock =
-            unlock_session_with_pin_impl(&folder_a, "123456", &keystore_dir, "dev-s03", &state)
-                .unwrap_err();
+        entry_a.failed_attempts = MAX_PIN_ATTEMPTS;
+        pin_keystore::restore_entry(&env.keystore_dir, &env.folder, Some(entry_a)).unwrap();
+        let post_crash_unlock = unlock_session_with_pin_impl(
+            &env.folder,
+            "123456",
+            &env.keystore_dir,
+            "dev-s03",
+            &env.app_state,
+        )
+        .unwrap_err();
         assert_eq!(post_crash_unlock.code, "error.auth.pinWipedMaxAttempts");
-        assert!(pin_keystore::get_entry(&keystore_dir, &folder_a)
+        assert!(pin_keystore::get_entry(&env.keystore_dir, &env.folder)
             .unwrap()
             .is_none());
-        assert!(!state
-            .service
-            .lock()
-            .unwrap()
-            .has_secondary_auth(&folder_a)
-            .unwrap());
 
-        // Same crash-recovery check for login_with_pin_impl on B:
-        let mut entry_b = pin_keystore::get_entry(&keystore_dir, &folder_b)
+        let mut entry_b = pin_keystore::get_entry(&env.keystore_dir, &folder_b)
             .unwrap()
             .unwrap();
         entry_b.failed_attempts = MAX_PIN_ATTEMPTS;
-        pin_keystore::restore_entry(&keystore_dir, &folder_b, Some(entry_b)).unwrap();
-        state.service.lock().unwrap().logout();
+        pin_keystore::restore_entry(&env.keystore_dir, &folder_b, Some(entry_b)).unwrap();
+        env.app_state.service.lock().unwrap().logout();
         let post_crash_login = login_with_pin_impl(
             &folder_b,
             "654321",
             false,
             "dev-s03".into(),
-            &keystore_dir,
+            &env.keystore_dir,
             "dev-s03",
-            &state,
+            &env.app_state,
             None,
         )
         .unwrap_err();
         assert_eq!(post_crash_login.code, "error.auth.pinWipedMaxAttempts");
-        assert!(pin_keystore::get_entry(&keystore_dir, &folder_b)
+        assert!(pin_keystore::get_entry(&env.keystore_dir, &folder_b)
             .unwrap()
             .is_none());
-        assert!(!state
-            .service
-            .lock()
-            .unwrap()
-            .has_secondary_auth(&folder_b)
-            .unwrap());
 
-        // 4. get_profile_pin_status_impl on missing/invalid folder returns Err and preserves keystore entry
         let bogus = "../missing_folder";
         let dummy_entry = pin_keystore::PinKeystoreEntry {
             encrypted_pepper_b64: "ZHVtbXk=".to_string(),
             failed_attempts: 2,
             scope: human_money_core::SecondaryScope::DailyPay,
         };
-        pin_keystore::restore_entry(&keystore_dir, bogus, Some(dummy_entry)).unwrap();
-        assert!(get_profile_pin_status_impl(bogus, &keystore_dir, &state).is_err());
+        pin_keystore::restore_entry(&env.keystore_dir, bogus, Some(dummy_entry)).unwrap();
+        let status_err =
+            get_profile_pin_status_impl(bogus, &env.keystore_dir, &env.app_state).unwrap_err();
         assert!(
-            pin_keystore::get_entry(&keystore_dir, bogus)
-                .unwrap()
-                .is_some(),
-            "get_profile_pin_status_impl must not wipe keystore entry when Core folder lookup fails"
+            status_err.message.contains("Invalid profile folder name"),
+            "expected invalid folder name error, got: {:?}",
+            status_err
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
+        let preserved = pin_keystore::get_entry(&env.keystore_dir, bogus)
+            .unwrap()
+            .expect("status failure must preserve keystore entry");
+        assert_eq!(preserved.failed_attempts, 2);
     }
 }

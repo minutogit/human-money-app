@@ -813,31 +813,90 @@ pub struct FrontendResolvedCardRecipient {
 mod s11_tests {
     use super::*;
 
+    fn assert_accepts_base_and_rejects_unknown<
+        T: serde::de::DeserializeOwned + std::fmt::Debug,
+    >(
+        label: &str,
+        valid_json: &str,
+        with_unknown_json: &str,
+        unknown_field: &str,
+    ) {
+        serde_json::from_str::<T>(valid_json).unwrap_or_else(|e| {
+            panic!("{}: baseline valid JSON must deserialize cleanly: {}", label, e)
+        });
+        let err = serde_json::from_str::<T>(with_unknown_json).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&format!("unknown field `{}`", unknown_field)),
+            "{}: expected unknown field `{}` error, got: {}",
+            label,
+            unknown_field,
+            msg
+        );
+    }
+
     #[test]
     fn s11_f1_market_dtos_deny_unknown_fields_and_revocation_camel_case() {
-        assert!(serde_json::from_str::<FrontendSyncReplacementTarget>(
-            r#"{"writeUrl":"https://a.example/sync.php","readUrl":"https://a.example/d","dropPub":"aa","extra":1}"#
-        )
-        .is_err());
-        assert!(serde_json::from_str::<FrontendSyncDescriptor>(
-            r#"{"writeUrl":"https://a.example/sync.php","readUrl":"https://a.example/d","dropPub":"aa","extra":1}"#
-        )
-        .is_err());
-        assert!(serde_json::from_str::<FrontendMemberPolicyDto>(
-            r#"{"directMin":2,"hop2Enabled":true,"bridgeMin":2,"hop2Min":2,"extra":1}"#
-        )
-        .is_err());
-        assert!(
-            serde_json::from_str::<FrontendSyncAdminUpdateRequest>(r#"{"unknown":1}"#).is_err()
+        // Invariant: all frontend-facing request/config DTOs enforce deny_unknown_fields on top of valid baselines.
+        assert_accepts_base_and_rejects_unknown::<FrontendSyncReplacementTarget>(
+            "FrontendSyncReplacementTarget",
+            r#"{"writeUrl":"https://a.example/sync.php","readUrl":"https://a.example/d","dropPub":"aa"}"#,
+            r#"{"writeUrl":"https://a.example/sync.php","readUrl":"https://a.example/d","dropPub":"aa","extra":1}"#,
+            "extra",
         );
-        assert!(serde_json::from_str::<FrontendAdInput>(
-            r#"{"id":null,"kind":"offer","title":"T","durationDays":30,"allowInquiries":true,"bogus":1}"#
-        )
-        .is_err());
-        assert!(serde_json::from_str::<FrontendSaveMyMarketProfileRequest>(
-            r#"{"profile":{},"visibility":{"name":"nobody","address":"nobody","street":"nobody","email":"nobody","phone":"nobody","coordinates":"nobody","url":"nobody","picture":"nobody","gender":"nobody"},"skills":[],"maxHops":2,"allowInquiries":true,"bogus":true}"#
-        )
-        .is_err());
+        assert_accepts_base_and_rejects_unknown::<FrontendSyncDescriptor>(
+            "FrontendSyncDescriptor",
+            r#"{"writeUrl":"https://a.example/sync.php","readUrl":"https://a.example/d","dropPub":"aa"}"#,
+            r#"{"writeUrl":"https://a.example/sync.php","readUrl":"https://a.example/d","dropPub":"aa","extra":1}"#,
+            "extra",
+        );
+        assert_accepts_base_and_rejects_unknown::<FrontendMemberPolicyDto>(
+            "FrontendMemberPolicyDto",
+            r#"{"directMin":2,"hop2Enabled":true,"bridgeMin":2,"hop2Min":2}"#,
+            r#"{"directMin":2,"hop2Enabled":true,"bridgeMin":2,"hop2Min":2,"extra":1}"#,
+            "extra",
+        );
+        assert_accepts_base_and_rejects_unknown::<FrontendSyncAdminUpdateRequest>(
+            "FrontendSyncAdminUpdateRequest",
+            r#"{}"#,
+            r#"{"unknown":1}"#,
+            "unknown",
+        );
+        assert_accepts_base_and_rejects_unknown::<FrontendAdInput>(
+            "FrontendAdInput",
+            r#"{"id":null,"kind":"offer","title":"T","durationDays":30,"allowInquiries":true}"#,
+            r#"{"id":null,"kind":"offer","title":"T","durationDays":30,"allowInquiries":true,"bogus":1}"#,
+            "bogus",
+        );
+
+        let valid_profile_req = FrontendSaveMyMarketProfileRequest {
+            profile: crate::models::FrontendUserProfile::default(),
+            visibility: CardFieldVisibility::default(),
+            skills: vec![],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+            published: Some(false),
+        };
+        let valid_profile_json = serde_json::to_string(&valid_profile_req).unwrap();
+        let mut with_bogus = serde_json::to_value(&valid_profile_req).unwrap();
+        with_bogus
+            .as_object_mut()
+            .unwrap()
+            .insert("bogus".to_string(), serde_json::json!(true));
+        let with_bogus_json = serde_json::to_string(&with_bogus).unwrap();
+        let parsed_profile =
+            serde_json::from_str::<FrontendSaveMyMarketProfileRequest>(&valid_profile_json)
+                .expect("valid FrontendSaveMyMarketProfileRequest JSON must deserialize");
+        assert_eq!(parsed_profile, valid_profile_req);
+        let profile_err =
+            serde_json::from_str::<FrontendSaveMyMarketProfileRequest>(&with_bogus_json)
+                .expect_err("FrontendSaveMyMarketProfileRequest must reject unknown field `bogus`");
+        assert!(
+            profile_err.to_string().contains("unknown field `bogus`"),
+            "expected unknown field `bogus` error, got: {}",
+            profile_err
+        );
 
         let notice = crate::sync_client::SyncRevocationNotice {
             drop_pub: "11".repeat(32),
