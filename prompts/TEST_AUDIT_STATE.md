@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `cd3d0dc`
-- **Total Test Files:** 165 | **Total Test Functions:** 1233
+- **Updated at HEAD:** `acf9cb3`
+- **Total Test Files:** 165 | **Total Test Functions:** 1234
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -12,10 +12,10 @@
 | `crates/humoco-market/tests/slot_tests.rs` | P1 | 18 | 0/0/0 | 🟢 Verified | `cd3d0dc` | 18/18 pass; cargo-mutants slot.rs verify_card_bundle/target_recipient_bucket/unpad_backup_slot_bytes 27/28 viable caught (1 unviable, 1 missed) |
 | `src-tauri/src/services/market_service/tests.rs` | P1 | 30 | 0/0/0 | 🟢 Verified | `cd3d0dc` | 30/30 pass (nextest 351/351); fixed h5 wrong-gate JWS signature tamper placebo; cargo-mutants ads.rs compute_event_expiry/validate_ad_input 22/35 caught |
 | `crates/humoco-market/tests/post_tests.rs` | P1 | 12 | 0/0/0 | 🟢 Verified | `cd3d0dc` | 12/12 pass; cargo-mutants post.rs 81/140 viable caught (1 unviable, 59 missed) |
-| `crates/humoco-market/tests/sync_access_tests.rs` | P1 | 11 | 0/16/0 | ⚪ Pending | — | — |
-| `crates/humoco-market/tests/card_tests.rs` | P1 | 24 | 0/11/0 | ⚪ Pending | — | — |
-| `crates/humoco-market/tests/audit_wave1_regressions.rs` | P1 | 4 | 0/10/0 | ⚪ Pending | — | — |
-| `src-tauri/src/services/recovery_service/tests.rs` | P1 | 16 | 0/10/21 | ⚪ Pending | — | — |
+| `crates/humoco-market/tests/sync_access_tests.rs` | P1 | 11 | 0/0/0 | 🟢 Verified | `acf9cb3` | 11/11 pass; removed silent golden-vector rewrite & hardened 16 .is_err() to MarketError::Validation; cargo-mutants sync_access.rs 26/29 caught |
+| `crates/humoco-market/tests/card_tests.rs` | P1 | 24 | 0/0/0 | 🟢 Verified | `acf9cb3` | 24/24 pass; hardened 11 .is_err(), AcceptOutcome wildcards & geo-eviction outcomes; cargo-mutants sd_card.rs validate_sd_card/verify_sd_card 51/66 viable caught (2 unviable) |
+| `crates/humoco-market/tests/audit_wave1_regressions.rs` | P1 | 4 | 0/0/0 | 🟢 Verified | `acf9cb3` | 4/4 pass; hardened 10 .is_err() & 5 wildcards to exact MarketError/AcceptOutcome variants; cargo-mutants media.rs open_media_blob 5/10 caught & recovery.rs upsert_ward 11/16 caught |
+| `src-tauri/src/services/recovery_service/tests.rs` | P1 | 17 | 0/0/0 | 🟢 Verified | `acf9cb3` | 17/17 pass (352/352 lib); RAII TempDirGuard, split 3-of-5 mega-test, removed let _ discards & hardened 10 .is_err() / 4 .is_some() / s07_f19; cargo-mutants complete.rs 8/11 & session.rs 18/26 viable caught |
 | `src-tauri/src/l2_lifecycle/tests.rs` | P1 | 23 | 0/7/31 | ⚪ Pending | — | — |
 | `crates/humoco-market/tests/security_audit_s01_market_loop.rs` | P1 | 9 | 0/6/2 | ⚪ Pending | — | — |
 | `src-tauri/src/commands/auth.rs` | P1 | 10 | 0/6/6 | ⚪ Pending | — | — |
