@@ -128,4 +128,74 @@ describe('RenewAdModal Component', () => {
 
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('renders nothing when ad is null', () => {
+    const { container } = render(
+      <RenewAdModal isOpen={true} onClose={vi.fn()} onRenew={vi.fn()} ad={null} />
+    );
+
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('displays error banner without closing and re-enables buttons when onRenew rejects', async () => {
+    const onRenew = vi.fn().mockRejectedValue(new Error('Storage full'));
+    const onClose = vi.fn();
+
+    render(
+      <RenewAdModal isOpen={true} onClose={onClose} onRenew={onRenew} ad={mockActiveAd} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Jetzt verlängern|Renew now/i }));
+
+    expect(await screen.findByText('Storage full')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Jetzt verlängern|Renew now/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Abbrechen|Cancel/i })).toBeEnabled();
+  });
+
+  it('prevents duplicate submissions while in flight and ignores late rejection after close', async () => {
+    let rejectRenew!: (err: Error) => void;
+    const onRenew = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectRenew = reject;
+        })
+    );
+    const onClose = vi.fn();
+
+    const { rerender } = render(
+      <RenewAdModal isOpen={true} onClose={onClose} onRenew={onRenew} ad={mockActiveAd} />
+    );
+
+    const confirmBtn = screen.getByRole('button', { name: /Jetzt verlängern|Renew now/i });
+    const cancelBtn = screen.getByRole('button', { name: /Abbrechen|Cancel/i });
+    fireEvent.click(confirmBtn);
+    expect(confirmBtn).toBeDisabled();
+    expect(cancelBtn).toBeDisabled();
+
+    fireEvent.click(confirmBtn);
+    expect(onRenew).toHaveBeenCalledTimes(1);
+
+    rerender(<RenewAdModal isOpen={false} onClose={onClose} onRenew={onRenew} ad={mockActiveAd} />);
+    rejectRenew(new Error('Late error'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    rerender(<RenewAdModal isOpen={true} onClose={onClose} onRenew={onRenew} ad={mockActiveAd} />);
+    expect(screen.queryByText('Late error')).not.toBeInTheDocument();
+  });
+
+  it('updates live expiration preview when switching between 30, 90, and 180 day tabs', () => {
+    render(
+      <RenewAdModal isOpen={true} onClose={vi.fn()} onRenew={vi.fn()} ad={mockActiveAd} />
+    );
+
+    expect(screen.getByText(/noch 90 Tage|90 days left/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: /30 Tage|30 days/i }));
+    expect(screen.getByText(/noch 30 Tage|30 days left/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: /180 Tage|180 days/i }));
+    expect(screen.getByText(/noch 180 Tage|180 days left/i)).toBeInTheDocument();
+  });
 });

@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AdCard, clearAdImageCache } from '../AdCard';
+import { AdCard, clearAdImageCache, resolveAuthorHops } from '../AdCard';
 import { Ad } from '../../../types';
 import { marketService } from '../../../services/marketService';
 
@@ -49,7 +49,9 @@ describe('AdCard Component', () => {
     expect(screen.getByText('5 Liter Bag-in-Box Bio-Apfelsaft aus Streuobstanbau')).toBeInTheDocument();
     expect(screen.getByText('10 Minuto')).toBeInTheDocument();
     expect(screen.getByText('Alice Imkerei')).toBeInTheDocument();
-    expect(screen.getByText(/noch 30 Tage|30 days left/i)).toBeInTheDocument();
+    const daysBadge = screen.getByText(/noch 30 Tage|30 days left/i).parentElement;
+    expect(daysBadge).toBeInTheDocument();
+    expect(daysBadge).not.toHaveClass('bg-amber-50');
 
     // Click owner
     fireEvent.click(screen.getByText('Alice Imkerei'));
@@ -67,7 +69,9 @@ describe('AdCard Component', () => {
 
     expect(screen.getByText(/Gesuch|Request/i)).toBeInTheDocument();
     expect(screen.getByText('Suche Anhänger für Samstag')).toBeInTheDocument();
-    expect(screen.getByText(/noch 5 Tage|5 days left/i)).toBeInTheDocument();
+    const warningBadge = screen.getByText(/noch 5 Tage|5 days left/i).parentElement;
+    expect(warningBadge).toBeInTheDocument();
+    expect(warningBadge).toHaveClass('bg-amber-50', 'text-amber-800');
   });
 
   it('handles inquire and pay buttons when enabled', () => {
@@ -323,5 +327,161 @@ describe('AdCard Component', () => {
     expect(screen.getByTestId('ad-kind-badge')).toHaveTextContent(/Termin|Event/i);
     expect(screen.getByTestId('ad-event-date-badge')).toBeInTheDocument();
     expect(screen.queryByText(/noch \d+ Tage|days left/i)).not.toBeInTheDocument();
+  });
+
+  it('does not auto-fetch a new deferred image when imageToken changes after a previous manual load', async () => {
+    const getAdImageSpy = vi
+      .spyOn(marketService, 'getAdImage')
+      .mockImplementation(async (_owner, token) => `data:image/webp;base64,${token}`);
+
+    const { rerender } = render(
+      <AdCard
+        ad={{ ...mockAdOffer, imageToken: 'tok-a' }}
+        ownerDid="did:key:z6MkuFarUser"
+        ownerName="Far Trader"
+        authorHops={3}
+        mediaAutoLoadMaxHops={2}
+      />
+    );
+
+    expect(screen.getByTestId('ad-card-image-placeholder')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('ad-card-load-image-btn'));
+
+    const loadedA = await screen.findByTestId('ad-card-image');
+    expect(loadedA).toHaveAttribute('src', 'data:image/webp;base64,tok-a');
+    expect(getAdImageSpy).toHaveBeenCalledTimes(1);
+    expect(getAdImageSpy).toHaveBeenCalledWith('did:key:z6MkuFarUser', 'tok-a');
+
+    rerender(
+      <AdCard
+        ad={{ ...mockAdOffer, imageToken: 'tok-b' }}
+        ownerDid="did:key:z6MkuFarUser"
+        ownerName="Far Trader"
+        authorHops={3}
+        mediaAutoLoadMaxHops={2}
+      />
+    );
+
+    expect(getAdImageSpy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('ad-card-image')).not.toBeInTheDocument();
+    expect(screen.getByTestId('ad-card-image-placeholder')).toBeInTheDocument();
+  });
+
+  it('computes minimum hop distance cleanly in resolveAuthorHops', () => {
+    expect(resolveAuthorHops(undefined)).toBe(99);
+    expect(resolveAuthorHops([])).toBe(99);
+    expect(resolveAuthorHops([{ kind: 'card', hops: 3 }, { kind: 'voucher' }])).toBe(1);
+    expect(resolveAuthorHops([{ kind: 'card', hops: 3 }, { kind: 'card', hops: 2 }])).toBe(2);
+  });
+
+  it('hides inquire button when ad.allowInquiries is false even when allowInquiries prop is true', () => {
+    const onInquire = vi.fn();
+    const onPay = vi.fn();
+
+    render(
+      <AdCard
+        ad={{ ...mockAdOffer, allowInquiries: false }}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice Imkerei"
+        allowInquiries={true}
+        onInquire={onInquire}
+        onPay={onPay}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Anfragen|Inquire/i })).not.toBeInTheDocument();
+    const payBtn = screen.getByRole('button', { name: /Gutschein senden|Send voucher/i });
+    fireEvent.click(payBtn);
+    expect(onPay).toHaveBeenCalledWith('did:key:z6MkuAlice');
+  });
+
+  it('toggles long description text between clamped and expanded states', () => {
+    const longText = 'A'.repeat(110);
+    render(
+      <AdCard
+        ad={{ ...mockAdOffer, text: longText }}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice"
+      />
+    );
+
+    const paragraph = screen.getByText(longText);
+    expect(paragraph).toHaveClass('line-clamp-2');
+
+    fireEvent.click(screen.getByRole('button', { name: /Mehr anzeigen|Show more/i }));
+    expect(paragraph).not.toHaveClass('line-clamp-2');
+
+    fireEvent.click(screen.getByRole('button', { name: /Weniger anzeigen|Show less/i }));
+    expect(paragraph).toHaveClass('line-clamp-2');
+  });
+
+  it('renders singular one-day label, expired zero-day label, and fallback owner display names', () => {
+    const { rerender } = render(
+      <AdCard
+        ad={{ ...mockAdOffer, expiresAt: nowSecs - 10 }}
+        ownerDid="did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
+        ownerName="   "
+        daysLeft={1}
+      />
+    );
+
+    expect(screen.getByText(/^noch 1 Tag$|^1 day left$/i)).toBeInTheDocument();
+    expect(screen.getByText('did:key:z6MkpTHR8VNsBxYAAWHu...dvktH')).toBeInTheDocument();
+
+    rerender(
+      <AdCard
+        ad={{ ...mockAdOffer, expiresAt: nowSecs - 10 }}
+        ownerDid="did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
+        ownerName="did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
+      />
+    );
+
+    expect(screen.getByText(/noch 0 Tage|0 days left/i)).toBeInTheDocument();
+    expect(screen.getByText('did:key:z6MkpTHR8VNsBxYAAWHu...dvktH')).toBeInTheDocument();
+  });
+
+  it('handles image fetch rejection and auto-loads own ads despite wifiOnly on cellular connection', async () => {
+    const getAdImageSpy = vi
+      .spyOn(marketService, 'getAdImage')
+      .mockRejectedValueOnce(new Error('disk error'))
+      .mockResolvedValueOnce('data:image/webp;base64,ownImgData');
+
+    const { rerender } = render(
+      <AdCard
+        ad={{ ...mockAdOffer, imageToken: 'img-tok-reject' }}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice"
+      />
+    );
+
+    expect(await screen.findByTestId('ad-card-image-unavailable')).toBeInTheDocument();
+
+    const originalDescriptor = Object.getOwnPropertyDescriptor(navigator, 'connection');
+    Object.defineProperty(navigator, 'connection', {
+      configurable: true,
+      value: { type: 'cellular', saveData: false },
+    });
+
+    try {
+      rerender(
+        <AdCard
+          ad={{ ...mockAdOffer, imageToken: 'img-tok-own' }}
+          ownerDid="did:key:z6MkuAlice"
+          ownerName="Alice"
+          isOwn={true}
+          wifiOnly={true}
+        />
+      );
+
+      const ownImg = await screen.findByTestId('ad-card-image');
+      expect(ownImg).toHaveAttribute('src', 'data:image/webp;base64,ownImgData');
+      expect(getAdImageSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(navigator, 'connection', originalDescriptor);
+      } else {
+        delete (navigator as unknown as Record<string, unknown>).connection;
+      }
+    }
   });
 });

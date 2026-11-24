@@ -5,6 +5,11 @@ import { UiModeProvider } from '../../../context/UiModeContext';
 import { FrontendMyAd } from '../../../types';
 import { marketService } from '../../../services/marketService';
 import * as imageCompression from '../../../utils/imageCompression';
+import {
+  offsetDaysDateInputValue,
+  toEventDateInputValue,
+  toEventTimeInputValue,
+} from '../../../utils/adEventFormat';
 
 describe('AdEditorModal Component', () => {
   const nowSecs = Math.floor(Date.now() / 1000);
@@ -543,5 +548,290 @@ describe('AdEditorModal Component', () => {
         eventAt: expect.any(Number),
       }));
     });
+  });
+
+  it('enforces event date guards for missing, >180-day future, and past dates', () => {
+    const onSave = vi.fn();
+    render(
+      <AdEditorModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('ad-kind-event-btn'));
+    fireEvent.change(screen.getByTestId('ad-title-input'), { target: { value: 'Termin-Check' } });
+
+    const form = screen.getByTestId('ad-title-input').closest('form')!;
+    fireEvent.submit(form);
+    expect(screen.getByText(/Bitte wähle ein gültiges Termindatum\.|Please select a valid event date\./i)).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByTestId('ad-event-date-input'), {
+      target: { value: offsetDaysDateInputValue(181) },
+    });
+    fireEvent.submit(form);
+    expect(screen.getByText(/maximal 180 Tage in der Zukunft|more than 180 days in the future/i)).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByTestId('ad-event-date-input'), {
+      target: { value: offsetDaysDateInputValue(-2) },
+    });
+    fireEvent.submit(form);
+    expect(screen.getByText(/Der Termin muss in der Zukunft liegen\.|The event date must be in the future\./i)).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('supports all-day events and applies 6-hour edit grace only to unchanged event timestamps', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: new Date(2026, 5, 15, 12, 0, 0) });
+    try {
+      const onSave = vi.fn().mockResolvedValue(undefined);
+      const twoHoursAgoSecs = Math.floor(new Date(2026, 5, 15, 10, 0, 0).getTime() / 1000);
+      const unchangedPastEvent: FrontendMyAd = {
+        id: 'ad-ev-grace',
+        kind: 'event',
+        title: 'Laufender Markt',
+        eventAt: twoHoursAgoSecs,
+        eventAllDay: false,
+        publishedAt: twoHoursAgoSecs - 86400,
+        expiresAt: twoHoursAgoSecs + 86400,
+        allowInquiries: true,
+        status: 'active',
+        daysLeft: 1,
+        published: true,
+      };
+
+      const { rerender } = render(
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          editingAd={unchangedPastEvent}
+        />
+      );
+
+      expect(screen.getByTestId('ad-event-date-input')).toHaveValue(toEventDateInputValue(twoHoursAgoSecs, false));
+      expect(screen.getByTestId('ad-event-time-input')).toHaveValue(toEventTimeInputValue(twoHoursAgoSecs, false));
+
+      fireEvent.click(screen.getByTestId('ad-submit-button'));
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+          id: 'ad-ev-grace',
+          eventAt: twoHoursAgoSecs,
+          eventAllDay: false,
+        }));
+      });
+
+      // Changing time to another past hour breaks unchanged-timestamp grace and fails
+      fireEvent.change(screen.getByTestId('ad-event-time-input'), { target: { value: '11:00' } });
+      fireEvent.click(screen.getByTestId('ad-submit-button'));
+      expect(screen.getByText(/Der Termin muss in der Zukunft liegen\.|The event date must be in the future\./i)).toBeInTheDocument();
+      expect(onSave).toHaveBeenCalledTimes(1);
+
+      // Switching to new all-day event (empty time) sets eventAllDay: true
+      rerender(
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+        />
+      );
+      fireEvent.click(screen.getByTestId('ad-kind-event-btn'));
+      fireEvent.change(screen.getByTestId('ad-event-date-input'), {
+        target: { value: offsetDaysDateInputValue(5) },
+      });
+      fireEvent.change(screen.getByTestId('ad-title-input'), { target: { value: 'Ganztages-Flohmarkt' } });
+      fireEvent.click(screen.getByTestId('ad-submit-button'));
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({
+          kind: 'event',
+          title: 'Ganztages-Flohmarkt',
+          eventAllDay: true,
+        }));
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects blank title and over-limit title, text, and pricing on form submit', () => {
+    const onSave = vi.fn();
+    render(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+        />
+      </UiModeProvider>
+    );
+
+    const titleInput = screen.getByTestId('ad-title-input');
+    const textInput = screen.getByTestId('ad-text-input');
+    const pricingInput = screen.getByTestId('ad-pricing-input');
+    const form = titleInput.closest('form')!;
+
+    fireEvent.change(titleInput, { target: { value: '   ' } });
+    fireEvent.submit(form);
+    expect(screen.getByText(/Titel ist erforderlich|Title is required/i)).toBeInTheDocument();
+
+    fireEvent.change(titleInput, { target: { value: 'T'.repeat(81) } });
+    fireEvent.submit(form);
+    expect(screen.getByText(/Maximal 80 Zeichen erlaubt|Maximum 80 characters allowed/i)).toBeInTheDocument();
+
+    fireEvent.change(titleInput, { target: { value: 'Gültiger Titel' } });
+    fireEvent.change(textInput, { target: { value: 'X'.repeat(501) } });
+    fireEvent.submit(form);
+    expect(screen.getByText(/Maximal 500 Zeichen erlaubt|Maximum 500 characters allowed/i)).toBeInTheDocument();
+
+    fireEvent.change(textInput, { target: { value: 'Kurztext' } });
+    fireEvent.change(pricingInput, { target: { value: 'P'.repeat(41) } });
+    fireEvent.submit(form);
+    expect(screen.getByText(/Maximal 40 Zeichen erlaubt|Maximum 40 characters allowed/i)).toBeInTheDocument();
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('handles pricing chip toggles, preset parsing for FreeTaler, and custom pricing reset', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const adWithFt: FrontendMyAd = {
+      id: 'ad-ft',
+      kind: 'offer',
+      title: 'Gartenhilfe',
+      pricing: '12.5 FreeTaler',
+      publishedAt: nowSecs - 100,
+      expiresAt: nowSecs + 86400 * 30,
+      allowInquiries: true,
+      status: 'active',
+      daysLeft: 30,
+      published: true,
+    };
+
+    const { rerender } = render(
+      <AdEditorModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSave={onSave}
+        editingAd={adWithFt}
+      />
+    );
+
+    expect(screen.getByTestId('ad-price-amount-input')).toHaveValue('12.5');
+    fireEvent.change(screen.getByTestId('ad-price-amount-input'), { target: { value: '15' } });
+    fireEvent.click(screen.getByTestId('price-chip-minuto'));
+    fireEvent.click(screen.getByTestId('price-chip-free'));
+    fireEvent.click(screen.getByTestId('price-chip-free'));
+    fireEvent.click(screen.getByTestId('price-chip-negotiable'));
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+        pricing: expect.stringMatching(/^VB$|^Negotiable$/i),
+      }));
+    });
+
+    // Clear custom preset via clear button
+    const customAd: FrontendMyAd = { ...adWithFt, id: 'ad-custom-clear', pricing: 'Tausch nach Absprache' };
+    rerender(
+      <AdEditorModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSave={onSave}
+        editingAd={customAd}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('price-chip-custom-clear'));
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({
+        id: 'ad-custom-clear',
+        pricing: undefined,
+      }));
+    });
+  });
+
+  it('disables publish-now toggle when own business card is unpublished', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <AdEditorModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSave={onSave}
+        cardPublished={false}
+      />
+    );
+
+    const publishCheckbox = screen.getByTestId('ad-publish-now-checkbox');
+    expect(publishCheckbox).toBeDisabled();
+    expect(publishCheckbox).not.toBeChecked();
+    expect(screen.getByText(/Wird zunächst lokal als Entwurf gespeichert|Will be saved locally as a draft first/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('ad-title-input'), { target: { value: 'Lokaler Entwurf' } });
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Lokaler Entwurf',
+        published: false,
+      }));
+    });
+  });
+
+  it('surfaces save/compression errors without closing and ignores late save completion after close', async () => {
+    vi.spyOn(imageCompression, 'compressAdImageToWebpDataUri').mockRejectedValueOnce(new Error('Image too large'));
+
+    let resolveLateSave!: () => void;
+    const onSave = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Backend write failed'))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveLateSave = resolve; }));
+    const onClose = vi.fn();
+
+    const { rerender } = render(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={onClose}
+          onSave={onSave}
+        />
+      </UiModeProvider>
+    );
+
+    // Image compression error surfaces and re-enables submit
+    const badFile = new File(['bad'], 'bad.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('ad-image-file-input'), { target: { files: [badFile] } });
+    expect(await screen.findByText('Image too large')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('ad-title-input'), { target: { value: 'Fehler-Test' } });
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
+
+    expect(await screen.findByText('Backend write failed')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('ad-submit-button')).toBeEnabled();
+
+    // Start slow save then close modal before resolution -> onClose must not fire
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledTimes(2);
+    });
+
+    rerender(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={false}
+          onClose={onClose}
+          onSave={onSave}
+        />
+      </UiModeProvider>
+    );
+
+    resolveLateSave();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

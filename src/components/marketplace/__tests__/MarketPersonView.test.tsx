@@ -1,13 +1,20 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MarketPersonView } from '../MarketPersonView';
-import { FrontendMarketPerson } from '../../../types';
+import { Contact, FrontendMarketPerson } from '../../../types';
 import { marketService } from '../../../services/marketService';
+import { contactService } from '../../../services/contactService';
+import { postService } from '../../../services/postService';
+import { copyToClipboard } from '../../../utils/clipboard';
+import { openUrl } from '@tauri-apps/plugin-opener';
+
+const mockNavigate = vi.fn();
 
 vi.mock('../../../services/marketService', () => ({
   marketService: {
     syncMarketChannels: vi.fn().mockResolvedValue(undefined),
     getMarketView: vi.fn(),
+    getAdImage: vi.fn().mockResolvedValue(null),
     exportForwardCard: vi.fn(),
     previewContactTrustChange: vi.fn().mockResolvedValue({ newlyAccessibleMembers: 0, newlyExcludedMembers: 0 }),
   },
@@ -20,9 +27,23 @@ vi.mock('../../../services/contactService', () => ({
   },
 }));
 
+vi.mock('../../../services/postService', () => ({
+  postService: {
+    sendMarketInquiryViaPost: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('../../../utils/clipboard', () => ({
+  copyToClipboard: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openUrl: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../../../context/NavigationContext', () => ({
   useNavigation: () => ({
-    navigate: vi.fn(),
+    navigate: mockNavigate,
   }),
 }));
 
@@ -74,7 +95,7 @@ describe('MarketPersonView Component', () => {
 
     vi.mocked(marketService.getMarketView).mockResolvedValue({
       board: [],
-      people: [personPending],
+      people: [{ ...personPending, adsPending: 0 }],
       now: 123456,
     });
 
@@ -88,6 +109,7 @@ describe('MarketPersonView Component', () => {
     await waitFor(() => {
       expect(marketService.syncMarketChannels).toHaveBeenCalled();
       expect(marketService.getMarketView).toHaveBeenCalled();
+      expect(screen.queryByText(/3 Inserate werden über den Sync-Dienst nachgeladen|3 ads will be loaded via sync service/i)).not.toBeInTheDocument();
     });
   });
 
@@ -169,5 +191,246 @@ describe('MarketPersonView Component', () => {
     expect(screen.getByText('Online Nachhilfe')).toBeInTheDocument();
     expect(screen.getByTestId('skill-remote-badge')).toBeInTheDocument();
     expect(screen.getByText(/Ortsunabhängig|Location-independent/i)).toBeInTheDocument();
+  });
+
+  it('validates external website URLs before calling openUrl (blocks javascript:/file: and normalizes uppercase/bare domains)', async () => {
+    const { rerender } = render(
+      <MarketPersonView
+        person={{
+          ...basePerson,
+          profile: { ...basePerson.profile, url: 'javascript:alert(1)' },
+        }}
+        onBack={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'javascript:alert(1)' }));
+    await Promise.resolve();
+    expect(openUrl).not.toHaveBeenCalled();
+
+    rerender(
+      <MarketPersonView
+        person={{
+          ...basePerson,
+          profile: { ...basePerson.profile, url: 'file:///etc/passwd' },
+        }}
+        onBack={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'file:///etc/passwd' }));
+    await Promise.resolve();
+    expect(openUrl).not.toHaveBeenCalled();
+
+    rerender(
+      <MarketPersonView
+        person={{
+          ...basePerson,
+          profile: { ...basePerson.profile, url: '  HTTPS://example.org/shop  ' },
+        }}
+        onBack={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'HTTPS://example.org/shop' }));
+    await waitFor(() => {
+      expect(openUrl).toHaveBeenCalledWith('https://example.org/shop');
+    });
+
+    rerender(
+      <MarketPersonView
+        person={{
+          ...basePerson,
+          profile: { ...basePerson.profile, url: 'imkerei.example.org' },
+        }}
+        onBack={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'imkerei.example.org' }));
+    await waitFor(() => {
+      expect(openUrl).toHaveBeenCalledWith('https://imkerei.example.org/');
+    });
+  });
+
+  it('renders profile.address.fullAddress fallback when structured street/city fields are absent', () => {
+    render(
+      <MarketPersonView
+        person={{
+          ...basePerson,
+          profile: {
+            ...basePerson.profile,
+            address: {
+              fullAddress: 'Test Street 123, 12345 Test City, Germany',
+            },
+          },
+        }}
+        onBack={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Test Street 123, 12345 Test City, Germany')).toBeInTheDocument();
+  });
+
+  it('navigates to payment recipientDid and copies truncated DID to clipboard', async () => {
+    const subDid = 'shop:ab12@did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH';
+    const onBack = vi.fn();
+
+    render(
+      <MarketPersonView
+        person={{
+          ...basePerson,
+          did: 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH',
+          recipientDid: subDid,
+        }}
+        onBack={onBack}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Zurück|Back/i }));
+    expect(onBack).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Bezahlen$|^Pay$/i }));
+    expect(mockNavigate).toHaveBeenCalledWith({
+      view: 'send_vouchers',
+      initialRecipientId: subDid,
+    });
+
+    fireEvent.click(screen.getByTitle(subDid));
+    await waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(subDid);
+    });
+  });
+
+  it('exports forward card via ShareCardModal and handles disabled and error states', async () => {
+    vi.mocked(marketService.exportForwardCard)
+      .mockRejectedValueOnce(new Error('Hop limit reached'))
+      .mockResolvedValueOnce({
+        envelopeJson: '{"card_jws":"fwd"}',
+        shareUri: 'humoco://card?env=fwd',
+        qrSvg: '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>',
+        did: basePerson.did,
+      });
+
+    const { rerender } = render(
+      <MarketPersonView
+        person={{ ...basePerson, canForward: false, sources: [{ kind: 'card', hops: 2 }] }}
+        onBack={vi.fn()}
+      />
+    );
+
+    const disabledForwardBtn = screen.getByRole('button', { name: /Weiterempfehlen|Recommend|Forward/i });
+    expect(disabledForwardBtn).toBeDisabled();
+    expect(disabledForwardBtn).toHaveAttribute('title', expect.stringMatching(/Maximale Weiterempfehlungsstufen|Maximum recommendation/i));
+
+    rerender(<MarketPersonView person={{ ...basePerson, canForward: true }} onBack={vi.fn()} />);
+
+    const forwardBtn = screen.getByRole('button', { name: /Weiterempfehlen|Recommend|Forward/i });
+    expect(forwardBtn).toBeEnabled();
+    fireEvent.click(forwardBtn);
+
+    expect(await screen.findByText('Hop limit reached')).toBeInTheDocument();
+    expect(screen.queryByAltText(/HuMoCo Contact Card QR Code/i)).not.toBeInTheDocument();
+
+    fireEvent.click(forwardBtn);
+    await waitFor(() => {
+      expect(marketService.exportForwardCard).toHaveBeenLastCalledWith(basePerson.did, 'mock-password');
+      expect(screen.getByAltText(/HuMoCo Contact Card QR Code/i)).toBeInTheDocument();
+    });
+  });
+
+  it('opens inquiry modal, warns when sync is missing, submits via postService, and surfaces errors', async () => {
+    vi.mocked(postService.sendMarketInquiryViaPost)
+      .mockRejectedValueOnce(new Error('Sync delivery failed'))
+      .mockResolvedValueOnce({} as never);
+
+    render(<MarketPersonView person={{ ...basePerson, cardSyncs: [] }} onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Anfrage senden|Send Inquiry/i }));
+
+    expect(screen.getByText(/keinen Sync-Dienst auf ihrer Visitenkarte|does not currently have a sync service/i)).toBeInTheDocument();
+
+    const textarea = screen.getByPlaceholderText(/Kurze Notiz|Short note/i);
+    fireEvent.change(textarea, { target: { value: '  Hallo Bob, passt Samstag?  ' } });
+
+    const submitButtons = screen.getAllByRole('button', { name: /Anfrage senden|Send Inquiry/i });
+    fireEvent.click(submitButtons[submitButtons.length - 1]);
+
+    expect(await screen.findByText('Sync delivery failed')).toBeInTheDocument();
+    expect(postService.sendMarketInquiryViaPost).toHaveBeenCalledWith(
+      basePerson.did,
+      { kind: 'person', skillTitle: undefined },
+      'Hallo Bob, passt Samstag?',
+      [],
+      'mock-password'
+    );
+
+    fireEvent.click(submitButtons[submitButtons.length - 1]);
+    expect(await screen.findByText(/Anfrage erfolgreich gesendet!|Inquiry successfully sent!/i)).toBeInTheDocument();
+  });
+
+  it('hides inquiry triggers when allowInquiries is false', () => {
+    render(
+      <MarketPersonView
+        person={{
+          ...basePerson,
+          allowInquiries: false,
+          skills: [{ title: 'Imkerei', origin: 'card' }],
+        }}
+        onBack={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Anfrage senden|Send Inquiry/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Anfragen$|^Inquire$/i })).not.toBeInTheDocument();
+  });
+
+  it('adapts contact action button label across unknown, unrated pending, and rated contacts', async () => {
+    const baseContact: Contact = {
+      did: basePerson.did,
+      profile: { id: basePerson.did, firstName: 'Bob', lastName: 'Builder' },
+      tags: [],
+      addedAt: '2026-01-01T00:00:00Z',
+      syncs: [],
+    };
+
+    vi.mocked(contactService.getContacts).mockResolvedValue([]);
+    const { unmount } = render(<MarketPersonView person={basePerson} onBack={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Ins Adressbuch|Add to Address Book/i })).toBeInTheDocument();
+    });
+    unmount();
+
+    vi.mocked(contactService.getContacts).mockResolvedValue([{ ...baseContact, trustLevel: null }]);
+    const { unmount: unmountUnrated } = render(<MarketPersonView person={basePerson} onBack={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Vertrauen einstufen|Rate Trust/i })).toBeInTheDocument();
+    });
+    unmountUnrated();
+
+    vi.mocked(contactService.getContacts).mockResolvedValue([{ ...baseContact, trustLevel: 2 }]);
+    render(<MarketPersonView person={basePerson} onBack={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Kontakt bearbeiten|Edit Contact/i })).toBeInTheDocument();
+    });
+  });
+
+  it('renders unknown trust badge, organization fallback name, accepted standards, and source badges', () => {
+    render(
+      <MarketPersonView
+        person={{
+          ...basePerson,
+          profile: { id: basePerson.did, organization: 'Biohof Berg' },
+          trust: 'unknown',
+          standards: [{ uuid: 'std-1', name: 'Minuto Region' }],
+          sources: [{ kind: 'voucher' }, { kind: 'card', hops: 2 }, { kind: 'sync', readUrl: 'https://sync.example.org/sync.php' }],
+        }}
+        onBack={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Biohof Berg' })).toBeInTheDocument();
+    expect(screen.getByText(/Unbekannter Kontakt|Unknown contact/i)).toBeInTheDocument();
+    expect(screen.getByText('Minuto Region')).toBeInTheDocument();
+    expect(screen.getByText(/Aus Gutschein-Profil|From voucher profile/i)).toBeInTheDocument();
+    expect(screen.getByText(/Visitenkarte \(Stufe 2\)|Business card \(Degree 2\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sync-Dienst|Sync Service/i)).toBeInTheDocument();
   });
 });
