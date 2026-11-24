@@ -171,7 +171,7 @@ mod tests {
     use crate::test_support::{
         setup_test_app, temp_test_dir, ALICE_PHRASE, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE,
     };
-    use human_money_core::models::conflict::ProofOfDoubleSpend;
+    use human_money_core::models::conflict::{ProofOfDoubleSpend, ResolutionEndorsement};
     use human_money_core::models::voucher::Transaction;
     use human_money_core::services::conflict_manager::{
         create_and_sign_resolution_endorsement, create_proof_of_double_spend,
@@ -180,6 +180,42 @@ mod tests {
     use human_money_core::services::crypto;
     use human_money_core::services::trap_manager::generate_sst_trap;
     use human_money_core::test_utils::{disclose_proof_receipt, sign_proof_fingerprints};
+    use human_money_core::UserIdentity;
+
+    struct TempDirGuard(std::path::PathBuf);
+
+    impl TempDirGuard {
+        fn new(label: &str) -> Self {
+            Self(temp_test_dir(label))
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            if self.0.exists() {
+                if let Err(err) = std::fs::remove_dir_all(&self.0) {
+                    eprintln!(
+                        "TempDirGuard cleanup failed for {}: {}",
+                        self.0.display(),
+                        err
+                    );
+                }
+            }
+        }
+    }
+
+    struct ConflictTestFixture {
+        state: AppState,
+        master_pw: &'static str,
+        bob_id: UserIdentity,
+        charlie_id: UserIdentity,
+        proof_base: ProofOfDoubleSpend,
+        proof_id: String,
+    }
 
     fn build_attributed_proof_from_service(
         offender_svc: &human_money_core::app_service::AppService,
@@ -241,9 +277,7 @@ mod tests {
         proof
     }
 
-    #[test]
-    fn test_conflict_endorsement_full_access_wot_enrichment_merge_and_cap_eviction() {
-        let dir = temp_test_dir("conflict_endorse_wot");
+    fn setup_conflict_fixture(dir: &std::path::Path) -> ConflictTestFixture {
         let keystore_dir = dir.join("keystore");
         let master_pw = "MasterConflictApp-2026!";
 
@@ -267,7 +301,6 @@ mod tests {
         let folder = alice_svc.list_profiles().unwrap()[0].folder_name.clone();
         let state = AppState::new(alice_svc);
 
-        // Save Bob as trusted contact (level 2) in Alice's wallet
         {
             let mut svc = state.service.lock().unwrap();
             state
@@ -294,13 +327,6 @@ mod tests {
                 .unwrap();
         }
 
-        // Oversized (> 2 MiB) import rejected before parsing
-        let oversized_err =
-            import_double_spend_proof_impl(vec![b' '; MAX_IMPORT_PROOF_BYTES + 1], None, &state)
-                .unwrap_err();
-        assert!(oversized_err.message.contains("exceeds maximum"));
-
-        // Switch Alice to DailyPay PIN session
         crate::commands::auth::enable_profile_pin_impl(
             master_pw,
             "135790",
@@ -332,14 +358,23 @@ mod tests {
         )
         .unwrap();
 
-        // Fill proof with MAX_RESOLUTION_ENDORSEMENTS unknown Sybil DIDs and import in DailyPay session
-        let mut sybil_proof = proof_base.clone();
-        let mut sybil_list = Vec::with_capacity(MAX_RESOLUTION_ENDORSEMENTS);
-        for idx in 0..MAX_RESOLUTION_ENDORSEMENTS {
+        ConflictTestFixture {
+            state,
+            master_pw,
+            bob_id,
+            charlie_id,
+            proof_base,
+            proof_id,
+        }
+    }
+
+    fn build_sybil_endorsements(proof_id: &str, count: usize) -> Vec<ResolutionEndorsement> {
+        let mut sybil_list = Vec::with_capacity(count);
+        for idx in 0..count {
             let (pk, sk) =
                 crypto::generate_ed25519_keypair_for_tests(Some(&format!("app-sybil-{idx}")));
             let uid = crypto::create_user_id(&pk, None).unwrap();
-            let id = human_money_core::UserIdentity {
+            let id = UserIdentity {
                 signing_key: sk,
                 public_key: pk,
                 user_id: uid,
@@ -348,66 +383,175 @@ mod tests {
                 has_bip39_passphrase: false,
             };
             sybil_list.push(
-                create_and_sign_resolution_endorsement(
-                    &proof_id,
-                    &id,
-                    Some(format!("sybil {idx}")),
-                )
-                .unwrap(),
+                create_and_sign_resolution_endorsement(proof_id, &id, Some(format!("sybil {idx}")))
+                    .unwrap(),
             );
         }
-        sybil_proof.resolutions = Some(sybil_list);
+        sybil_list
+    }
 
-        let import_res1 =
-            import_double_spend_proof_impl(serde_json::to_vec(&sybil_proof).unwrap(), None, &state)
-                .unwrap();
-        assert_eq!(import_res1.proof_id, proof_id);
+    #[test]
+    fn test_import_double_spend_proof_enforces_2mib_size_limit() {
+        let dir_guard = TempDirGuard::new("conflict_size_limit");
+        let fixture = setup_conflict_fixture(dir_guard.path());
+
+        // Positive baseline: valid proof within size cap imports cleanly
+        let valid_bytes = serde_json::to_vec(&fixture.proof_base).unwrap();
+        assert!(valid_bytes.len() < MAX_IMPORT_PROOF_BYTES);
+        let ok_res = import_double_spend_proof_impl(valid_bytes, None, &fixture.state).unwrap();
+        assert_eq!(ok_res.proof_id, fixture.proof_id);
+        assert!(!ok_res.already_known);
+
+        // Exact MAX_IMPORT_PROOF_BYTES passes size gate and reaches JSON parsing
+        let exact_err =
+            import_double_spend_proof_impl(vec![b' '; MAX_IMPORT_PROOF_BYTES], None, &fixture.state)
+                .unwrap_err();
+        assert!(
+            exact_err.message.contains("EOF while parsing")
+                && !exact_err.message.contains("exceeds maximum"),
+            "exact 2 MiB boundary must pass size gate and hit JSON parser, got: {:?}",
+            exact_err
+        );
+
+        // MAX_IMPORT_PROOF_BYTES + 1 fails before JSON parsing with exact size error
+        let oversized_err = import_double_spend_proof_impl(
+            vec![b' '; MAX_IMPORT_PROOF_BYTES + 1],
+            None,
+            &fixture.state,
+        )
+        .unwrap_err();
+        assert_eq!(
+            oversized_err.message,
+            "Proof payload exceeds maximum allowed size (2 MiB)"
+        );
+    }
+
+    #[test]
+    fn test_import_double_spend_proof_wot_trust_evicts_sybils_at_cap_in_dailypay() {
+        let dir_guard = TempDirGuard::new("conflict_wot_cap");
+        let fixture = setup_conflict_fixture(dir_guard.path());
+
+        // Import proof filled to MAX_RESOLUTION_ENDORSEMENTS with unknown Sybils in DailyPay session
+        let mut sybil_proof = fixture.proof_base.clone();
+        sybil_proof.resolutions = Some(build_sybil_endorsements(
+            &fixture.proof_id,
+            MAX_RESOLUTION_ENDORSEMENTS,
+        ));
+        let import_res1 = import_double_spend_proof_impl(
+            serde_json::to_vec(&sybil_proof).unwrap(),
+            None,
+            &fixture.state,
+        )
+        .unwrap();
+        assert_eq!(import_res1.proof_id, fixture.proof_id);
         assert!(!import_res1.already_known);
         assert_eq!(import_res1.added_endorsements, MAX_RESOLUTION_ENDORSEMENTS);
 
-        // Merging a proof with unknown Charlie (no WoT path) cannot evict full cap,
-        // whereas trusted Bob DOES evict an unknown Sybil via WoT priority!
+        // Unknown Charlie cannot evict full cap, whereas trusted Bob evicts one unknown Sybil via WoT priority
         let e_charlie = create_and_sign_resolution_endorsement(
-            &proof_id,
-            &charlie_id,
+            &fixture.proof_id,
+            &fixture.charlie_id,
             Some("Unknown Charlie".into()),
         )
         .unwrap();
-        let e_bob =
-            create_and_sign_resolution_endorsement(&proof_id, &bob_id, Some("Bob confirms".into()))
-                .unwrap();
-
-        let mut merge_proof = proof_base.clone();
-        merge_proof.resolutions = Some(vec![e_charlie.clone(), e_bob.clone()]);
-        let import_res2 =
-            import_double_spend_proof_impl(serde_json::to_vec(&merge_proof).unwrap(), None, &state)
-                .unwrap();
+        let e_bob = create_and_sign_resolution_endorsement(
+            &fixture.proof_id,
+            &fixture.bob_id,
+            Some("Bob confirms".into()),
+        )
+        .unwrap();
+        let mut merge_proof = fixture.proof_base.clone();
+        merge_proof.resolutions = Some(vec![e_charlie, e_bob]);
+        let import_res2 = import_double_spend_proof_impl(
+            serde_json::to_vec(&merge_proof).unwrap(),
+            None,
+            &fixture.state,
+        )
+        .unwrap();
         assert!(import_res2.already_known);
         assert_eq!(import_res2.added_endorsements, 1);
 
+        let details =
+            get_proof_of_double_spend_impl(fixture.proof_id.clone(), &fixture.state).unwrap();
+        let res = details.proof.resolutions.unwrap();
+        assert_eq!(res.len(), MAX_RESOLUTION_ENDORSEMENTS);
+        let bob_entry = res
+            .iter()
+            .find(|r| r.endorser_id == fixture.bob_id.user_id)
+            .expect("trusted Bob endorsement must evict an unknown Sybil");
+        assert_eq!(bob_entry.endorser_name.as_deref(), Some("Bob Trusted"));
+        assert!(bob_entry.wot_trust.trust_percent > 0);
+        assert!(!res
+            .iter()
+            .any(|r| r.endorser_id == fixture.charlie_id.user_id));
+    }
+
+    #[test]
+    fn test_endorse_conflict_resolution_requires_full_access_and_enriches_details() {
+        let dir_guard = TempDirGuard::new("conflict_endorse_full");
+        let fixture = setup_conflict_fixture(dir_guard.path());
+
+        let mut sybil_proof = fixture.proof_base.clone();
+        sybil_proof.resolutions = Some(build_sybil_endorsements(
+            &fixture.proof_id,
+            MAX_RESOLUTION_ENDORSEMENTS,
+        ));
+        import_double_spend_proof_impl(
+            serde_json::to_vec(&sybil_proof).unwrap(),
+            None,
+            &fixture.state,
+        )
+        .unwrap();
+
+        let e_charlie = create_and_sign_resolution_endorsement(
+            &fixture.proof_id,
+            &fixture.charlie_id,
+            Some("Unknown Charlie".into()),
+        )
+        .unwrap();
+        let e_bob = create_and_sign_resolution_endorsement(
+            &fixture.proof_id,
+            &fixture.bob_id,
+            Some("Bob confirms".into()),
+        )
+        .unwrap();
+        let mut merge_proof = fixture.proof_base.clone();
+        merge_proof.resolutions = Some(vec![e_charlie, e_bob]);
+        import_double_spend_proof_impl(
+            serde_json::to_vec(&merge_proof).unwrap(),
+            None,
+            &fixture.state,
+        )
+        .unwrap();
+
         // DailyPay must reject endorse_conflict_resolution and set_conflict_local_override without master password
         let err_endorse = endorse_conflict_resolution_impl(
-            proof_id.clone(),
+            fixture.proof_id.clone(),
             Some("settled".into()),
             true,
             None,
-            &state,
+            &fixture.state,
         )
         .unwrap_err();
         assert_eq!(err_endorse.code, "error.auth.insufficientAccessMode");
 
-        let err_override =
-            set_conflict_local_override_impl(proof_id.clone(), true, None, None, &state)
-                .unwrap_err();
+        let err_override = set_conflict_local_override_impl(
+            fixture.proof_id.clone(),
+            true,
+            None,
+            None,
+            &fixture.state,
+        )
+        .unwrap_err();
         assert_eq!(err_override.code, "error.auth.insufficientAccessMode");
 
         // Master password authorizes endorse_conflict_resolution with also_set_local_override=true
         let details = endorse_conflict_resolution_impl(
-            proof_id.clone(),
+            fixture.proof_id.clone(),
             Some("Settled offline".into()),
             true,
-            Some(master_pw.to_string()),
-            &state,
+            Some(fixture.master_pw.to_string()),
+            &fixture.state,
         )
         .unwrap();
 
@@ -417,32 +561,49 @@ mod tests {
         let res = details.proof.resolutions.unwrap();
         assert_eq!(res.len(), MAX_RESOLUTION_ENDORSEMENTS);
         assert!(res[0].is_own_identity, "Own endorsement must sort first");
-        assert_eq!(res[1].endorser_id, bob_id.user_id);
+        assert_eq!(res[1].endorser_id, fixture.bob_id.user_id);
         assert_eq!(res[1].endorser_name.as_deref(), Some("Bob Trusted"));
         assert!(
             res[1].wot_trust.trust_percent > 0,
             "Trusted contact Bob must carry positive WoT trust percent"
         );
-        assert!(!res.iter().any(|r| r.endorser_id == charlie_id.user_id));
-
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!res
+            .iter()
+            .any(|r| r.endorser_id == fixture.charlie_id.user_id));
     }
 
     #[test]
     fn s03_import_double_spend_proof_authorizes_before_parsing_json() {
-        let dir = temp_test_dir("s03_proof_auth_before_parse");
-        let mut alice_svc = setup_test_app(&dir, "Alice", ALICE_PHRASE, "pw123");
-        alice_svc.logout();
+        let dir_guard = TempDirGuard::new("s03_proof_auth_before_parse");
+        let alice_svc = setup_test_app(dir_guard.path(), "Alice", ALICE_PHRASE, "pw123");
         let state = crate::test_support::create_test_state(alice_svc);
 
-        let err =
-            import_double_spend_proof_impl(b"{not-valid-json".to_vec(), None, &state).unwrap_err();
-        assert_eq!(
-            err.code, "error.wallet.locked",
-            "Locked session must fail auth before JSON deserialization, got: {:?}",
-            err
+        // Positive baseline: identical payload with valid credentials while unlocked reaches JSON parsing
+        let unlocked_err = import_double_spend_proof_impl(
+            b"{not-valid-json".to_vec(),
+            Some("pw123".to_string()),
+            &state,
+        )
+        .unwrap_err();
+        assert_ne!(unlocked_err.code, "error.wallet.locked");
+        assert!(
+            unlocked_err.message.contains("key must be a string"),
+            "unlocked invalid JSON must reach parser, got: {:?}",
+            unlocked_err
         );
 
-        let _ = std::fs::remove_dir_all(&dir);
+        // Locked session with identical arguments must fail auth before JSON parsing
+        state.service.lock().unwrap().logout();
+        let locked_err = import_double_spend_proof_impl(
+            b"{not-valid-json".to_vec(),
+            Some("pw123".to_string()),
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(
+            locked_err.code, "error.wallet.locked",
+            "Locked session must fail auth before JSON deserialization, got: {:?}",
+            locked_err
+        );
     }
 }

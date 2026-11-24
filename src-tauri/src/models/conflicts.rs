@@ -195,32 +195,34 @@ pub struct FrontendProofImportResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use human_money_core::models::conflict::{
+        ProofOfDoubleSpend, ResolutionEndorsement, TrustStatus, VictimWitnessDisclosure,
+    };
+    use human_money_core::models::voucher::{Transaction, TrapWitness};
+    use human_money_core::services::crypto::{create_user_id, generate_ed25519_keypair_for_tests};
+    use human_money_core::wallet::types::ProofOfDoubleSpendSummary;
 
-    #[test]
-    fn s06_f15_conflict_attribution_requires_valid_user_id() {
-        let spoofed_summary = human_money_core::wallet::types::ProofOfDoubleSpendSummary {
+    fn make_dummy_summary(offender_id: &str, role: ConflictRole) -> ProofOfDoubleSpendSummary {
+        ProofOfDoubleSpendSummary {
             proof_id: "p1".into(),
-            offender_id: "not-a-did:key:fake".into(),
+            offender_id: offender_id.into(),
             fork_point_prev_hash: "h".into(),
             report_timestamp: "2026-01-01T00:00:00Z".into(),
-            local_override: false,
-            endorsement_count: 0,
-            local_note: None,
-            conflict_role: ConflictRole::Victim,
-            affected_voucher_name: None,
-            display_affected_voucher_name: None,
-            voucher_standard_uuid: None,
+            local_override: true,
+            endorsement_count: 2,
+            local_note: Some("note".into()),
+            conflict_role: role,
+            affected_voucher_name: Some("Minuto".into()),
+            display_affected_voucher_name: Some("Minuto".into()),
+            voucher_standard_uuid: Some("uuid-1".into()),
             is_test_voucher: false,
-        };
-        let fe_summary = FrontendProofOfDoubleSpendSummary::from(spoofed_summary);
-        assert!(
-            !fe_summary.is_cryptographically_attributed,
-            "Spoofed offender_id containing substring 'did:key:' must NOT be marked attributed"
-        );
+        }
+    }
 
-        let spoofed_proof = human_money_core::models::conflict::ProofOfDoubleSpend {
+    fn make_dummy_proof(offender_id: &str) -> ProofOfDoubleSpend {
+        ProofOfDoubleSpend {
             proof_id: "p1".into(),
-            offender_id: "evil:did:key:notvalid".into(),
+            offender_id: offender_id.into(),
             fork_point_prev_hash: "h".into(),
             conflicting_transactions: vec![],
             deletable_at: "2030-01-01T00:00:00Z".into(),
@@ -234,11 +236,137 @@ mod tests {
             affected_voucher_name: None,
             voucher_standard_uuid: None,
             non_redeemable_test_voucher: false,
-        };
-        let fe_proof = FrontendProofOfDoubleSpend::from(spoofed_proof);
-        assert!(
-            !fe_proof.is_cryptographically_attributed,
-            "ProofOfDoubleSpend with spoofed offender_id must NOT be marked attributed"
-        );
+        }
+    }
+
+    #[test]
+    fn s06_f15_conflict_attribution_requires_valid_user_id() {
+        let (pk, _) = generate_ed25519_keypair_for_tests(Some("s06-f15-valid"));
+        let canonical_did = create_user_id(&pk, None).unwrap();
+        let prefixed_did = create_user_id(&pk, Some("shop")).unwrap();
+
+        // Positive baselines: canonical and prefixed did:key user IDs are cryptographically attributed
+        for valid_id in [&canonical_did, &prefixed_did] {
+            let fe_summary = FrontendProofOfDoubleSpendSummary::from(make_dummy_summary(
+                valid_id,
+                ConflictRole::Victim,
+            ));
+            assert!(
+                fe_summary.is_cryptographically_attributed,
+                "Valid user ID '{}' must be marked attributed on summary",
+                valid_id
+            );
+
+            let fe_proof = FrontendProofOfDoubleSpend::from(make_dummy_proof(valid_id));
+            assert!(
+                fe_proof.is_cryptographically_attributed,
+                "Valid user ID '{}' must be marked attributed on full proof",
+                valid_id
+            );
+        }
+
+        // Negative cases: malformed or substring-spoofed IDs must NOT be marked attributed
+        for spoofed in ["not-a-did:key:fake", "evil:did:key:notvalid", "", "Unknown"] {
+            let fe_summary = FrontendProofOfDoubleSpendSummary::from(make_dummy_summary(
+                spoofed,
+                ConflictRole::Witness,
+            ));
+            assert!(
+                !fe_summary.is_cryptographically_attributed,
+                "Spoofed offender_id '{}' must NOT be marked attributed",
+                spoofed
+            );
+
+            let fe_proof = FrontendProofOfDoubleSpend::from(make_dummy_proof(spoofed));
+            assert!(
+                !fe_proof.is_cryptographically_attributed,
+                "ProofOfDoubleSpend with spoofed offender_id '{}' must NOT be marked attributed",
+                spoofed
+            );
+        }
+    }
+
+    #[test]
+    fn test_conflict_dto_conversions_sort_rfc3339_map_roles_witnesses_and_trust() {
+        let (pk, _) = generate_ed25519_keypair_for_tests(Some("dto-conv"));
+        let valid_did = create_user_id(&pk, None).unwrap();
+
+        let victim_summary =
+            FrontendProofOfDoubleSpendSummary::from(make_dummy_summary(&valid_did, ConflictRole::Victim));
+        assert_eq!(victim_summary.proof_id, "p1");
+        assert_eq!(victim_summary.conflict_role, "victim");
+        assert!(victim_summary.local_override);
+        assert_eq!(victim_summary.endorsement_count, 2);
+        assert_eq!(victim_summary.local_note.as_deref(), Some("note"));
+
+        let witness_summary = FrontendProofOfDoubleSpendSummary::from(make_dummy_summary(
+            &valid_did,
+            ConflictRole::Witness,
+        ));
+        assert_eq!(witness_summary.conflict_role, "witness");
+
+        // Empty victim_witnesses -> false / 0
+        let empty_witness_proof = FrontendProofOfDoubleSpend::from(make_dummy_proof(&valid_did));
+        assert!(!empty_witness_proof.has_victim_witness);
+        assert_eq!(empty_witness_proof.victim_witness_count, 0);
+
+        // RFC3339 sort: "2026-06-01T12:00:00+02:00" == 10:00:00Z (earlier) despite lexical > "11:00:00Z"
+        let mut rich_proof = make_dummy_proof(&valid_did);
+        rich_proof.conflicting_transactions = vec![
+            Transaction {
+                t_id: "later".into(),
+                t_time: "2026-06-01T11:00:00Z".into(),
+                ..Default::default()
+            },
+            Transaction {
+                t_id: "earlier".into(),
+                t_time: "2026-06-01T12:00:00+02:00".into(),
+                ..Default::default()
+            },
+        ];
+        rich_proof.victim_witnesses = vec![VictimWitnessDisclosure {
+            fingerprint_index: 0,
+            sender_permanent_did: valid_did.clone(),
+            witness: TrapWitness::default(),
+        }];
+        rich_proof.suspected_identity = Some(valid_did.clone());
+        rich_proof.resolutions = Some(vec![ResolutionEndorsement {
+            endorsement_id: "e1".into(),
+            proof_id: "p1".into(),
+            endorser_id: valid_did.clone(),
+            resolution_timestamp: "2026-06-02T00:00:00Z".into(),
+            notes: Some("reimbursed".into()),
+            endorser_signature: "esig".into(),
+        }]);
+
+        let fe_rich = FrontendProofOfDoubleSpend::from(rich_proof);
+        assert_eq!(fe_rich.conflicting_transactions.len(), 2);
+        assert_eq!(fe_rich.conflicting_transactions[0].t_id, "earlier");
+        assert_eq!(fe_rich.conflicting_transactions[1].t_id, "later");
+        assert!(fe_rich.has_victim_witness);
+        assert_eq!(fe_rich.victim_witness_count, 1);
+        assert_eq!(fe_rich.suspected_identity.as_deref(), Some(valid_did.as_str()));
+
+        let res = fe_rich.resolutions.unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].endorsement_id, "e1");
+        assert_eq!(res[0].notes.as_deref(), Some("reimbursed"));
+        assert!(!res[0].is_own_identity);
+
+        assert!(matches!(
+            FrontendTrustStatus::from(TrustStatus::Clean),
+            FrontendTrustStatus::Clean
+        ));
+        assert!(matches!(
+            FrontendTrustStatus::from(TrustStatus::KnownOffender("p1".into())),
+            FrontendTrustStatus::KnownOffender(ref id) if id == "p1"
+        ));
+        assert!(matches!(
+            FrontendTrustStatus::from(TrustStatus::Resolved {
+                proof_id: "p2".into(),
+                note: Some("ok".into()),
+            }),
+            FrontendTrustStatus::Resolved(ref id) if id == "p2"
+        ));
     }
 }

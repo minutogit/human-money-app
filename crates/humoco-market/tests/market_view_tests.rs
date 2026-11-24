@@ -3,10 +3,10 @@ use human_money_core::models::profile::PublicProfile;
 use human_money_core::models::voucher::{Voucher, VoucherStandard};
 use human_money_core::services::crypto::create_user_id;
 use humoco_market::{
-    accept_envelope, build_ad_board, build_market_view, new_ad_id, render_wire, sign_sd_card,
-    AcceptOutcome, Ad, AdKind, CardEnvelope, CardItem, CardPayloadInput, CardStore, DropDescriptor,
-    EntrySource, Skill, SkillOrigin, StoredCard, TrustTier, WireFilter, MAX_SKILL_TEXT_CHARS,
-    MAX_SKILL_TITLE_CHARS,
+    accept_envelope, build_ad_board, build_market_view, forward_envelope, new_ad_id, render_wire,
+    sign_sd_card, verify_sd_card, AcceptOutcome, Ad, AdKind, CardEnvelope, CardItem,
+    CardPayloadInput, CardStore, DropDescriptor, EntrySource, MarketPerson, SdCard, Skill,
+    SkillOrigin, StoredCard, TrustTier, WireFilter, MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
 };
 use proptest::prelude::*;
 
@@ -44,6 +44,61 @@ fn make_test_voucher(
         },
         ..Default::default()
     }
+}
+
+fn make_test_ad(id: &str, title: &str, published_at: u64, expires_at: u64) -> Ad {
+    Ad {
+        id: id.to_string(),
+        kind: AdKind::Offer,
+        title: title.to_string(),
+        text: None,
+        pricing: None,
+        published_at,
+        renewed_at: None,
+        expires_at,
+        allow_inquiries: true,
+        is_remote: false,
+        image_token: None,
+        event_at: None,
+        event_all_day: false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_named_ad_card(
+    sk: &SigningKey,
+    did: &str,
+    v: u64,
+    valid_until: u64,
+    max_hops: u8,
+    item_hops: u8,
+    first_name: &str,
+    ad: Ad,
+    drops: Vec<DropDescriptor>,
+) -> SdCard {
+    sign_sd_card(
+        CardPayloadInput {
+            did: did.to_string(),
+            v,
+            valid_until,
+            max_hops,
+            ad_count: 1,
+            allow_inquiries: true,
+            drops,
+        },
+        vec![
+            (
+                CardItem::Name {
+                    first_name: Some(first_name.to_string()),
+                    last_name: None,
+                },
+                item_hops,
+            ),
+            (CardItem::Ad(ad), item_hops),
+        ],
+        sk,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -215,10 +270,35 @@ fn test_own_did_excluded_even_with_prefix() {
         false,
     );
 
+    let now = 1_700_000_000;
+    let own_card = make_named_ad_card(
+        &own_sk,
+        &own_did_canonical,
+        10,
+        now + 86_400,
+        2,
+        2,
+        "Own Card",
+        make_test_ad("00000000000000aa", "Own Card Ad", now - 5, now + 86_400),
+        vec![],
+    );
+    let own_stored_card = StoredCard {
+        card_wire: render_wire(&own_card, 1, WireFilter::Full).unwrap(),
+        card: own_card,
+        hops: 1,
+        received_at: now,
+    };
+
     let vouchers = vec![v_own, v_other];
     let classify = |_did: &str| TrustTier::Trusted;
 
-    let persons = build_market_view(&vouchers, &[], &own_did_prefixed, &classify, 1700000000);
+    let persons = build_market_view(
+        &vouchers,
+        &[own_stored_card],
+        &own_did_prefixed,
+        &classify,
+        now,
+    );
     assert_eq!(persons.len(), 1);
     assert_eq!(persons[0].did, other_did);
 }
@@ -292,16 +372,18 @@ fn test_word_boundary_truncation_rules() {
     let sk = create_keypair();
     let did = create_user_id(&sk.verifying_key(), None).unwrap();
 
-    // Exactly 60 chars
+    // Exactly 60 chars (title only, text None)
     let text_60 = "a".repeat(60);
     // 70 chars with space at 50
     let text_70_words = format!("{} extra words", "b".repeat(50));
     // 80 chars single word without spaces
     let text_80_single_word = "c".repeat(80);
-    // 250 chars with spaces
+    // Exactly 160 chars single word vs 161 chars (tests MAX_SKILL_TEXT_CHARS boundary)
+    let text_160_exact = "x".repeat(160);
+    let text_161_over = "x".repeat(161);
+    // 250+ chars with spaces
     let text_250 = format!("{} end of offer", "d ".repeat(100));
 
-    // Test text_60: title len 60, text None
     let v1 = make_test_voucher(
         &did,
         "2026-01-01T10:00:00Z",
@@ -318,10 +400,10 @@ fn test_word_boundary_truncation_rules() {
         &|_| TrustTier::Trusted,
         1700000000,
     );
-    assert_eq!(p1[0].skills[0].title.chars().count(), 60);
+    assert_eq!(p1[0].skills[0].title, text_60);
     assert_eq!(p1[0].skills[0].text, None);
 
-    // Test text_70_words: title truncated at word boundary <= 60, text is Some(text_70_words)
+    // 70 chars with whitespace at index 50 -> exact word-boundary cut at 50 + '…'
     let v2 = make_test_voucher(
         &did,
         "2026-01-01T10:00:00Z",
@@ -338,11 +420,10 @@ fn test_word_boundary_truncation_rules() {
         &|_| TrustTier::Trusted,
         1700000000,
     );
-    assert!(p2[0].skills[0].title.chars().count() <= 60);
-    assert!(p2[0].skills[0].title.ends_with('…'));
+    assert_eq!(p2[0].skills[0].title, format!("{} extra…", "b".repeat(50)));
     assert_eq!(p2[0].skills[0].text, Some(text_70_words));
 
-    // Test text_80_single_word: hard cut at 59 + '…' = 60 chars
+    // 80-char unspaced word -> hard cut at 59 + '…' = 60 chars
     let v3 = make_test_voucher(
         &did,
         "2026-01-01T10:00:00Z",
@@ -363,7 +444,47 @@ fn test_word_boundary_truncation_rules() {
     assert_eq!(p3[0].skills[0].title, format!("{}…", "c".repeat(59)));
     assert_eq!(p3[0].skills[0].text, Some(text_80_single_word));
 
-    // Test text_250: title <= 60, text <= 160
+    // Exact 160-char boundary stays intact; 161 chars truncates to 159 + '…'
+    let v_exact_160 = make_test_voucher(
+        &did,
+        "2026-01-01T10:00:00Z",
+        Some(&text_160_exact),
+        None,
+        "M",
+        "1",
+        false,
+    );
+    let p_160 = build_market_view(
+        &[v_exact_160],
+        &[],
+        "did:key:other",
+        &|_| TrustTier::Trusted,
+        1700000000,
+    );
+    assert_eq!(p_160[0].skills[0].text.as_deref(), Some(text_160_exact.as_str()));
+
+    let v_over_161 = make_test_voucher(
+        &did,
+        "2026-01-01T10:00:00Z",
+        Some(&text_161_over),
+        None,
+        "M",
+        "1",
+        false,
+    );
+    let p_161 = build_market_view(
+        &[v_over_161],
+        &[],
+        "did:key:other",
+        &|_| TrustTier::Trusted,
+        1700000000,
+    );
+    assert_eq!(
+        p_161[0].skills[0].text.as_deref(),
+        Some(format!("{}…", "x".repeat(159)).as_str())
+    );
+
+    // 250+ chars -> exact word-boundary cuts for both title (<= 60) and text (<= 160)
     let v4 = make_test_voucher(
         &did,
         "2026-01-01T10:00:00Z",
@@ -380,10 +501,14 @@ fn test_word_boundary_truncation_rules() {
         &|_| TrustTier::Trusted,
         1700000000,
     );
-    assert!(p4[0].skills[0].title.chars().count() <= 60);
-    let text = p4[0].skills[0].text.as_ref().unwrap();
-    assert!(text.chars().count() <= 160);
-    assert!(text.ends_with('…'));
+    assert_eq!(
+        p4[0].skills[0].title,
+        format!("{}…", "d ".repeat(29).trim_end())
+    );
+    assert_eq!(
+        p4[0].skills[0].text.as_deref(),
+        Some(format!("{}…", "d ".repeat(79).trim_end()).as_str())
+    );
 }
 
 #[test]
@@ -396,6 +521,9 @@ fn test_sorting_order() {
 
     let sk3 = create_keypair();
     let did3 = create_user_id(&sk3.verifying_key(), None).unwrap();
+
+    let sk4 = create_keypair();
+    let did4 = create_user_id(&sk4.verifying_key(), None).unwrap();
 
     let v1 = make_test_voucher(
         &did1,
@@ -424,8 +552,17 @@ fn test_sorting_order() {
         "1",
         false,
     );
+    let v4 = make_test_voucher(
+        &did4,
+        "2026-01-01T10:00:00Z",
+        Some("T1-tie"),
+        None,
+        "M",
+        "1",
+        false,
+    );
 
-    let vouchers = vec![v1, v2, v3];
+    let vouchers = vec![v1, v2, v3, v4];
     let classify = |did: &str| {
         if did == did1 {
             TrustTier::Unknown
@@ -434,11 +571,17 @@ fn test_sorting_order() {
         }
     };
 
+    let (tie_first, tie_second) = if did2 <= did4 {
+        (&did2, &did4)
+    } else {
+        (&did4, &did2)
+    };
     let persons = build_market_view(&vouchers, &[], "did:key:other", &classify, 1700000000);
-    assert_eq!(persons.len(), 3);
+    assert_eq!(persons.len(), 4);
     assert_eq!(persons[0].did, did3);
-    assert_eq!(persons[1].did, did2);
-    assert_eq!(persons[2].did, did1);
+    assert_eq!(&persons[1].did, tie_first);
+    assert_eq!(&persons[2].did, tie_second);
+    assert_eq!(persons[3].did, did1);
 }
 
 #[test]
@@ -457,13 +600,13 @@ fn test_skills_deduplication_and_needs_preservation() {
         false,
     );
 
-    // 2. Card with a Skill "organic apples" (same title, case-insensitive)
+    // 2. Card with a Skill "organic apples" (same title, case-insensitive) and ad_count = 3 (1 disclosed -> 2 pending)
     let card_payload = CardPayloadInput {
         did: did.clone(),
         v: 1769940000,
         valid_until: 1800000000,
         max_hops: 2,
-        ad_count: 1,
+        ad_count: 3,
         allow_inquiries: true,
         drops: vec![],
     };
@@ -532,9 +675,10 @@ fn test_skills_deduplication_and_needs_preservation() {
     // Voucher needs is preserved on profile.needs!
     assert_eq!(p.profile.needs.as_deref(), Some("Garden Tools"));
 
-    // Active ad is present
+    // Active ad is present and undisclosed ads are reported in ads_pending
     assert_eq!(p.active_ads.len(), 1);
     assert_eq!(p.active_ads[0].title, "Active Apple Ad");
+    assert_eq!(p.ads_pending, 2);
 
     // Ad board test
     let board = build_ad_board(&persons);
@@ -635,6 +779,26 @@ fn test_filter_expired_ads_and_board_sorting() {
     )
     .unwrap();
 
+    let sk3 = create_keypair();
+    let did3 = create_user_id(&sk3.verifying_key(), None).unwrap();
+    let card_expired_at_boundary = make_named_ad_card(
+        &sk3,
+        &did3,
+        100,
+        now, // exact valid_until == now boundary must be excluded
+        2,
+        2,
+        "Boundary Expired",
+        make_test_ad("0000000000000004", "Boundary Card Ad", now - 5, now),
+        vec![],
+    );
+    let stored_boundary_expired = StoredCard {
+        card_wire: render_wire(&card_expired_at_boundary, 1, WireFilter::Full).unwrap(),
+        card: card_expired_at_boundary,
+        hops: 1,
+        received_at: now,
+    };
+
     let stored1 = StoredCard {
         card_wire: render_wire(&card1, 1, WireFilter::Full).unwrap(),
         card: card1,
@@ -650,7 +814,7 @@ fn test_filter_expired_ads_and_board_sorting() {
 
     let persons = build_market_view(
         &[],
-        &[stored1, stored2],
+        &[stored1, stored2, stored_boundary_expired],
         "did:key:other",
         &|_| TrustTier::Trusted,
         now,
@@ -698,79 +862,47 @@ proptest! {
 }
 
 #[test]
-fn test_empty_redacted_card_hides_person_and_ads_and_blocks_stale_zombie() {
-    use humoco_market::{
-        accept_envelope, forward_envelope, verify_sd_card, AcceptOutcome, CardEnvelope, CardStore,
-    };
-
+fn test_empty_redacted_card_hides_person_and_ads_in_market_view() {
     let now = 1_700_000_000;
     let alice_sk = create_keypair();
     let alice_did = create_user_id(&alice_sk.verifying_key(), None).unwrap();
 
     // v1 published at max_hops = 3 with Name + Ad
-    let card_v1 = sign_sd_card(
-        CardPayloadInput {
-            did: alice_did.clone(),
-            v: 100,
-            valid_until: now + 30 * 86_400,
-            max_hops: 3,
-            ad_count: 1,
-            allow_inquiries: true,
-            drops: vec![],
-        },
-        vec![
-            (
-                CardItem::Name {
-                    first_name: Some("Alice".to_string()),
-                    last_name: None,
-                },
-                3,
-            ),
-            (
-                CardItem::Ad(Ad {
-                    id: "0000000000000011".to_string(),
-                    kind: AdKind::Offer,
-                    title: "Fresh Honey".to_string(),
-                    text: None,
-                    pricing: None,
-                    published_at: now - 10,
-                    renewed_at: None,
-                    expires_at: now + 86_400,
-                    allow_inquiries: true,
-                    is_remote: false,
-                    image_token: None,
-                    event_at: None,
-                    event_all_day: false,
-                }),
-                3,
-            ),
-        ],
+    let card_v1 = make_named_ad_card(
         &alice_sk,
-    )
-    .unwrap();
+        &alice_did,
+        100,
+        now + 30 * 86_400,
+        3,
+        3,
+        "Alice",
+        make_test_ad("0000000000000011", "Fresh Honey", now - 10, now + 86_400),
+        vec![],
+    );
 
-    // Bob (Hop 1) and Carol (Hop 2) receive v1
+    // Carol (Hop 2) receives v1 and sees both person and ad
     let mut carol_store = CardStore::default();
     let v1_hop2_wire = render_wire(&card_v1, 2, WireFilter::Full).unwrap();
-    assert!(matches!(
+    assert_eq!(
         accept_envelope(
             &mut carol_store,
             &CardEnvelope {
                 hops: 2,
-                card_wire: v1_hop2_wire.clone(),
+                card_wire: v1_hop2_wire,
             },
             now,
             500,
             None,
             &|_| false
         ),
-        AcceptOutcome::Accepted { .. }
-    ));
-
-    let carol_cards_v1: Vec<StoredCard> = carol_store.cards.values().cloned().collect();
+        AcceptOutcome::Accepted {
+            did: alice_did.clone(),
+            replaced: false,
+        }
+    );
     let carol_view_v1 = build_market_view(
         &[],
-        &carol_cards_v1,
+        &carol_store.cards.values().cloned().collect::<Vec<_>>(),
         "did:key:carol",
         &|_| TrustTier::Trusted,
         now,
@@ -778,86 +910,134 @@ fn test_empty_redacted_card_hides_person_and_ads_and_blocks_stale_zombie() {
     assert_eq!(carol_view_v1.len(), 1);
     assert_eq!(build_ad_board(&carol_view_v1).len(), 1);
 
-    // v2 shrinks items to Hop 1 while keeping envelope max_hops = 3 (shrink_hops)
-    let card_v2 = sign_sd_card(
-        CardPayloadInput {
-            did: alice_did.clone(),
-            v: 200,
-            valid_until: now + 30 * 86_400,
-            max_hops: 3,
-            ad_count: 1,
-            allow_inquiries: true,
-            drops: vec![],
-        },
-        vec![
-            (
-                CardItem::Name {
-                    first_name: Some("Alice".to_string()),
-                    last_name: None,
-                },
-                1,
-            ),
-            (
-                CardItem::Ad(Ad {
-                    id: "0000000000000011".to_string(),
-                    kind: AdKind::Offer,
-                    title: "Fresh Honey".to_string(),
-                    text: None,
-                    pricing: None,
-                    published_at: now - 10,
-                    renewed_at: None,
-                    expires_at: now + 86_400,
-                    allow_inquiries: true,
-                    is_remote: false,
-                    image_token: None,
-                    event_at: None,
-                    event_all_day: false,
-                }),
-                1,
-            ),
-        ],
+    // v2 shrinks items to Hop 1 while keeping envelope max_hops = 3 -> hop 1 forward produces bare `<jws>~`
+    let card_v2 = make_named_ad_card(
         &alice_sk,
-    )
-    .unwrap();
-
-    // Hop 1 forwards v2 to Hop 2 -> produces bare `<jws>~`
+        &alice_did,
+        200,
+        now + 30 * 86_400,
+        3,
+        1,
+        "Alice",
+        make_test_ad("0000000000000011", "Fresh Honey", now - 10, now + 86_400),
+        vec![],
+    );
+    let hop1_wire = render_wire(&card_v2, 1, WireFilter::Full).unwrap();
     let hop1_stored = StoredCard {
-        card_wire: render_wire(&card_v2, 1, WireFilter::Full).unwrap(),
-        card: verify_sd_card(&render_wire(&card_v2, 1, WireFilter::Full).unwrap()).unwrap(),
+        card: verify_sd_card(&hop1_wire).unwrap(),
+        card_wire: hop1_wire,
         hops: 1,
         received_at: now,
     };
     let fwd_to_carol = forward_envelope(&hop1_stored).unwrap();
     assert!(fwd_to_carol.card_wire.ends_with('~'));
-
-    assert!(matches!(
+    assert_eq!(
         accept_envelope(&mut carol_store, &fwd_to_carol, now + 5, 500, None, &|_| {
             false
         }),
-        AcceptOutcome::Accepted { replaced: true, .. }
-    ));
+        AcceptOutcome::Accepted {
+            did: alice_did,
+            replaced: true,
+        }
+    );
 
-    // Carol still stores the empty shell (to forward to Dave & block v1 zombies),
-    // but MarketView & AdBoard show NOTHING!
+    // Store keeps 1 empty shell card (to block zombies/forward), while UI views show nothing
     assert_eq!(carol_store.cards.len(), 1);
-    let carol_cards_v2: Vec<StoredCard> = carol_store.cards.values().cloned().collect();
     let carol_view_v2 = build_market_view(
         &[],
-        &carol_cards_v2,
+        &carol_store.cards.values().cloned().collect::<Vec<_>>(),
         "did:key:carol",
         &|_| TrustTier::Trusted,
         now + 5,
     );
     assert!(carol_view_v2.is_empty());
     assert!(build_ad_board(&carol_view_v2).is_empty());
+}
 
-    // Delayed v1 replay MUST be ignored as stale!
-    assert!(matches!(
+#[test]
+fn test_empty_redacted_card_blocks_stale_v1_zombie_replay() {
+    let now = 1_700_000_000;
+    let alice_sk = create_keypair();
+    let alice_did = create_user_id(&alice_sk.verifying_key(), None).unwrap();
+
+    let card_v1 = make_named_ad_card(
+        &alice_sk,
+        &alice_did,
+        100,
+        now + 30 * 86_400,
+        3,
+        3,
+        "Alice",
+        make_test_ad("0000000000000011", "Fresh Honey", now - 10, now + 86_400),
+        vec![],
+    );
+    let card_v2 = make_named_ad_card(
+        &alice_sk,
+        &alice_did,
+        200,
+        now + 30 * 86_400,
+        3,
+        1,
+        "Alice",
+        make_test_ad("0000000000000011", "Fresh Honey", now - 10, now + 86_400),
+        vec![],
+    );
+
+    let v1_wire = render_wire(&card_v1, 2, WireFilter::Full).unwrap();
+    let v1_stored = StoredCard {
+        card: verify_sd_card(&v1_wire).unwrap(),
+        card_wire: v1_wire.clone(),
+        hops: 2,
+        received_at: now,
+    };
+    let hop1_wire = render_wire(&card_v2, 1, WireFilter::Full).unwrap();
+    let v2_shell = forward_envelope(&StoredCard {
+        card: verify_sd_card(&hop1_wire).unwrap(),
+        card_wire: hop1_wire,
+        hops: 1,
+        received_at: now,
+    })
+    .unwrap();
+    let v2_shell_stored = StoredCard {
+        card: verify_sd_card(&v2_shell.card_wire).unwrap(),
+        card_wire: v2_shell.card_wire.clone(),
+        hops: v2_shell.hops,
+        received_at: now + 5,
+    };
+
+    // Passing both stale v1 and newer v2 tombstone directly to build_market_view (either order) hides Alice
+    assert!(build_market_view(
+        &[],
+        &[v1_stored.clone(), v2_shell_stored.clone()],
+        "did:key:carol",
+        &|_| TrustTier::Trusted,
+        now + 5,
+    )
+    .is_empty());
+    assert!(build_market_view(
+        &[],
+        &[v2_shell_stored, v1_stored],
+        "did:key:carol",
+        &|_| TrustTier::Trusted,
+        now + 5,
+    )
+    .is_empty());
+
+    // Delayed v1 replay into Carol's store carrying the v2 shell must return exact IgnoredStale
+    let mut carol_store = CardStore::default();
+    assert_eq!(
+        accept_envelope(&mut carol_store, &v2_shell, now + 5, 500, None, &|_| false),
+        AcceptOutcome::Accepted {
+            did: alice_did,
+            replaced: false,
+        }
+    );
+    assert_eq!(
         accept_envelope(
             &mut carol_store,
             &CardEnvelope {
                 hops: 2,
-                card_wire: v1_hop2_wire,
+                card_wire: v1_wire,
             },
             now + 10,
             500,
@@ -865,7 +1045,7 @@ fn test_empty_redacted_card_hides_person_and_ads_and_blocks_stale_zombie() {
             &|_| false
         ),
         AcceptOutcome::IgnoredStale
-    ));
+    );
 }
 
 #[test]
@@ -875,46 +1055,17 @@ fn test_subaccount_card_preserves_recipient_did_for_market_and_board() {
     let anna_root_did = create_user_id(&anna_sk.verifying_key(), None).unwrap();
     let anna_shop_did = create_user_id(&anna_sk.verifying_key(), Some("laden")).unwrap();
 
-    let card = sign_sd_card(
-        CardPayloadInput {
-            did: anna_shop_did.clone(),
-            v: 100,
-            valid_until: now + 30 * 86_400,
-            max_hops: 2,
-            ad_count: 1,
-            allow_inquiries: true,
-            drops: vec![],
-        },
-        vec![
-            (
-                CardItem::Name {
-                    first_name: Some("Anna Laden".to_string()),
-                    last_name: None,
-                },
-                2,
-            ),
-            (
-                CardItem::Ad(Ad {
-                    id: "0000000000000099".to_string(),
-                    kind: AdKind::Offer,
-                    title: "Bio Brot".to_string(),
-                    text: None,
-                    pricing: None,
-                    published_at: now - 5,
-                    renewed_at: None,
-                    expires_at: now + 86_400,
-                    allow_inquiries: true,
-                    is_remote: false,
-                    image_token: None,
-                    event_at: None,
-                    event_all_day: false,
-                }),
-                2,
-            ),
-        ],
+    let card = make_named_ad_card(
         &anna_sk,
-    )
-    .unwrap();
+        &anna_shop_did,
+        100,
+        now + 30 * 86_400,
+        2,
+        2,
+        "Anna Laden",
+        make_test_ad("0000000000000099", "Bio Brot", now - 5, now + 86_400),
+        vec![],
+    );
 
     assert_eq!(card.payload.did, anna_root_did);
     assert_eq!(
@@ -924,7 +1075,7 @@ fn test_subaccount_card_preserves_recipient_did_for_market_and_board() {
     assert_eq!(card.payload.recipient_id(), anna_shop_did);
 
     let wire = render_wire(&card, 1, WireFilter::Full).unwrap();
-    let verified = humoco_market::verify_sd_card(&wire).unwrap();
+    let verified = verify_sd_card(&wire).unwrap();
     assert_eq!(verified.payload.did, anna_root_did);
     assert_eq!(verified.payload.recipient_id(), anna_shop_did);
 
@@ -979,51 +1130,27 @@ fn test_multi_prefix_cards_coexist_with_shared_trust_and_offender_hiding() {
     .iter()
     .enumerate()
     {
-        let card = sign_sd_card(
-            CardPayloadInput {
-                did: (*did).clone(),
-                v: 100 + idx as u64,
-                valid_until: now + 30 * 86_400,
-                max_hops: 2,
-                ad_count: 1,
-                allow_inquiries: true,
-                drops: vec![DropDescriptor {
-                    write_url: (*url).to_string(),
-                    read_url: (*url).to_string(),
-                    slot_id: None,
-                    drop_pub: hex::encode([9u8; 32]),
-                }],
-            },
-            vec![
-                (
-                    CardItem::Name {
-                        first_name: Some((*name).to_string()),
-                        last_name: None,
-                    },
-                    2,
-                ),
-                (
-                    CardItem::Ad(Ad {
-                        id: format!("000000000000001{}", idx),
-                        kind: AdKind::Offer,
-                        title: (*ad_title).to_string(),
-                        text: None,
-                        pricing: None,
-                        published_at: now - 5,
-                        renewed_at: None,
-                        expires_at: now + 86_400,
-                        allow_inquiries: true,
-                        is_remote: false,
-                        image_token: None,
-                        event_at: None,
-                        event_all_day: false,
-                    }),
-                    2,
-                ),
-            ],
+        let card = make_named_ad_card(
             &sk,
-        )
-        .unwrap();
+            did,
+            100 + idx as u64,
+            now + 30 * 86_400,
+            2,
+            2,
+            name,
+            make_test_ad(
+                &format!("000000000000001{}", idx),
+                ad_title,
+                now - 5,
+                now + 86_400,
+            ),
+            vec![DropDescriptor {
+                write_url: (*url).to_string(),
+                read_url: (*url).to_string(),
+                slot_id: None,
+                drop_pub: hex::encode([9u8; 32]),
+            }],
+        );
         let wire = render_wire(&card, 1, WireFilter::Full).unwrap();
         let res = accept_envelope(
             &mut store,
@@ -1095,4 +1222,87 @@ fn test_multi_prefix_cards_coexist_with_shared_trust_and_offender_hiding() {
         now,
     );
     assert!(hidden_persons.is_empty());
+}
+
+#[test]
+fn test_ad_board_owner_name_formatting_and_id_tiebreaker() {
+    let make_person = |suffix: &str, profile: PublicProfile, ads: Vec<Ad>| MarketPerson {
+        did: format!("did:key:z6MkPerson{suffix}"),
+        recipient_did: format!("did:key:z6MkPerson{suffix}"),
+        profile,
+        skills: vec![],
+        active_ads: ads,
+        ads_pending: 0,
+        allow_inquiries: true,
+        sources: vec![EntrySource::Voucher],
+        as_of: 100,
+        standards: vec![],
+        trust: TrustTier::Trusted,
+        can_forward: false,
+        card_drops: vec![],
+    };
+
+    let people = vec![
+        make_person(
+            "Full",
+            PublicProfile {
+                first_name: Some("Alice".into()),
+                last_name: Some("Meyer".into()),
+                organization: Some("IgnoredOrg".into()),
+                ..Default::default()
+            },
+            vec![make_test_ad("000000000000000b", "B", 100, 200)],
+        ),
+        make_person(
+            "First",
+            PublicProfile {
+                first_name: Some("Bob".into()),
+                last_name: Some("   ".into()),
+                ..Default::default()
+            },
+            vec![make_test_ad("000000000000000a", "A", 100, 200)],
+        ),
+        make_person(
+            "Last",
+            PublicProfile {
+                last_name: Some("Schmidt".into()),
+                ..Default::default()
+            },
+            vec![make_test_ad("000000000000000c", "C", 90, 200)],
+        ),
+        make_person(
+            "Org",
+            PublicProfile {
+                organization: Some("BioHof".into()),
+                community: Some("IgnoredCom".into()),
+                ..Default::default()
+            },
+            vec![make_test_ad("000000000000000d", "D", 80, 200)],
+        ),
+        make_person(
+            "Com",
+            PublicProfile {
+                community: Some("NordKiez".into()),
+                ..Default::default()
+            },
+            vec![make_test_ad("000000000000000e", "E", 70, 200)],
+        ),
+        make_person(
+            "Did",
+            PublicProfile::default(),
+            vec![make_test_ad("000000000000000f", "F", 60, 200)],
+        ),
+    ];
+
+    let board = build_ad_board(&people);
+    assert_eq!(board.len(), 6);
+    // Equal published_at=100 breaks ties by ad.id ascending ("...0a" before "...0b")
+    assert_eq!(board[0].ad.id, "000000000000000a");
+    assert_eq!(board[0].owner_name, "Bob");
+    assert_eq!(board[1].ad.id, "000000000000000b");
+    assert_eq!(board[1].owner_name, "Alice Meyer");
+    assert_eq!(board[2].owner_name, "Schmidt");
+    assert_eq!(board[3].owner_name, "BioHof");
+    assert_eq!(board[4].owner_name, "NordKiez");
+    assert_eq!(board[5].owner_name, "did:key:z6MkPersonDid");
 }

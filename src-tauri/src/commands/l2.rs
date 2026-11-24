@@ -402,23 +402,126 @@ mod tests {
     use crate::test_support::{
         create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE, BOB_PHRASE,
     };
-    use human_money_core::{test_utils, MnemonicLanguage, SecondaryScope};
+    use human_money_core::models::profile::PublicProfile;
+    use human_money_core::models::voucher::{NewVoucherData, ValueDefinition};
+    use human_money_core::models::voucher_standard_definition::VoucherStandardDefinition;
+    use human_money_core::wallet::Wallet;
+    use human_money_core::{test_utils, SecondaryScope};
 
-    #[tokio::test]
-    async fn test_restore_reconcile_blocks_claim_and_lock_trust_gates() {
-        let base_dir = temp_test_dir("l2_preflight_blocks_claim_and_trust");
-        let pw = "TestPassword123!";
-        let svc_alice = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
-        let alice_state = create_test_state(svc_alice);
-        let svc_bob = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, pw);
-        let bob_state = create_test_state(svc_bob);
+    struct TempDirGuard(std::path::PathBuf);
 
-        let bob_did = bob_state
-            .service
-            .lock()
-            .unwrap()
+    impl TempDirGuard {
+        fn new(label: &str) -> Self {
+            Self(temp_test_dir(label))
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            if self.0.exists() {
+                if let Err(err) = std::fs::remove_dir_all(&self.0) {
+                    eprintln!(
+                        "TempDirGuard cleanup failed for {}: {}",
+                        self.0.display(),
+                        err
+                    );
+                }
+            }
+        }
+    }
+
+    fn create_claimable_guarantor_voucher(
+        base_dir: &std::path::Path,
+        pw: &str,
+        summable: bool,
+    ) -> (AppState, String, String, String) {
+        let mut svc_alice = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+        let mut svc_bob = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, pw);
+        let alice_id = svc_alice
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
+        let bob_id = svc_bob
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let base_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let (base_def, _) = VoucherStandardDefinition::from_toml(&base_toml).unwrap();
+        let std_toml = if summable {
+            assert!(base_def.immutable.features.balances_are_summable);
+            base_toml
+        } else {
+            let (non_summable_def, _) = test_utils::create_custom_standard(&base_def, |s| {
+                s.immutable.features.balances_are_summable = false;
+            });
+            let old_sig = &base_def.signature.as_ref().unwrap().signature;
+            let new_sig = &non_summable_def.signature.as_ref().unwrap().signature;
+            base_toml
+                .replace(
+                    "balances_are_summable = true",
+                    "balances_are_summable = false",
+                )
+                .replace(old_sig, new_sig)
+        };
+        let (parsed_check, _) = VoucherStandardDefinition::from_toml(&std_toml).unwrap();
+        assert_eq!(parsed_check.immutable.features.balances_are_summable, summable);
+
+        let voucher = svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id.clone()),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "100".into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+
+        // Bob signs as guarantor and Alice attaches the detached signature
+        let bob_sig_bundle = svc_bob
+            .create_detached_signature_response_bundle(
+                &voucher,
+                "guarantor",
+                false,
+                human_money_core::ContainerConfig::TargetDid(
+                    alice_id.clone(),
+                    human_money_core::PrivacyMode::TrialDecryption,
+                ),
+                Some(pw),
+            )
+            .unwrap();
+        let standards = std::collections::HashMap::from([(
+            parsed_check.immutable.identity.uuid,
+            std_toml.clone(),
+        )]);
+        svc_alice
+            .process_and_attach_signature(&bob_sig_bundle, &standards, None, Some(pw))
+            .unwrap();
+
+        let local_id = Wallet::calculate_local_instance_id(&voucher, &alice_id).unwrap();
+        (create_test_state(svc_alice), local_id, bob_id, std_toml)
+    }
+
+    #[tokio::test]
+    async fn test_restore_reconcile_blocks_guarantor_claim_until_cleared() {
+        let dir_guard = TempDirGuard::new("l2_preflight_restore_reconcile");
+        let pw = "TestPassword123!";
+        let svc_alice = setup_test_app(&dir_guard.path().join("alice"), "Alice", ALICE_PHRASE, pw);
+        let alice_state = create_test_state(svc_alice);
+        let svc_bob = setup_test_app(&dir_guard.path().join("bob"), "Bob", BOB_PHRASE, pw);
+        let bob_did = svc_bob.with_wallet(|w| w.get_user_id().to_string()).unwrap();
         let ft_toml = test_utils::generate_signed_standard_toml(
             "voucher_standards/freetaler_v1/standard.toml",
         );
@@ -450,6 +553,41 @@ mod tests {
         let claim_err = create_guarantor_claim_bundle_impl(
             None,
             "nonexistent-lid".into(),
+            bob_did.clone(),
+            "10.00".into(),
+            ft_toml.clone(),
+            None,
+            None,
+            Some(pw.into()),
+            &alice_state,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            claim_err
+                .message
+                .contains("einmaliger Online-Sicherheitsabgleich erforderlich"),
+            "unexpected claim err: {:?}",
+            claim_err
+        );
+
+        // Positive baseline: clearing pending_restore_l2_reconciliation advances past preflight to voucher lookup
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_internal_lifecycle(
+                    &mut s,
+                    InternalLifecycleState {
+                        pending_restore_l2_reconciliation: false,
+                        ..Default::default()
+                    },
+                    Some(pw),
+                )
+                .unwrap();
+        }
+        let cleared_err = create_guarantor_claim_bundle_impl(
+            None,
+            "nonexistent-lid".into(),
             bob_did,
             "10.00".into(),
             ft_toml,
@@ -461,10 +599,19 @@ mod tests {
         .await
         .unwrap_err();
         assert!(
-            claim_err.message.contains("Sicherheitsabgleich"),
-            "unexpected claim err: {:?}",
-            claim_err
+            !cleared_err.message.contains("Sicherheitsabgleich")
+                && cleared_err.message.contains("nonexistent-lid"),
+            "clearing reconcile flag must pass preflight and fail at voucher lookup, got: {:?}",
+            cleared_err
         );
+    }
+
+    #[test]
+    fn test_dailypay_rejects_set_lock_server_trust_until_master_password() {
+        let dir_guard = TempDirGuard::new("l2_dailypay_trust_gate");
+        let pw = "TestPassword123!";
+        let svc_bob = setup_test_app(&dir_guard.path().join("bob"), "Bob", BOB_PHRASE, pw);
+        let bob_state = create_test_state(svc_bob);
 
         // DailyPay secondary session MUST be rejected by set_lock_server_trust_impl (Full required)
         {
@@ -487,24 +634,25 @@ mod tests {
         .unwrap_err();
         assert_eq!(daily_err.code, "error.auth.insufficientAccessMode");
 
-        let _ = (
-            MnemonicLanguage::English,
-            std::fs::remove_dir_all(&base_dir),
-        );
+        // Positive baseline: supplying the master password elevates and succeeds
+        let overview = l2_anchor_service::set_lock_server_trust_impl(
+            "11".repeat(32),
+            false,
+            Some(pw.into()),
+            &bob_state,
+        )
+        .expect("master password must authorize Full-access trust update from DailyPay");
+        assert_eq!(overview.status, "none");
+        assert!(overview.servers.is_empty());
     }
 
     #[test]
     fn test_h2_ram_signing_commands_fail_closed_when_session_locked() {
-        let base_dir = std::env::temp_dir().join(format!("l2_h2_test_{}", uuid::Uuid::new_v4()));
+        let dir_guard = TempDirGuard::new("l2_h2_test");
         let pw = "StrongTestPassword123!";
-        let mut bob_service = crate::test_support::setup_test_app(
-            &base_dir.join("bob"),
-            "Bob",
-            crate::test_support::BOB_PHRASE,
-            pw,
-        );
+        let mut bob_service = setup_test_app(&dir_guard.path().join("bob"), "Bob", BOB_PHRASE, pw);
         bob_service.lock_session();
-        let bob_state = crate::test_support::create_test_state(bob_service);
+        let bob_state = create_test_state(bob_service);
 
         let trust_err =
             l2_anchor_service::set_lock_server_trust_impl("11".repeat(32), false, None, &bob_state)
@@ -512,29 +660,51 @@ mod tests {
         assert_eq!(trust_err.code, "error.auth.sessionNotActive");
 
         // Explicit valid master password authorizes while session stays locked.
-        let trust_ok = l2_anchor_service::set_lock_server_trust_impl(
+        let overview = l2_anchor_service::set_lock_server_trust_impl(
             "11".repeat(32),
             false,
             Some(pw.into()),
             &bob_state,
-        );
-        assert!(trust_ok.is_ok(), "unexpected error: {:?}", trust_ok);
-
-        let _ = std::fs::remove_dir_all(&base_dir);
+        )
+        .expect("master password must authorize locked session");
+        assert_eq!(overview.status, "none");
+        assert_eq!(overview.ready_trusted_count, 0);
+        assert!(overview.servers.is_empty());
     }
 
     #[tokio::test]
     async fn test_s04_f7_discover_anchor_manifest_rejects_excessive_guarantors() {
-        let base_dir = temp_test_dir("s04_f7_discover_limit");
+        let dir_guard = TempDirGuard::new("s04_f7_discover_limit");
         let pw = "StrongTestPassword123!";
-        let svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+        let svc = setup_test_app(&dir_guard.path().join("alice"), "Alice", ALICE_PHRASE, pw);
         let state = create_test_state(svc);
 
-        let too_many: Vec<String> = (0..21)
+        // Positive boundary: MAX_DISCOVERY_GUARANTOR_DIDS (20) passes guarantor cap and fails hex decode
+        let exact_cap: Vec<String> = (0..MAX_DISCOVERY_GUARANTOR_DIDS)
+            .map(|i| format!("did:key:z6MkgGuarantor{:02}", i))
+            .collect();
+        let ok_cap_err = discover_anchor_manifest_cmd_impl(
+            "not-hex".into(),
+            None,
+            exact_cap,
+            Some(pw.to_string()),
+            &state,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            ok_cap_err.message.contains("invalid hex length")
+                && !ok_cap_err.message.contains("Too many guarantor DIDs"),
+            "exact 20-guarantor boundary must pass cap check and reach hex decode, got: {:?}",
+            ok_cap_err
+        );
+
+        // Exceeding MAX_DISCOVERY_GUARANTOR_DIDS (21) with identical bad hex must fail BEFORE hex decode
+        let too_many: Vec<String> = (0..=MAX_DISCOVERY_GUARANTOR_DIDS)
             .map(|i| format!("did:key:z6MkgGuarantor{:02}", i))
             .collect();
         let err = discover_anchor_manifest_cmd_impl(
-            "aa".repeat(32),
+            "not-hex".into(),
             None,
             too_many,
             Some(pw.to_string()),
@@ -542,96 +712,26 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(
-            err.message.contains("Too many guarantor DIDs"),
-            "S04-F7: expected guarantor count cap error, got: {:?}",
-            err
+        assert_eq!(
+            err.message,
+            format!(
+                "Too many guarantor DIDs for discovery (max {})",
+                MAX_DISCOVERY_GUARANTOR_DIDS
+            )
         );
-
-        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[tokio::test]
     async fn test_s04_f10_guarantor_claim_non_summable_standard_records_countable_items() {
-        use human_money_core::models::profile::PublicProfile;
-        use human_money_core::models::voucher::{NewVoucherData, ValueDefinition};
-        use human_money_core::models::voucher_standard_definition::VoucherStandardDefinition;
-        use human_money_core::wallet::Wallet;
-
-        let base_dir = temp_test_dir("s04_f10_claim_countable");
+        let dir_guard = TempDirGuard::new("s04_f10_claim_countable");
         let pw = "StrongTestPassword123!";
-        let mut svc_alice = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
-        let mut svc_bob = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, pw);
-        let alice_id = svc_alice
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
-        let bob_id = svc_bob
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
+        let (alice_state, local_id, bob_id, non_summable_toml) =
+            create_claimable_guarantor_voucher(dir_guard.path(), pw, false);
 
-        let base_toml = test_utils::generate_signed_standard_toml(
-            "voucher_standards/freetaler_v1/standard.toml",
-        );
-        let (base_def, _) = VoucherStandardDefinition::from_toml(&base_toml).unwrap();
-        let (non_summable_def, _) = test_utils::create_custom_standard(&base_def, |s| {
-            s.immutable.features.balances_are_summable = false;
-        });
-        let old_sig = &base_def.signature.as_ref().unwrap().signature;
-        let new_sig = &non_summable_def.signature.as_ref().unwrap().signature;
-        let non_summable_toml = base_toml
-            .replace(
-                "balances_are_summable = true",
-                "balances_are_summable = false",
-            )
-            .replace(old_sig, new_sig);
-        let (parsed_check, _) = VoucherStandardDefinition::from_toml(&non_summable_toml).unwrap();
-        assert!(!parsed_check.immutable.features.balances_are_summable);
-
-        let voucher = svc_alice
-            .create_new_voucher(
-                &non_summable_toml,
-                NewVoucherData {
-                    creator_profile: PublicProfile {
-                        id: Some(alice_id.clone()),
-                        ..Default::default()
-                    },
-                    nominal_value: ValueDefinition {
-                        amount: "100".into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                Some(pw),
-            )
-            .unwrap();
-
-        // Bob signs as guarantor and Alice attaches the detached signature
-        let bob_sig_bundle = svc_bob
-            .create_detached_signature_response_bundle(
-                &voucher,
-                "guarantor",
-                false,
-                human_money_core::ContainerConfig::TargetDid(
-                    alice_id.clone(),
-                    human_money_core::PrivacyMode::TrialDecryption,
-                ),
-                Some(pw),
-            )
-            .unwrap();
-        let standards = std::collections::HashMap::from([(
-            parsed_check.immutable.identity.uuid.clone(),
-            non_summable_toml.clone(),
-        )]);
-        svc_alice
-            .process_and_attach_signature(&bob_sig_bundle, &standards, None, Some(pw))
-            .unwrap();
-
-        let local_id = Wallet::calculate_local_instance_id(&voucher, &alice_id).unwrap();
-        let alice_state = create_test_state(svc_alice);
         let dto = create_guarantor_claim_bundle_impl(
             None,
             local_id,
-            bob_id,
+            bob_id.clone(),
             "100".into(),
             non_summable_toml,
             None,
@@ -642,6 +742,8 @@ mod tests {
         .await
         .unwrap();
         assert!(!dto.bundle_data.is_empty());
+        assert_eq!(dto.guarantor_id, bob_id);
+        assert_eq!(dto.claimed_amount, "100");
 
         let history = {
             let mut s = alice_state.service.lock().unwrap();
@@ -653,17 +755,69 @@ mod tests {
             .iter()
             .find(|r| r.bundle_id == dto.bundle_id)
             .expect("claim history record must be persisted");
+        assert_eq!(claim_rec.direction, "sent");
+        assert_eq!(claim_rec.recipient_id, bob_id);
         assert!(
             claim_rec.summable_amounts.is_empty(),
             "S04-F10: non-summable standard claim must NOT populate summable_amounts: {:?}",
             claim_rec.summable_amounts
         );
-        assert!(
-            !claim_rec.countable_items.is_empty(),
-            "S04-F10: non-summable standard claim MUST populate countable_items: {:?}",
+        assert_eq!(claim_rec.countable_items.len(), 1);
+        assert_eq!(
+            claim_rec.countable_items.values().copied().next(),
+            Some(1),
+            "S04-F10: non-summable standard claim must count 1 claimed voucher, got: {:?}",
             claim_rec.countable_items
         );
+    }
 
-        let _ = std::fs::remove_dir_all(&base_dir);
+    #[tokio::test]
+    async fn test_guarantor_claim_summable_standard_records_summable_amounts() {
+        let dir_guard = TempDirGuard::new("s04_claim_summable");
+        let pw = "StrongTestPassword123!";
+        let (alice_state, local_id, bob_id, summable_toml) =
+            create_claimable_guarantor_voucher(dir_guard.path(), pw, true);
+
+        let dto = create_guarantor_claim_bundle_impl(
+            None,
+            local_id,
+            bob_id.clone(),
+            "100".into(),
+            summable_toml,
+            None,
+            Some(false),
+            Some(pw.into()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert!(!dto.bundle_data.is_empty());
+        assert_eq!(dto.guarantor_id, bob_id);
+        assert_eq!(dto.claimed_amount, "100");
+
+        let history = {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .load_history_from_disk(&mut s, Some(pw))
+                .unwrap()
+        };
+        let claim_rec = history
+            .iter()
+            .find(|r| r.bundle_id == dto.bundle_id)
+            .expect("claim history record must be persisted");
+        assert_eq!(claim_rec.direction, "sent");
+        assert_eq!(claim_rec.recipient_id, bob_id);
+        assert!(
+            claim_rec.countable_items.is_empty(),
+            "summable standard claim must NOT populate countable_items: {:?}",
+            claim_rec.countable_items
+        );
+        assert_eq!(claim_rec.summable_amounts.len(), 1);
+        assert_eq!(
+            claim_rec.summable_amounts.values().map(String::as_str).next(),
+            Some("100"),
+            "summable standard claim must record exact claimed sum '100', got: {:?}",
+            claim_rec.summable_amounts
+        );
     }
 }
