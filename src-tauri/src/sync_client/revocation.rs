@@ -47,8 +47,14 @@ pub(super) fn parse_ed25519_pubkey_strict(hex_str: &str) -> Result<VerifyingKey,
     let pk_bytes = decode_hex_fixed::<32>(hex_str).map_err(|_| {
         SyncClientError::LocalValidation("Invalid Ed25519 public key hex".to_string())
     })?;
-    VerifyingKey::from_bytes(&pk_bytes)
-        .map_err(|_| SyncClientError::LocalValidation("Invalid Ed25519 public key".to_string()))
+    let vk = VerifyingKey::from_bytes(&pk_bytes)
+        .map_err(|_| SyncClientError::LocalValidation("Invalid Ed25519 public key".to_string()))?;
+    if vk.is_weak() {
+        return Err(SyncClientError::LocalValidation(
+            "Ed25519 public key is a weak small-order point".to_string(),
+        ));
+    }
+    Ok(vk)
 }
 
 pub fn sign_revocation_notice(

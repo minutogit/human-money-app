@@ -11,6 +11,7 @@ use tauri::Manager;
 
 const PROFILE_METADATA_FILE: &str = "profile_metadata.json";
 const ACTIVE_RECOVERY_SESSION_MAX_AGE_SECS: u64 = 7 * 86_400;
+const MAX_CUSTOM_STANDARD_TOML_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct ProfileMetadata {
@@ -302,22 +303,35 @@ pub(crate) fn collect_custom_standards(app: &tauri::AppHandle) -> HashMap<String
 /// Reads custom voucher standard TOMLs from a specific `voucher_standards` directory.
 pub(crate) fn collect_custom_standards_from_dir(standards_dir: &Path) -> HashMap<String, String> {
     let mut map = HashMap::new();
+    let Ok(base_meta) = fs::symlink_metadata(standards_dir) else {
+        return map;
+    };
+    if base_meta.file_type().is_symlink() || !base_meta.file_type().is_dir() {
+        return map;
+    }
     let Ok(entries) = fs::read_dir(standards_dir) else {
         return map;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            let standard_id = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let toml_path = path.join("standard.toml");
-            if toml_path.exists() {
-                if let Ok(content) = fs::read_to_string(&toml_path) {
-                    map.insert(standard_id, content);
-                }
+        let Ok(entry_meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if entry_meta.file_type().is_symlink() || !entry_meta.file_type().is_dir() {
+            continue;
+        }
+        let standard_id = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if !is_safe_filename_component(&standard_id) {
+            continue;
+        }
+        let toml_path = path.join("standard.toml");
+        if let Ok(bytes) = read_regular_file_bounded(&toml_path, MAX_CUSTOM_STANDARD_TOML_BYTES) {
+            if let Ok(content) = String::from_utf8(bytes) {
+                map.insert(standard_id, content);
             }
         }
     }
