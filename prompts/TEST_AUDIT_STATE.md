@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `961e6ec`
-- **Total Test Files:** 165 | **Total Test Functions:** 1568
+- **Updated at HEAD:** `03768e7`
+- **Total Test Files:** 165 | **Total Test Functions:** 1582
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -155,15 +155,15 @@
 | `src/components/ui/__tests__/TrustBadge.test.tsx` | P3 | 11 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 11/11 (981 pass)`, `tsc/lint 0`; popover toggle-close, `binaryTrust` mode & `blockedByOffender` precedence invariant; Revert-Red `TrustBadge.tsx` |
 | `src/components/ui/__tests__/UiModePrimitives.test.tsx` | P3 | 6 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 6/6 (981 pass)`, `tsc/lint 0`; `PresetOrCustom` `onChange` & `aria-pressed` state checks; Revert-Red `PresetOrCustom.tsx` |
 | `src/components/ui/__tests__/UiPrimitives.test.tsx` | P3 | 28 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 28/28 (981 pass)`, `tsc/lint 0`; `AlertBanner` `danger`/no-dismiss & `PageErrorState` no-retry checks; Revert-Red `AlertBanner.tsx` |
-| `src/components/voucher/__tests__/ExportSigningRequestModal.test.tsx` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/voucher/__tests__/TimelineSection.test.tsx` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/voucher/__tests__/ExportSigningRequestModal.test.tsx` | P3 | 4 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 4/4 (995 pass)`, `tsc/lint 0`; password validation/cleartext export, TargetDid/cancel & post send errors/auto-close; Revert-Red `ExportSigningRequestModal.tsx` |
+| `src/components/voucher/__tests__/TimelineSection.test.tsx` | P3 | 5 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 5/5 (995 pass)`, `tsc/lint 0`; creator+issuer signature protection & expert reversed tx history with `SYSTEM` fallback; Revert-Red `TimelineSection.tsx` |
 | `src/components/voucher/__tests__/VoucherBasicsForm.test.tsx` | P3 | 5 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 5/5 (975 pass)`, `tsc/lint 0`; replaced `toBeDefined()`, callbacks/error border & expert validity change; Revert-Red `VoucherBasicsForm.tsx` |
-| `src/help/__tests__/HelpContentRenderer.test.tsx` | P3 | 6 | 0/0/0 | ⚪ Pending | — | — |
-| `src/hooks/__tests__/useContactResolver.test.ts` | P3 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/hooks/__tests__/useCopyFeedback.test.ts` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
-| `src/hooks/__tests__/useParsedStandards.test.ts` | P3 | 2 | 0/0/0 | ⚪ Pending | — | — |
-| `src/hooks/__tests__/useRateLimitCooldown.test.ts` | P3 | 7 | 0/0/0 | ⚪ Pending | — | — |
-| `src/hooks/__tests__/useVoucherCreation.test.ts` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
+| `src/help/__tests__/HelpContentRenderer.test.tsx` | P3 | 7 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 7/7 (995 pass)`, `tsc/lint 0`; inline `<strong>` render check + literal script/unclosed-bold no-XSS checks; Revert-Red `HelpContentRenderer.tsx` |
+| `src/hooks/__tests__/useContactResolver.test.ts` | P3 | 5 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 5/5 (995 pass)`, `tsc/lint 0`; fetch rejection recovery (`inFlightFetch` cleanup) & 2000ms cache TTL expiry; Revert-Red `useContactResolver.ts` |
+| `src/hooks/__tests__/useCopyFeedback.test.ts` | P3 | 4 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 4/4 (995 pass)`, `tsc/lint 0`; `try/finally` `clearTimeout` spy on reset/unmount & rapid copy timer replacement; Revert-Red `useCopyFeedback.ts` |
+| `src/hooks/__tests__/useParsedStandards.test.ts` | P3 | 4 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 4/4 (995 pass)`, `tsc/lint 0`; Bug #15 fixed in `8225710` (top-level TOML string shadowing); added top-level unescape/empty fallback & section isolation tests; Revert-Red `useParsedStandards.ts` |
+| `src/hooks/__tests__/useRateLimitCooldown.test.ts` | P3 | 8 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 8/8 (995 pass)`, `tsc/lint 0`; `try/finally` `subscribeSpy`, non-429 return `false` & unmount callback unsubscribe; Revert-Red `useRateLimitCooldown.ts` |
+| `src/hooks/__tests__/useVoucherCreation.test.ts` | P3 | 4 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 4/4 (995 pass)`, `tsc/lint 0`; removed `as never`, added creator gender/summary, `validate()`/coord norm & `prepareVoucherData()`/committee/parse-error tests; Revert-Red `useVoucherCreation.ts` |
 | `src/hooks/__tests__/useVoucherFilters.test.ts` | P3 | 7 | 0/0/0 | ⚪ Pending | — | — |
 | `src/hooks/__tests__/useVoucherSelection.test.ts` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
 | `src/utils/__tests__/csvExport.test.ts` | P3 | 14 | 0/0/0 | ⚪ Pending | — | — |
