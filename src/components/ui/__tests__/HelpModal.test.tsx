@@ -49,25 +49,33 @@ describe('HelpModal Component', () => {
         const onClose = vi.fn();
         const onNavigate = vi.fn();
         const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+        try {
+            render(
+                <HelpModal
+                    isOpen={true}
+                    onClose={onClose}
+                    topic="wotNetwork"
+                    onNavigateToHelpCenter={onNavigate}
+                />
+            );
 
-        render(
-            <HelpModal
-                isOpen={true}
-                onClose={onClose}
-                topic="wotNetwork"
-                onNavigateToHelpCenter={onNavigate}
-            />
-        );
+            const openBtn = screen.getByRole('button', {
+                name: new RegExp(en['helpCenter.openInHelpCenter'], 'i'),
+            });
+            fireEvent.click(openBtn);
 
-        const openBtn = screen.getByRole('button', {
-            name: new RegExp(en['helpCenter.openInHelpCenter'], 'i'),
-        });
-        fireEvent.click(openBtn);
-
-        expect(onClose).toHaveBeenCalled();
-        expect(onNavigate).toHaveBeenCalledWith('wotNetwork');
-        expect(dispatchSpy).toHaveBeenCalled();
-        dispatchSpy.mockRestore();
+            expect(onClose).toHaveBeenCalledTimes(1);
+            expect(onNavigate).toHaveBeenCalledWith('wotNetwork');
+            const navEvent = dispatchSpy.mock.calls
+                .map(([ev]) => ev)
+                .find((ev): ev is CustomEvent<{ topic: string }> =>
+                    ev instanceof CustomEvent && ev.type === 'humoco:navigate-help-center'
+                );
+            expect(navEvent).toBeInstanceOf(CustomEvent);
+            expect(navEvent?.detail).toEqual({ topic: 'wotNetwork' });
+        } finally {
+            dispatchSpy.mockRestore();
+        }
     });
 
     it('closes on Escape key press', () => {
@@ -82,5 +90,52 @@ describe('HelpModal Component', () => {
 
         fireEvent.keyDown(window, { key: 'Escape' });
         expect(onClose).toHaveBeenCalled();
+    });
+
+    it('renders nothing when closed and resets topic to prop when reopened with a new topic', () => {
+        const { rerender } = render(
+            <HelpModal
+                isOpen={false}
+                onClose={() => {}}
+                topic="conceptParadigm"
+            />
+        );
+        expect(screen.queryByRole('dialog')).toBeNull();
+
+        rerender(
+            <HelpModal
+                isOpen={true}
+                onClose={() => {}}
+                topic="conceptParadigm"
+            />
+        );
+        expect(
+            screen.getByRole('heading', { level: 2, name: en['help.conceptParadigm.title'] }),
+        ).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: en['help.voucherBasics.title'] }));
+        expect(
+            screen.getByRole('heading', { level: 2, name: en['help.voucherBasics.title'] }),
+        ).toBeInTheDocument();
+
+        rerender(
+            <HelpModal
+                isOpen={false}
+                onClose={() => {}}
+                topic="conceptParadigm"
+            />
+        );
+        expect(screen.queryByRole('dialog')).toBeNull();
+
+        rerender(
+            <HelpModal
+                isOpen={true}
+                onClose={() => {}}
+                topic="mnemonic"
+            />
+        );
+        expect(
+            screen.getByRole('heading', { level: 2, name: en['help.mnemonic.title'] }),
+        ).toBeInTheDocument();
     });
 });

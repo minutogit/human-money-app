@@ -175,5 +175,48 @@ describe('TrustBadge', () => {
     expect(screen.getByTestId('trust-badge-popover')).toBeInTheDocument();
     expect(screen.getByText('voucher.trustBadgeExplanation')).toBeInTheDocument();
     expect(parentClickHandler).not.toHaveBeenCalled();
+
+    fireEvent.click(badge);
+    expect(screen.queryByTestId('trust-badge-popover')).toBeNull();
+    expect(parentClickHandler).not.toHaveBeenCalled();
+  });
+
+  it('renders static emerald badge in binaryTrust mode without interactive popover', () => {
+    const trust: VoucherTrustDto = {
+      score: 0.85,
+      trustPercent: 85,
+      isOwnVoucher: false,
+      blockedByOffender: false,
+      shortestHops: 2,
+      primaryBridgeName: 'Alice',
+      additionalPathsCount: 0,
+      viaGuarantor: false,
+      bestPathNames: ['Alice'],
+    };
+    render(<TrustBadge trust={trust} binaryTrust />);
+    const badge = screen.getByTestId('trust-badge');
+    expect(badge).toHaveTextContent('marketplace.trustTrusted');
+    expect(badge.className).toContain('emerald');
+    expect(badge).not.toHaveAttribute('role', 'button');
+
+    fireEvent.click(badge);
+    expect(screen.queryByTestId('trust-badge-popover')).toBeNull();
+  });
+
+  it('prioritizes blockedByOffender warning over own voucher and 100% trust', () => {
+    const trust: VoucherTrustDto = {
+      score: 1.0,
+      trustPercent: 100,
+      isOwnVoucher: true,
+      blockedByOffender: true,
+      shortestHops: 0,
+      additionalPathsCount: 0,
+      viaGuarantor: false,
+      bestPathNames: [],
+    };
+    render(<TrustBadge trust={trust} />);
+    const badge = screen.getByTestId('trust-badge');
+    expect(badge).toHaveTextContent('voucher.trustOffender');
+    expect(badge.className).toContain('rose');
   });
 });

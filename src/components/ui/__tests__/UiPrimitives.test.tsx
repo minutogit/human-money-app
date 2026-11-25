@@ -7,14 +7,19 @@ import { HelpIcon } from '../HelpIcon';
 import { PageLoadingState, PageEmptyState, PageErrorState } from '../PageState';
 
 describe('AlertBanner', () => {
-  it('renders all 4 style variants with correct color classes', () => {
+  it('renders all style variants with correct color classes and omits dismiss button without onDismiss', () => {
     const { rerender } = render(
       <AlertBanner variant="success" data-testid="alert">Success Alert</AlertBanner>
     );
     let alert = screen.getByTestId('alert');
     expect(alert.className).toContain('bg-emerald-50 border-emerald-200 text-emerald-800');
+    expect(screen.queryByRole('button')).toBeNull();
 
     rerender(<AlertBanner variant="error" data-testid="alert">Error Alert</AlertBanner>);
+    alert = screen.getByTestId('alert');
+    expect(alert.className).toContain('bg-rose-50 border-rose-200 text-rose-800');
+
+    rerender(<AlertBanner variant="danger" data-testid="alert">Danger Alert</AlertBanner>);
     alert = screen.getByTestId('alert');
     expect(alert.className).toContain('bg-rose-50 border-rose-200 text-rose-800');
 
@@ -364,11 +369,12 @@ describe('PageState', () => {
   });
 
   describe('PageErrorState', () => {
-    it('renders error message and default error title', () => {
+    it('renders error message and default error title without retry button when omitted', () => {
       render(<PageErrorState message="Verbindung zum Shard fehlgeschlagen." />);
       const alert = screen.getByRole('alert');
       expect(alert).toBeInTheDocument();
       expect(screen.getByText('Verbindung zum Shard fehlgeschlagen.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /retry/i })).toBeNull();
     });
 
     it('renders retry button and triggers onRetry callback when clicked', () => {

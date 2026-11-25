@@ -144,6 +144,34 @@ describe('CopyButton', () => {
         render(<CopyButton value="" />);
         expect(screen.getByRole('button', { name: en['common.copy'] })).toBeDisabled();
     });
+
+    it('stops click propagation when stopPropagation is true and bubbles when false', async () => {
+        const parentClickStop = vi.fn();
+        render(
+            <div onClick={parentClickStop}>
+                <CopyButton value="stop-val" stopPropagation data-testid="copy-stop" />
+            </div>
+        );
+
+        await act(async () => {
+            fireEvent.click(screen.getByTestId('copy-stop'));
+        });
+        expect(clipboardUtils.copyToClipboard).toHaveBeenCalledWith('stop-val');
+        expect(parentClickStop).not.toHaveBeenCalled();
+
+        const parentClickBubble = vi.fn();
+        render(
+            <div onClick={parentClickBubble}>
+                <CopyButton value="bubble-val" data-testid="copy-bubble" />
+            </div>
+        );
+
+        await act(async () => {
+            fireEvent.click(screen.getByTestId('copy-bubble'));
+        });
+        expect(clipboardUtils.copyToClipboard).toHaveBeenCalledWith('bubble-val');
+        expect(parentClickBubble).toHaveBeenCalledTimes(1);
+    });
 });
 
 describe('PasswordPairFields', () => {

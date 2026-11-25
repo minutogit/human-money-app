@@ -4,6 +4,9 @@ import { PageLayout } from '../PageLayout';
 import { PageHeader } from '../PageHeader';
 import { BackButton } from '../BackButton';
 import { PageOptionsPanel } from '../PageOptionsPanel';
+import enJson from '../../../locales/en.json';
+
+const en = enJson as Record<string, string>;
 
 describe('PageLayout', () => {
   it('renders title as string, description, and children', () => {
@@ -289,8 +292,8 @@ describe('PageOptionsPanel', () => {
     expect(handleClose).toHaveBeenCalledTimes(1);
   });
 
-  it('renders help topic icon when provided', () => {
-    render(
+  it('renders help topic icon when provided, opens HelpModal on click, and omits it when absent', () => {
+    const { rerender } = render(
       <PageOptionsPanel
         title="Panel With Help"
         helpTopic="wotNetwork"
@@ -300,5 +303,16 @@ describe('PageOptionsPanel', () => {
     );
 
     expect(screen.getByText('Panel With Help')).toBeInTheDocument();
+    const helpBtn = screen.getByRole('button');
+    fireEvent.click(helpBtn);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText(en['help.wotNetwork.title'])).toBeInTheDocument();
+
+    rerender(
+      <PageOptionsPanel title="Panel Without Help">
+        <div>Content</div>
+      </PageOptionsPanel>
+    );
+    expect(screen.queryByRole('button')).toBeNull();
   });
 });

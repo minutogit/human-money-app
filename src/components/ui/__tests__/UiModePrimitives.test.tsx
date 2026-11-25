@@ -137,17 +137,19 @@ describe('UI Mode Primitives', () => {
     });
 
     it('shows presets + custom badge in simple mode and custom controls in expert mode in PresetOrCustom', () => {
-        render(
+        const handlePresetChange = vi.fn();
+        const presets = [
+            { id: 'near' as const, title: 'Nah', description: 'Direct only' },
+            { id: 'medium' as const, title: 'Mittel', description: 'Standard', recommended: true },
+            { id: 'far' as const, title: 'Weit', description: 'Extended' },
+        ];
+        const { rerender } = render(
             <UiModeProvider>
                 <UiModeToggle variant="compact" />
                 <PresetOrCustom<'near' | 'medium' | 'far'>
-                    presets={[
-                        { id: 'near', title: 'Nah', description: 'Direct only' },
-                        { id: 'medium', title: 'Mittel', description: 'Standard', recommended: true },
-                        { id: 'far', title: 'Weit', description: 'Extended' },
-                    ]}
+                    presets={presets}
                     value="custom"
-                    onChange={() => {}}
+                    onChange={handlePresetChange}
                     renderCustom={() => <div data-testid="custom-sliders">Raw Hops Slider</div>}
                 />
             </UiModeProvider>
@@ -155,6 +157,25 @@ describe('UI Mode Primitives', () => {
 
         expect(screen.getByTestId('preset-custom-status')).toBeInTheDocument();
         expect(screen.queryByTestId('custom-sliders')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByTestId('preset-option-near'));
+        expect(handlePresetChange).toHaveBeenCalledWith('near');
+
+        rerender(
+            <UiModeProvider>
+                <UiModeToggle variant="compact" />
+                <PresetOrCustom<'near' | 'medium' | 'far'>
+                    presets={presets}
+                    value="near"
+                    onChange={handlePresetChange}
+                    renderCustom={() => <div data-testid="custom-sliders">Raw Hops Slider</div>}
+                />
+            </UiModeProvider>
+        );
+
+        expect(screen.queryByTestId('preset-custom-status')).not.toBeInTheDocument();
+        expect(screen.getByTestId('preset-option-near')).toHaveAttribute('aria-pressed', 'true');
+        expect(screen.getByTestId('preset-option-medium')).toHaveAttribute('aria-pressed', 'false');
 
         fireEvent.click(screen.getByTestId('ui-mode-expert'));
         expect(screen.getByTestId('custom-sliders')).toBeInTheDocument();
