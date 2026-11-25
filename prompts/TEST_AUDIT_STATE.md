@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `2bb1d9f`
-- **Total Test Files:** 165 | **Total Test Functions:** 1553
+- **Updated at HEAD:** `eb5ad08`
+- **Total Test Files:** 165 | **Total Test Functions:** 1562
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -141,12 +141,12 @@
 | `src/components/standards/__tests__/StandardsManager.test.tsx` | P3 | 8 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 8/8 (966 pass)`, `tsc/lint 0`; removed `eslint-disable`/`require`/`any`, `try/finally` `consoleWarnSpy`, export flow, cancel-delete & in-use error; Revert-Red `StandardsManager.tsx` |
 | `src/components/support/__tests__/BugReportView.test.tsx` | P3 | 7 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 7/7 (966 pass)`, `tsc/lint 0`; deferred `getLatestLogs` loading state & empty-logs / `openUrl` failure test; Revert-Red `BugReportView.tsx` |
 | `src/components/support/__tests__/HelpCenterView.test.tsx` | P3 | 9 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 9/9 (966 pass)`, `tsc/lint 0`; simple disclosure vs expert pill & empty-search noResults restore; Revert-Red `HelpCenterView.tsx` |
-| `src/components/support/__tests__/SupportView.test.tsx` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/transfer/__tests__/ReceiveSuccessView.test.tsx` | P3 | 14 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/transfer/__tests__/ReceiveView.test.tsx` | P3 | 7 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/transfer/__tests__/SendView.test.tsx` | P3 | 27 | 0/0/1 | ⚪ Pending | — | — |
-| `src/components/transfer/__tests__/TransactionHistoryView.test.tsx` | P3 | 11 | 0/0/1 | ⚪ Pending | — | — |
-| `src/components/transfer/__tests__/TransferSuccessView.test.tsx` | P3 | 4 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/support/__tests__/SupportView.test.tsx` | P3 | 4 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 4/4 (975 pass)`, `tsc/lint 0`; `openUrl` failure error banner & `onBack`; Revert-Red `SupportView.tsx` |
+| `src/components/transfer/__tests__/ReceiveSuccessView.test.tsx` | P3 | 15 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 15/15 (975 pass)`, `tsc/lint 0`; `onDone` + non-tolerance `pendingCommit` error; Revert-Red `ReceiveSuccessView.tsx` |
+| `src/components/transfer/__tests__/ReceiveView.test.tsx` | P3 | 8 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 8/8 (975 pass)`, `tsc/lint 0`; real file dialog open/cancel + invalid `.txt` & `onBack`; Revert-Red `ReceiveView.tsx` |
+| `src/components/transfer/__tests__/SendView.test.tsx` | P3 | 27 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 27/27 (975 pass)`, `tsc/lint 0`; replaced `toBeDefined()` & `amountInput!`; Revert-Red `SendView.tsx` |
+| `src/components/transfer/__tests__/TransactionHistoryView.test.tsx` | P3 | 13 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 13/13 (975 pass)`, `tsc/lint 0`; replaced `toBeDefined()`/`!`, empty CTA/`getHistory` error & CSV cancel; Revert-Red `TransactionHistoryView.tsx` |
+| `src/components/transfer/__tests__/TransferSuccessView.test.tsx` | P3 | 6 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 6/6 (975 pass)`, `tsc/lint 0`; save/cancel skip `writeFile` + Finish `onDone` & failed redeposit error; Revert-Red `TransferSuccessView.tsx` |
 | `src/components/ui/__tests__/HelpModal.test.tsx` | P3 | 4 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/ui/__tests__/InfoHint.test.tsx` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/ui/__tests__/NewPrimitives.test.tsx` | P3 | 9 | 0/0/0 | ⚪ Pending | — | — |
@@ -157,7 +157,7 @@
 | `src/components/ui/__tests__/UiPrimitives.test.tsx` | P3 | 28 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/voucher/__tests__/ExportSigningRequestModal.test.tsx` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/voucher/__tests__/TimelineSection.test.tsx` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/voucher/__tests__/VoucherBasicsForm.test.tsx` | P3 | 3 | 0/0/1 | ⚪ Pending | — | — |
+| `src/components/voucher/__tests__/VoucherBasicsForm.test.tsx` | P3 | 5 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 5/5 (975 pass)`, `tsc/lint 0`; replaced `toBeDefined()`, callbacks/error border & expert validity change; Revert-Red `VoucherBasicsForm.tsx` |
 | `src/help/__tests__/HelpContentRenderer.test.tsx` | P3 | 6 | 0/0/0 | ⚪ Pending | — | — |
 | `src/hooks/__tests__/useContactResolver.test.ts` | P3 | 4 | 0/0/0 | ⚪ Pending | — | — |
 | `src/hooks/__tests__/useCopyFeedback.test.ts` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
