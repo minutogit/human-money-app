@@ -1031,6 +1031,7 @@ pub fn prepare_transfer_plan_impl(
 #[cfg(test)]
 mod offline_and_degraded_transfer_tests {
     use super::*;
+    use crate::services::fs_helpers::TempDirGuard;
     use crate::settings::{InternalLifecycleState, UiPreferences, UI_PREFERENCES_KEY};
     use crate::test_support::{
         create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE, BOB_PHRASE,
@@ -1058,6 +1059,15 @@ mod offline_and_degraded_transfer_tests {
             standard_toml.clone(),
         );
         (map, standard_toml)
+    }
+
+    fn wallet_did(state: &AppState) -> String {
+        state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap()
     }
 
     fn issue_100_voucher(state: &AppState, standard_toml: &str, password: &str) -> String {
@@ -1116,18 +1126,378 @@ mod offline_and_degraded_transfer_tests {
             .local_instance_id
     }
 
+    fn spawn_mock_l2_confirm_server(
+        listener: tokio::net::TcpListener,
+        sk: SigningKey,
+        retain_q: u16,
+        head_fill: u8,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 65_536];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                if n == 0 {
+                    continue;
+                }
+                let raw = String::from_utf8_lossy(&buf[..n]);
+                let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+                let req: human_money_core::models::layer2_api::SyncLockBatchRequest =
+                    serde_json::from_str(body_str).unwrap();
+                let receipts: Vec<LockReceipt> = req
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| {
+                        let wire = decode_hex_fixed::<605>(h).unwrap();
+                        let entry =
+                            human_money_core::humoco_proto::causal::LockEntry::from_wire_bytes(
+                                &wire,
+                            )
+                            .unwrap();
+                        let mut r = LockReceipt {
+                            kind: LockReceiptKind::FirstWrite,
+                            lock_pub: sk.verifying_key().to_bytes(),
+                            bucket: req.bucket,
+                            slot: entry.slot,
+                            child_lock: entry.child_lock,
+                            entry_hash: entry.entry_hash().unwrap(),
+                            retain_until_quarter: retain_q,
+                            write_seq: (i as u64) + 1,
+                            bucket_head: [head_fill; 32],
+                            recipient_nonce: req.recipient_nonce,
+                            sig: [0u8; 64],
+                        };
+                        r.sig = sk.sign(&r.digest()).to_bytes();
+                        r
+                    })
+                    .collect();
+                let resp = serde_json::json!({
+                    "status": "ok",
+                    "bucket": hex::encode(req.bucket),
+                    "retain_until_quarter": retain_q,
+                    "receipts": receipts,
+                    "conflict": null,
+                })
+                .to_string();
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp.len(),
+                    resp
+                );
+                stream.write_all(http.as_bytes()).await.unwrap();
+            }
+        })
+    }
+
+    fn register_single_server_anchor_and_voucher(
+        state: &AppState,
+        port: u16,
+        sk: &SigningKey,
+        anchor_nonce: &[u8; 32],
+        amount: &str,
+        password: &str,
+    ) -> [u8; 32] {
+        let (_, standard_toml) = std_map();
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let mut s = state.service.lock().unwrap();
+        state
+            .save_ui_preferences(&mut s, UiPreferences::default(), Some(password))
+            .unwrap();
+        state
+            .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(password))
+            .unwrap();
+        let mig_pub = s
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: format!("http://127.0.0.1:{}/sync.php", port),
+                read_url: format!("http://127.0.0.1:{}/d", port),
+                admin_pub: sk.verifying_key().to_bytes(),
+                lock_pub: sk.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub: mig_pub,
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let aid = manifest.rev1_anchor_id().unwrap();
+        let mut ticket = GenesisTicket {
+            anchor_id: aid,
+            retain_until_quarter: retain_q,
+            issued_at: 1_760_000_000,
+            lock_pub: sk.verifying_key().to_bytes(),
+            sig: [0u8; 64],
+        };
+        ticket.sig = sk.sign(&ticket.digest()).to_bytes();
+        s.register_l2_anchor_template_with_nonce(
+            manifest,
+            vec![ticket],
+            Some(anchor_nonce),
+            Some(password),
+        )
+        .unwrap();
+        let uid = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        s.create_new_voucher(
+            &standard_toml,
+            NewVoucherData {
+                creator_profile: PublicProfile {
+                    id: Some(uid),
+                    ..Default::default()
+                },
+                nominal_value: ValueDefinition {
+                    amount: amount.into(),
+                    unit: "Taler".into(),
+                    ..Default::default()
+                },
+                layer2_anchor: Some(aid),
+                ..Default::default()
+            },
+            Some(password),
+        )
+        .unwrap();
+        aid
+    }
+
+    fn trust_l2_server_on_wallet(
+        state: &AppState,
+        port: u16,
+        sk: &SigningKey,
+        retain_q: u16,
+        password: &str,
+    ) {
+        let write_url = format!("http://127.0.0.1:{}/sync.php", port);
+        let read_url = format!("http://127.0.0.1:{}/d", port);
+        let sk_hex = hex::encode(sk.verifying_key().as_bytes());
+        let del_msg = humoco_market::format_lock_delegate_signature_message(
+            &sk_hex,
+            &sk_hex,
+            &write_url,
+            &read_url,
+            1_760_000_000,
+        );
+        let del_sig = hex::encode(sk.sign(del_msg.as_bytes()).to_bytes());
+        let mut s = state.service.lock().unwrap();
+        state
+            .save_ui_preferences(&mut s, UiPreferences::default(), Some(password))
+            .unwrap();
+        let mut sec = crate::settings::SecurityPolicy::default();
+        sec.public_syncs.push(crate::settings::StoredPublicSync {
+            write_url: write_url.clone(),
+            read_url: read_url.clone(),
+            drop_pub: sk_hex.clone(),
+            register_url: None,
+            access_pubkey: "aa".repeat(32),
+            enabled: true,
+            authorized_channels: vec!["lock".into()],
+            status: "active".into(),
+            sunset_at: None,
+            revocation_reason: None,
+            replacement: None,
+        });
+        state
+            .save_security_policy(&mut s, sec, Some(password))
+            .unwrap();
+        let mut lc = InternalLifecycleState::default();
+        lc.l2_probe_cache.insert(
+            sk_hex.clone(),
+            crate::sync_client::FrontendLockServerProbeResult {
+                write_url: write_url.clone(),
+                read_url: read_url.clone(),
+                drop_pub: sk_hex.clone(),
+                admin_pub: sk_hex.clone(),
+                lock_pub: sk_hex.clone(),
+                delegation_valid: true,
+                waf_probe_passed: true,
+                selftest_passed: true,
+                key_leak_safe: true,
+                passed: true,
+                latency_ms: 5,
+                max_retention_quarter: retain_q,
+                pow_base_bits: DEFAULT_LOCK_POW_BASE_BITS,
+                allow_pow_tickets: true,
+                ticket_pow_bits: 16,
+                inode_warning: false,
+                used_inodes: 0,
+                max_inodes: 50_000,
+                probed_at_secs: 1,
+                delegation: Some(crate::sync_client::SyncLockDelegationDto {
+                    admin_pub: sk_hex.clone(),
+                    lock_pub: sk_hex,
+                    write_url,
+                    read_url,
+                    issued_at: 1_760_000_000,
+                    sig: del_sig,
+                }),
+                error: None,
+            },
+        );
+        state
+            .save_internal_lifecycle(&mut s, lc, Some(password))
+            .unwrap();
+    }
+
+    fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
+        std::fs::create_dir_all(dst).unwrap();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let target = dst.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_dir_recursive(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).unwrap();
+            }
+        }
+    }
+
+    fn build_rev2_two_server_manifest(
+        sk1: &SigningKey,
+        sk2: &SigningKey,
+        mig_sk: &SigningKey,
+        retain_q: u16,
+    ) -> ([u8; 32], AnchorManifest) {
+        let manifest_rev1 = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: "https://s1.example/sync.php".into(),
+                read_url: "https://s1.example/d".into(),
+                admin_pub: sk1.verifying_key().to_bytes(),
+                lock_pub: sk1.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub: mig_sk.verifying_key().to_bytes(),
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest_rev1.rev1_anchor_id().unwrap();
+        let new_servers = vec![
+            manifest_rev1.servers[0].clone(),
+            ServerEntry {
+                write_url: "https://s2.example/sync.php".into(),
+                read_url: "https://s2.example/d".into(),
+                admin_pub: sk2.verifying_key().to_bytes(),
+                lock_pub: sk2.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            },
+        ];
+        let prop = human_money_core::services::l2_rotation::build_creator_rotation_proposal(
+            anchor_id,
+            &manifest_rev1,
+            2,
+            new_servers,
+            Vec::new(),
+            1_760_000_020,
+            mig_sk,
+        )
+        .unwrap();
+        let state_hash = human_money_core::humoco_proto::compute_import_union_state_hash(
+            &anchor_id,
+            2,
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let prop_hash = prop.core_digest().unwrap();
+        let acks: Vec<_> = [sk1, sk2]
+            .iter()
+            .map(|sk| {
+                let mut ack = human_money_core::humoco_proto::ImportAck {
+                    anchor_id,
+                    proposal_hash: prop_hash,
+                    to_rev: 2,
+                    imported_state_hash: state_hash,
+                    retain_until_quarter: retain_q,
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    acked_at: 1_760_000_020,
+                    sig: [0u8; 64],
+                };
+                ack.sig = sk.sign(&ack.digest()).to_bytes();
+                ack
+            })
+            .collect();
+        let commit_d = human_money_core::humoco_proto::MigrationCert::commit_digest(
+            &anchor_id,
+            &prop_hash,
+            2,
+            &state_hash,
+        );
+        let commit_sig = human_money_core::humoco_proto::CommitteeSignature {
+            lock_pub: sk1.verifying_key().to_bytes(),
+            committed_at: 1_760_000_020,
+            sig: sk1.sign(&commit_d).to_bytes(),
+        };
+        let (rev2_manifest, _) =
+            human_money_core::services::l2_rotation::assemble_migrated_manifest(
+                &manifest_rev1,
+                &anchor_id,
+                prop,
+                state_hash,
+                acks,
+                vec![commit_sig],
+            )
+            .unwrap();
+        (anchor_id, rev2_manifest)
+    }
+
+    async fn send_simple_transfer(
+        state: &AppState,
+        recipient_did: &str,
+        local_id: &str,
+        amount: &str,
+        std_map: &HashMap<String, String>,
+        password: &str,
+    ) -> CreateBundleResult {
+        create_transfer_bundle_impl(
+            None,
+            recipient_did.to_string(),
+            vec![FrontendSourceTransfer {
+                local_instance_id: local_id.to_string(),
+                amount_to_send: amount.to_string(),
+            }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            None,
+            Some(password.to_string()),
+            state,
+        )
+        .await
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn test_offline_multi_split_and_receive_without_l2_or_sync() {
-        let base_dir = temp_test_dir("offline_multi_split");
+        let dir_guard = TempDirGuard(temp_test_dir("offline_multi_split"));
         let password = "TestPassword123!";
         let alice_state = create_test_state(setup_test_app(
-            &base_dir.join("alice"),
+            &dir_guard.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             password,
         ));
         let bob_state = create_test_state(setup_test_app(
-            &base_dir.join("bob"),
+            &dir_guard.0.join("bob"),
             "Bob",
             BOB_PHRASE,
             password,
@@ -1135,72 +1505,16 @@ mod offline_and_degraded_transfer_tests {
 
         let (std_map, standard_toml) = std_map();
         let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
-        let bob_did = bob_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
+        let bob_did = wallet_did(&bob_state);
 
-        let res1 = create_transfer_bundle_impl(
-            None,
-            bob_did.clone(),
-            vec![FrontendSourceTransfer {
-                local_instance_id: v1_id,
-                amount_to_send: "30".into(),
-            }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("Split #1 must succeed offline");
+        let res1 = send_simple_transfer(&alice_state, &bob_did, &v1_id, "30", &std_map, password).await;
         assert!(res1.l2_dispatch.is_empty());
 
         let v2_id = active_voucher_id(&alice_state);
-        let res2 = create_transfer_bundle_impl(
-            None,
-            bob_did.clone(),
-            vec![FrontendSourceTransfer {
-                local_instance_id: v2_id,
-                amount_to_send: "25".into(),
-            }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("Split #2 on change remainder must succeed offline without blocking");
+        let res2 = send_simple_transfer(&alice_state, &bob_did, &v2_id, "25", &std_map, password).await;
 
         let v3_id = active_voucher_id(&alice_state);
-        let res3 = create_transfer_bundle_impl(
-            None,
-            bob_did,
-            vec![FrontendSourceTransfer {
-                local_instance_id: v3_id,
-                amount_to_send: "45".into(),
-            }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("Final spend #3 of remaining balance must succeed offline");
+        let res3 = send_simple_transfer(&alice_state, &bob_did, &v3_id, "45", &std_map, password).await;
 
         {
             let s = alice_state.service.lock().unwrap();
@@ -1228,189 +1542,45 @@ mod offline_and_degraded_transfer_tests {
             .await
             .expect("Offline receive_bundle_impl must succeed");
         }
-
-        let _ = std::fs::remove_dir_all(base_dir);
     }
 
     #[tokio::test]
     async fn test_anchored_durable_split_lock_and_committee_dispatch() {
-        let base_dir = temp_test_dir("anchored_split_lock");
+        let dir_guard = TempDirGuard(temp_test_dir("anchored_split_lock"));
         let password = "TestPassword123!";
         let alice_state = create_test_state(setup_test_app(
-            &base_dir.join("alice"),
+            &dir_guard.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             password,
         ));
         let bob_state = create_test_state(setup_test_app(
-            &base_dir.join("bob"),
+            &dir_guard.0.join("bob"),
             "Bob",
             BOB_PHRASE,
             password,
         ));
 
-        let (std_map, standard_toml) = std_map();
+        let (std_map, _) = std_map();
         let retain_q = encode_quarter(2035, 4).unwrap();
         let sk1 = SigningKey::from_bytes(&[71u8; 32]);
         let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let p1 = l1.local_addr().unwrap().port();
 
-        let anchor_nonce = [88u8; 32];
-        let anchor_id = {
-            let mut s = alice_state.service.lock().unwrap();
-            alice_state
-                .save_ui_preferences(&mut s, UiPreferences::default(), Some(password))
-                .unwrap();
-            alice_state
-                .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(password))
-                .unwrap();
-            let mig_pub = s
-                .with_wallet_and_identity(|_, id| {
-                    l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
-                        .map(|k| k.verifying_key().to_bytes())
-                })
-                .unwrap()
-                .unwrap();
-            let manifest = AnchorManifest {
-                revision: 1,
-                threshold: 1,
-                servers: vec![ServerEntry {
-                    write_url: format!("http://127.0.0.1:{}/sync.php", p1),
-                    read_url: format!("http://127.0.0.1:{}/d", p1),
-                    admin_pub: sk1.verifying_key().to_bytes(),
-                    lock_pub: sk1.verifying_key().to_bytes(),
-                    nominated_by: NominatedBy::Creator,
-                }],
-                successors: vec![],
-                authority: AnchorAuthority {
-                    creator_mig_pub: mig_pub,
-                    guarantor_mig_pubs: vec![],
-                },
-                migration_chain: vec![],
-                issued_at_ms: 1_760_000_000_000,
-                retain_until_quarter: retain_q,
-            };
-            let aid = manifest.rev1_anchor_id().unwrap();
-            let mut ticket = GenesisTicket {
-                anchor_id: aid,
-                retain_until_quarter: retain_q,
-                issued_at: 1_760_000_000,
-                lock_pub: sk1.verifying_key().to_bytes(),
-                sig: [0u8; 64],
-            };
-            ticket.sig = sk1.sign(&ticket.digest()).to_bytes();
-            s.register_l2_anchor_template_with_nonce(
-                manifest,
-                vec![ticket],
-                Some(&anchor_nonce),
-                Some(password),
-            )
-            .unwrap();
-            let uid = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
-            s.create_new_voucher(
-                &standard_toml,
-                NewVoucherData {
-                    creator_profile: PublicProfile {
-                        id: Some(uid),
-                        ..Default::default()
-                    },
-                    nominal_value: ValueDefinition {
-                        amount: "100".into(),
-                        unit: "Taler".into(),
-                        ..Default::default()
-                    },
-                    layer2_anchor: Some(aid),
-                    ..Default::default()
-                },
-                Some(password),
-            )
-            .unwrap();
-            aid
-        };
-        let _ = anchor_id;
-
-        let bob_did = bob_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
-
-        let srv = tokio::spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = l1.accept().await else {
-                    break;
-                };
-                let mut buf = [0u8; 65_536];
-                let n = stream.read(&mut buf).await.unwrap_or(0);
-                let raw = String::from_utf8_lossy(&buf[..n]);
-                let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
-                let req: human_money_core::models::layer2_api::SyncLockBatchRequest =
-                    serde_json::from_str(body_str).unwrap();
-                let receipts: Vec<LockReceipt> = req
-                    .entries
-                    .iter()
-                    .enumerate()
-                    .map(|(i, h)| {
-                        let wire = decode_hex_fixed::<605>(h).unwrap();
-                        let entry =
-                            human_money_core::humoco_proto::causal::LockEntry::from_wire_bytes(
-                                &wire,
-                            )
-                            .unwrap();
-                        let mut r = LockReceipt {
-                            kind: LockReceiptKind::FirstWrite,
-                            lock_pub: sk1.verifying_key().to_bytes(),
-                            bucket: req.bucket,
-                            slot: entry.slot,
-                            child_lock: entry.child_lock,
-                            entry_hash: entry.entry_hash().unwrap(),
-                            retain_until_quarter: retain_q,
-                            write_seq: (i as u64) + 1,
-                            bucket_head: [3u8; 32],
-                            recipient_nonce: req.recipient_nonce,
-                            sig: [0u8; 64],
-                        };
-                        r.sig = sk1.sign(&r.digest()).to_bytes();
-                        r
-                    })
-                    .collect();
-                let resp = serde_json::json!({
-                    "status": "ok",
-                    "bucket": hex::encode(req.bucket),
-                    "retain_until_quarter": retain_q,
-                    "receipts": receipts,
-                    "conflict": null,
-                })
-                .to_string();
-                let http = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    resp.len(),
-                    resp
-                );
-                let _ = stream.write_all(http.as_bytes()).await;
-            }
-        });
+        let anchor_id = register_single_server_anchor_and_voucher(
+            &alice_state,
+            p1,
+            &sk1,
+            &[88u8; 32],
+            "100",
+            password,
+        );
+        assert_ne!(anchor_id, [0u8; 32]);
+        let bob_did = wallet_did(&bob_state);
+        let srv = spawn_mock_l2_confirm_server(l1, sk1, retain_q, 3u8);
 
         let v1_id = active_voucher_id(&alice_state);
-        let res1 = create_transfer_bundle_impl(
-            None,
-            bob_did,
-            vec![FrontendSourceTransfer {
-                local_instance_id: v1_id,
-                amount_to_send: "30".into(),
-            }],
-            None,
-            None,
-            std_map,
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("Anchored split should succeed and confirm with server");
+        let res1 = send_simple_transfer(&alice_state, &bob_did, &v1_id, "30", &std_map, password).await;
 
         assert_eq!(res1.l2_dispatch.len(), 1);
         assert_eq!(res1.l2_dispatch[0].status, "confirmed");
@@ -1424,23 +1594,91 @@ mod offline_and_degraded_transfer_tests {
             unresolved.is_empty(),
             "Confirmed committee write resolves intent immediately"
         );
-
         srv.abort();
-        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    fn assert_deep_conflict_matches(
+        service: &mut human_money_core::app_service::AppService,
+        did: &str,
+        clean_voucher: &human_money_core::Voucher,
+    ) {
+        let mut ct_tid_only = clean_voucher.transactions.last().unwrap().clone();
+        ct_tid_only.prev_hash = "aa".repeat(32);
+        ct_tid_only.trap_data = None;
+        let mut ct_ds_only = clean_voucher
+            .transactions
+            .iter()
+            .rev()
+            .find(|t| t.trap_data.is_some())
+            .expect("clean voucher has tx with trap_data")
+            .clone();
+        ct_ds_only.t_id.clear();
+        ct_ds_only.prev_hash = "aa".repeat(32);
+        let clean_ds_tag = clean_voucher
+            .transactions
+            .iter()
+            .find_map(|t| t.trap_data.as_ref().map(|d| d.ds_tag.clone()))
+            .expect("clean transfer transaction must carry trap_data.ds_tag");
+        let deep_cases = [
+            ("proof-deep-ct-tid", vec![ct_tid_only], Vec::new()),
+            ("proof-deep-ct-ds", vec![ct_ds_only], Vec::new()),
+            (
+                "proof-deep-fp-ds",
+                Vec::new(),
+                vec![human_money_core::models::conflict::TransactionFingerprint {
+                    ds_tag: clean_ds_tag,
+                    ..Default::default()
+                }],
+            ),
+        ];
+        for (proof_id, conflicting_transactions, fingerprints) in deep_cases {
+            service.get_unlocked_mut_for_test().0.proof_store.proofs.insert(
+                proof_id.to_string(),
+                human_money_core::models::conflict::ProofStoreEntry {
+                    proof: human_money_core::models::conflict::ProofOfDoubleSpend {
+                        proof_id: proof_id.to_string(),
+                        offender_id: did.to_string(),
+                        suspected_identity: None,
+                        fork_point_prev_hash: "ff".repeat(32),
+                        conflicting_transactions,
+                        fingerprints,
+                        victim_witnesses: Vec::new(),
+                        deletable_at: "2099-01-01T00:00:00Z".to_string(),
+                        reporter_id: did.to_string(),
+                        report_timestamp: "2026-01-01T00:00:00Z".to_string(),
+                        reporter_signature: "sig".to_string(),
+                        affected_voucher_name: None,
+                        voucher_standard_uuid: None,
+                        resolutions: None,
+                        non_redeemable_test_voucher: false,
+                    },
+                    local_override: false,
+                    local_note: None,
+                    conflict_role: human_money_core::models::conflict::ConflictRole::default(),
+                },
+            );
+            let (matched, unrelated) =
+                filter_conflicts_for_received_vouchers(service, std::slice::from_ref(clean_voucher))
+                    .unwrap();
+            assert_eq!(matched.len(), 1, "{proof_id} must match via deep inspection");
+            assert_eq!(matched[0].proof_id, proof_id);
+            assert_eq!(unrelated, None);
+            service.get_unlocked_mut_for_test().0.proof_store.proofs.remove(proof_id);
+        }
     }
 
     #[tokio::test]
     async fn test_unrelated_conflict_does_not_flag_clean_transfer() {
-        let base_dir = temp_test_dir("unrelated_conflict_clean_transfer");
+        let dir_guard = TempDirGuard(temp_test_dir("unrelated_conflict_clean_transfer"));
         let password = "TestPassword123!";
         let alice_state = create_test_state(setup_test_app(
-            &base_dir.join("alice"),
+            &dir_guard.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             password,
         ));
-        let carol_dir = base_dir.join("carol");
-        let carol_clone_dir = base_dir.join("carol_clone");
+        let carol_dir = dir_guard.0.join("carol");
+        let carol_clone_dir = dir_guard.0.join("carol_clone");
         let carol_state = create_test_state(setup_test_app(
             &carol_dir,
             "Carol",
@@ -1448,99 +1686,35 @@ mod offline_and_degraded_transfer_tests {
             password,
         ));
         let bob_state = create_test_state(setup_test_app(
-            &base_dir.join("bob"),
+            &dir_guard.0.join("bob"),
             "Bob",
             BOB_PHRASE,
             password,
         ));
         let (std_map, standard_toml) = std_map();
 
-        // Innocent Alice issues a clean voucher v2; unrelated Carol issues v1 and double-spends it.
         let v1_id = issue_100_voucher(&carol_state, &standard_toml, password);
         let v2_id = issue_100_voucher(&alice_state, &standard_toml, password);
 
-        // Snapshot Carol's wallet directory BEFORE spending v1 so clone spends the exact same v1 state
-        fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
-            std::fs::create_dir_all(dst).unwrap();
-            for entry in std::fs::read_dir(src).unwrap() {
-                let entry = entry.unwrap();
-                let ty = entry.file_type().unwrap();
-                let target = dst.join(entry.file_name());
-                if ty.is_dir() {
-                    copy_dir(&entry.path(), &target);
-                } else {
-                    std::fs::copy(entry.path(), &target).unwrap();
-                }
-            }
-        }
-        copy_dir(&carol_dir, &carol_clone_dir);
+        copy_dir_recursive(&carol_dir, &carol_clone_dir);
         let mut clone_svc =
             human_money_core::app_service::AppService::new(&carol_clone_dir).unwrap();
         let clone_folder = clone_svc.list_profiles().unwrap()[0].folder_name.clone();
         clone_svc
-            .login(
-                &clone_folder,
-                password,
-                false,
-                "device-drops-test".to_string(),
-            )
+            .login(&clone_folder, password, false, "device-drops-test".to_string())
             .unwrap();
         clone_svc.unlock_session(password, 300).unwrap();
         let carol_clone_state = create_test_state(clone_svc);
         {
             let mut s = carol_clone_state.service.lock().unwrap();
-            carol_clone_state
-                .load_ui_preferences(&mut s, Some(password))
-                .unwrap();
-            carol_clone_state
-                .load_internal_lifecycle(&mut s, Some(password))
-                .unwrap();
+            carol_clone_state.load_ui_preferences(&mut s, Some(password)).unwrap();
+            carol_clone_state.load_internal_lifecycle(&mut s, Some(password)).unwrap();
         }
 
-        let bob_did = bob_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
-
-        let b1_first = create_transfer_bundle_impl(
-            None,
-            bob_did.clone(),
-            vec![FrontendSourceTransfer {
-                local_instance_id: v1_id.clone(),
-                amount_to_send: "20".into(),
-            }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
-            &carol_state,
-        )
-        .await
-        .unwrap();
-
-        let b1_double = create_transfer_bundle_impl(
-            None,
-            bob_did.clone(),
-            vec![FrontendSourceTransfer {
-                local_instance_id: v1_id,
-                amount_to_send: "25".into(),
-            }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
-            &carol_clone_state,
-        )
-        .await
-        .unwrap();
+        let bob_did = wallet_did(&bob_state);
+        let b1_first = send_simple_transfer(&carol_state, &bob_did, &v1_id, "20", &std_map, password).await;
+        let b1_double =
+            send_simple_transfer(&carol_clone_state, &bob_did, &v1_id, "25", &std_map, password).await;
 
         receive_bundle_impl(
             None,
@@ -1566,31 +1740,10 @@ mod offline_and_degraded_transfer_tests {
         )
         .await
         .unwrap();
-        assert!(
-            !ds_recv.conflict_summaries.is_empty(),
-            "Double-spend on v1 must populate conflict_summaries on the conflicting receive"
-        );
+        assert!(!ds_recv.conflict_summaries.is_empty());
+        let unrelated_proof_id = ds_recv.conflict_summaries[0].proof_id.clone();
 
-        // Now innocent Alice sends a completely unrelated, clean voucher v2 to Bob
-        let b2_clean = create_transfer_bundle_impl(
-            None,
-            bob_did,
-            vec![FrontendSourceTransfer {
-                local_instance_id: v2_id,
-                amount_to_send: "30".into(),
-            }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-
+        let b2_clean = send_simple_transfer(&alice_state, &bob_did, &v2_id, "30", &std_map, password).await;
         let clean_recv = receive_bundle_impl(
             None,
             b2_clean.bundle_data,
@@ -1603,39 +1756,52 @@ mod offline_and_degraded_transfer_tests {
         )
         .await
         .unwrap();
-        assert!(
-            clean_recv.conflict_summaries.is_empty(),
-            "Clean payment on v2 must NOT inherit unrelated v1 conflicts"
-        );
-        assert_eq!(
-            clean_recv.unrelated_open_conflicts_count,
-            Some(1),
-            "Clean payment must report unrelated unresolved conflict separately"
-        );
+        assert!(clean_recv.conflict_summaries.is_empty());
+        assert_eq!(clean_recv.unrelated_open_conflicts_count, Some(1));
 
-        let _ = std::fs::remove_dir_all(base_dir);
+        // Setting local_override on the unrelated proof suppresses unrelated_open_conflicts_count.
+        let mut s_bob = bob_state.service.lock().unwrap();
+        let clean_voucher = s_bob
+            .with_wallet(|w| {
+                w.get_voucher_instance(&clean_recv.involved_vouchers[0])
+                    .unwrap()
+                    .voucher
+                    .clone()
+            })
+            .unwrap();
+        s_bob
+            .set_conflict_local_override(&unrelated_proof_id, true, Some("ignored".into()), Some(password))
+            .unwrap();
+        let (matching_after, unrelated_after) =
+            filter_conflicts_for_received_vouchers(&s_bob, std::slice::from_ref(&clean_voucher))
+                .unwrap();
+        assert!(matching_after.is_empty());
+        assert_eq!(unrelated_after, None);
+
+        assert_deep_conflict_matches(&mut s_bob, &bob_did, &clean_voucher);
     }
 
     #[tokio::test]
     async fn test_corrupt_card_store_and_settings_fail_closed_without_overwrite() {
-        let base_dir = temp_test_dir("transfer_corrupt_stores");
+        let dir_guard = TempDirGuard(temp_test_dir("transfer_corrupt_stores"));
         let password = "TestPassword123!";
-        let alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
-        let alice_state = create_test_state(alice_svc);
-        let bob_svc = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
-        let bob_state = create_test_state(bob_svc);
-
-        let bob_did = bob_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
+        let alice_state = create_test_state(setup_test_app(
+            &dir_guard.0.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+        let bob_state = create_test_state(setup_test_app(
+            &dir_guard.0.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
+        let bob_did = wallet_did(&bob_state);
 
         let (std_map, standard_toml) = std_map();
         let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
 
-        // Publish Alice's own market card so create_transfer_bundle_impl reads MARKET_CARD_STORE_KEY.
         crate::services::market_service::save_my_market_profile_impl(
             crate::models::FrontendSaveMyMarketProfileRequest {
                 profile: crate::models::FrontendUserProfile {
@@ -1661,7 +1827,6 @@ mod offline_and_degraded_transfer_tests {
         .await
         .unwrap();
 
-        // 1. Corrupt MARKET_CARD_STORE_KEY: transfer still works, but corrupt store is NOT overwritten.
         {
             let mut s = alice_state.service.lock().unwrap();
             crate::state::save_encrypted_bytes(
@@ -1672,11 +1837,11 @@ mod offline_and_degraded_transfer_tests {
             )
             .unwrap();
         }
-        let ok_res = create_transfer_bundle_impl(
+        create_transfer_bundle_impl(
             None,
             bob_did.clone(),
             vec![FrontendSourceTransfer {
-                local_instance_id: v1_id.clone(),
+                local_instance_id: v1_id,
                 amount_to_send: "25".into(),
             }],
             None,
@@ -1688,12 +1853,8 @@ mod offline_and_degraded_transfer_tests {
             Some(password.to_string()),
             &alice_state,
         )
-        .await;
-        assert!(
-            ok_res.is_ok(),
-            "Transfer should proceed: {:?}",
-            ok_res.err()
-        );
+        .await
+        .unwrap();
 
         let raw_card_store = {
             let mut s = alice_state.service.lock().unwrap();
@@ -1707,7 +1868,6 @@ mod offline_and_degraded_transfer_tests {
         };
         assert_eq!(raw_card_store, b"{corrupt-card-store");
 
-        // 2. Corrupt UI_PREFERENCES_KEY with cleared cache: transfer MUST abort fail-closed and not overwrite settings.
         {
             let mut s = alice_state.service.lock().unwrap();
             crate::state::save_encrypted_bytes(
@@ -1720,21 +1880,8 @@ mod offline_and_degraded_transfer_tests {
         }
         alice_state.set_cached_ui_preferences(None);
 
-        let remaining_id = alice_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| {
-                w.voucher_store
-                    .vouchers
-                    .iter()
-                    .find(|(_, inst)| matches!(inst.status, VoucherStatus::Active))
-                    .map(|(id, _)| id.clone())
-            })
-            .unwrap()
-            .unwrap();
-
-        let err_res = create_transfer_bundle_impl(
+        let remaining_id = active_voucher_id(&alice_state);
+        let settings_err = create_transfer_bundle_impl(
             None,
             bob_did,
             vec![FrontendSourceTransfer {
@@ -1750,8 +1897,14 @@ mod offline_and_degraded_transfer_tests {
             Some(password.to_string()),
             &alice_state,
         )
-        .await;
-        assert!(err_res.is_err(), "Corrupt settings must abort transfer");
+        .await
+        .expect_err("Corrupt settings must abort transfer");
+        assert!(
+            settings_err.message.contains("Failed to parse")
+                && settings_err.message.contains(UI_PREFERENCES_KEY),
+            "unexpected corrupt settings error: {:?}",
+            settings_err
+        );
 
         let raw_settings = {
             let mut s = alice_state.service.lock().unwrap();
@@ -1760,23 +1913,21 @@ mod offline_and_degraded_transfer_tests {
                 .unwrap()
         };
         assert_eq!(raw_settings, b"{corrupt-settings");
-
-        let _ = std::fs::remove_dir_all(base_dir);
     }
 
     #[tokio::test]
     async fn k3_transfer_persists_outgoing_bundles_atomically_with_stripped_disk_history_and_hydrates(
     ) {
-        let base_dir = temp_test_dir("k3_outgoing_bundles_atomic");
+        let dir_guard = TempDirGuard(temp_test_dir("k3_outgoing_bundles_atomic"));
         let password = "TestPassword123!";
         let alice_state = create_test_state(setup_test_app(
-            &base_dir.join("alice"),
+            &dir_guard.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             password,
         ));
         let bob_state = create_test_state(setup_test_app(
-            &base_dir.join("bob"),
+            &dir_guard.0.join("bob"),
             "Bob",
             BOB_PHRASE,
             password,
@@ -1784,12 +1935,7 @@ mod offline_and_degraded_transfer_tests {
 
         let (std_map, standard_toml) = std_map();
         let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
-        let bob_did = bob_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
+        let bob_did = wallet_did(&bob_state);
 
         let res = create_transfer_bundle_impl(
             None,
@@ -1810,20 +1956,11 @@ mod offline_and_degraded_transfer_tests {
         .await
         .expect("Transfer commit must persist L1 + outgoing_bundles + tx_history");
 
-        // On-disk transaction_history must strip bundle_data, while outgoing_bundles holds exact bytes.
         {
             let mut s = alice_state.service.lock().unwrap();
-            let raw_hist = alice_state
-                .load_history_from_disk(&mut s, Some(password))
-                .unwrap();
-            let rec = raw_hist
-                .iter()
-                .find(|r| r.bundle_id == res.bundle_id)
-                .expect("TransactionRecord missing");
-            assert!(
-                rec.bundle_data.is_empty(),
-                "On-disk tx_history must not store duplicate bundle_data"
-            );
+            let raw_hist = alice_state.load_history_from_disk(&mut s, Some(password)).unwrap();
+            let rec = raw_hist.iter().find(|r| r.bundle_id == res.bundle_id).expect("TransactionRecord missing");
+            assert!(rec.bundle_data.is_empty());
             let stored_bytes =
                 crate::state::get_outgoing_bundle_bytes(&mut s, &res.bundle_id, Some(password))
                     .unwrap()
@@ -1831,279 +1968,59 @@ mod offline_and_degraded_transfer_tests {
             assert_eq!(stored_bytes, res.bundle_data);
         }
 
-        // Hydrated history API must seamlessly populate bundle_data from outgoing_bundles.
         let hydrated = get_transaction_history_impl(&alice_state).unwrap();
-        let h_rec = hydrated
-            .iter()
-            .find(|r| r.bundle_id == res.bundle_id)
-            .unwrap();
+        let h_rec = hydrated.iter().find(|r| r.bundle_id == res.bundle_id).unwrap();
         assert_eq!(h_rec.bundle_data, res.bundle_data);
 
-        // PoST retry reads exact bytes from outgoing_bundles even with stripped on-disk history.
         let dep = crate::services::post_service::deposit_transfer_to_post_impl(
-            res.bundle_id.clone(),
+            res.bundle_id,
             Some(password.into()),
             &alice_state,
         )
         .await
         .expect("deposit_transfer_to_post_impl must succeed using outgoing_bundles");
         assert!(!dep.msg_id.is_empty());
-
-        let _ = std::fs::remove_dir_all(base_dir);
     }
 
     #[tokio::test]
-    async fn f2_receive_bundle_online_verifies_anchored_green_and_unanchored_two_phase_trust() {
-        let base_dir = temp_test_dir("f2_unified_receive");
+    async fn f2_receive_bundle_online_verifies_anchored_green_replay_and_stale_token() {
+        let dir_guard = TempDirGuard(temp_test_dir("f2_anchored_receive"));
         let password = "TestPassword123!";
         let alice_state = create_test_state(setup_test_app(
-            &base_dir.join("alice"),
+            &dir_guard.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             password,
         ));
         let bob_state = create_test_state(setup_test_app(
-            &base_dir.join("bob"),
+            &dir_guard.0.join("bob"),
             "Bob",
             BOB_PHRASE,
             password,
         ));
-        let bob_did = bob_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
+        let bob_did = wallet_did(&bob_state);
 
-        let (std_map, standard_toml) = std_map();
+        let (std_map, _) = std_map();
         let retain_q = encode_quarter(2035, 4).unwrap();
         let sk1 = SigningKey::from_bytes(&[91u8; 32]);
         let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let p1 = l1.local_addr().unwrap().port();
-        let write_url = format!("http://127.0.0.1:{}/sync.php", p1);
+        let srv = spawn_mock_l2_confirm_server(l1, sk1.clone(), retain_q, 5u8);
 
-        let sk1_srv = sk1.clone();
-        let srv = tokio::spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = l1.accept().await else {
-                    break;
-                };
-                let mut buf = [0u8; 65_536];
-                let n = stream.read(&mut buf).await.unwrap_or(0);
-                let raw = String::from_utf8_lossy(&buf[..n]);
-                let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
-                let req: human_money_core::models::layer2_api::SyncLockBatchRequest =
-                    serde_json::from_str(body_str).unwrap();
-                let receipts: Vec<LockReceipt> = req
-                    .entries
-                    .iter()
-                    .enumerate()
-                    .map(|(i, h)| {
-                        let wire = decode_hex_fixed::<605>(h).unwrap();
-                        let entry =
-                            human_money_core::humoco_proto::causal::LockEntry::from_wire_bytes(
-                                &wire,
-                            )
-                            .unwrap();
-                        let mut r = LockReceipt {
-                            kind: LockReceiptKind::FirstWrite,
-                            lock_pub: sk1_srv.verifying_key().to_bytes(),
-                            bucket: req.bucket,
-                            slot: entry.slot,
-                            child_lock: entry.child_lock,
-                            entry_hash: entry.entry_hash().unwrap(),
-                            retain_until_quarter: retain_q,
-                            write_seq: (i as u64) + 1,
-                            bucket_head: [5u8; 32],
-                            recipient_nonce: req.recipient_nonce,
-                            sig: [0u8; 64],
-                        };
-                        r.sig = sk1_srv.sign(&r.digest()).to_bytes();
-                        r
-                    })
-                    .collect();
-                let resp = serde_json::json!({
-                    "status": "ok",
-                    "bucket": hex::encode(req.bucket),
-                    "retain_until_quarter": retain_q,
-                    "receipts": receipts,
-                    "conflict": null,
-                })
-                .to_string();
-                let http = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    resp.len(),
-                    resp
-                );
-                let _ = stream.write_all(http.as_bytes()).await;
-            }
-        });
-
-        let anchor_nonce = [89u8; 32];
-        let anchor_id = {
-            let mut s = alice_state.service.lock().unwrap();
-            alice_state
-                .save_ui_preferences(&mut s, UiPreferences::default(), Some(password))
-                .unwrap();
-            alice_state
-                .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(password))
-                .unwrap();
-            let mig_pub = s
-                .with_wallet_and_identity(|_, id| {
-                    l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
-                        .map(|k| k.verifying_key().to_bytes())
-                })
-                .unwrap()
-                .unwrap();
-            let manifest = AnchorManifest {
-                revision: 1,
-                threshold: 1,
-                servers: vec![ServerEntry {
-                    write_url: write_url.clone(),
-                    read_url: format!("http://127.0.0.1:{}/d", p1),
-                    admin_pub: sk1.verifying_key().to_bytes(),
-                    lock_pub: sk1.verifying_key().to_bytes(),
-                    nominated_by: NominatedBy::Creator,
-                }],
-                successors: vec![],
-                authority: AnchorAuthority {
-                    creator_mig_pub: mig_pub,
-                    guarantor_mig_pubs: vec![],
-                },
-                migration_chain: vec![],
-                issued_at_ms: 1_760_000_000_000,
-                retain_until_quarter: retain_q,
-            };
-            let aid = manifest.rev1_anchor_id().unwrap();
-            let mut ticket = GenesisTicket {
-                anchor_id: aid,
-                retain_until_quarter: retain_q,
-                issued_at: 1_760_000_000,
-                lock_pub: sk1.verifying_key().to_bytes(),
-                sig: [0u8; 64],
-            };
-            ticket.sig = sk1.sign(&ticket.digest()).to_bytes();
-            s.register_l2_anchor_template_with_nonce(
-                manifest,
-                vec![ticket],
-                Some(&anchor_nonce),
-                Some(password),
-            )
-            .unwrap();
-            let alice_did = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
-            s.create_new_voucher(
-                &standard_toml,
-                NewVoucherData {
-                    creator_profile: PublicProfile {
-                        id: Some(alice_did),
-                        ..Default::default()
-                    },
-                    nominal_value: ValueDefinition {
-                        amount: "50".into(),
-                        ..Default::default()
-                    },
-                    layer2_anchor: Some(aid),
-                    ..Default::default()
-                },
-                Some(password),
-            )
-            .unwrap();
-            aid
-        };
-        let _ = anchor_id;
-
-        // Trust server on Bob
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            bob_state
-                .save_ui_preferences(&mut s, UiPreferences::default(), Some(password))
-                .unwrap();
-            let mut sec = crate::settings::SecurityPolicy::default();
-            sec.public_syncs.push(crate::settings::StoredPublicSync {
-                write_url: write_url.clone(),
-                read_url: format!("http://127.0.0.1:{}/d", p1),
-                drop_pub: hex::encode(sk1.verifying_key().as_bytes()),
-                register_url: None,
-                access_pubkey: "aa".repeat(32),
-                enabled: true,
-                authorized_channels: vec!["lock".into()],
-                status: "active".into(),
-                sunset_at: None,
-                revocation_reason: None,
-                replacement: None,
-            });
-            bob_state
-                .save_security_policy(&mut s, sec, Some(password))
-                .unwrap();
-            let mut lc = InternalLifecycleState::default();
-            let sk1_hex = hex::encode(sk1.verifying_key().as_bytes());
-            let read_url = format!("http://127.0.0.1:{}/d", p1);
-            let del_msg = humoco_market::format_lock_delegate_signature_message(
-                &sk1_hex,
-                &sk1_hex,
-                &write_url,
-                &read_url,
-                1_760_000_000,
-            );
-            let del_sig = hex::encode(sk1.sign(del_msg.as_bytes()).to_bytes());
-            lc.l2_probe_cache.insert(
-                sk1_hex.clone(),
-                crate::sync_client::FrontendLockServerProbeResult {
-                    write_url: write_url.clone(),
-                    read_url: read_url.clone(),
-                    drop_pub: sk1_hex.clone(),
-                    admin_pub: sk1_hex.clone(),
-                    lock_pub: sk1_hex.clone(),
-                    delegation_valid: true,
-                    waf_probe_passed: true,
-                    selftest_passed: true,
-                    key_leak_safe: true,
-                    passed: true,
-                    latency_ms: 5,
-                    max_retention_quarter: retain_q,
-                    pow_base_bits: DEFAULT_LOCK_POW_BASE_BITS,
-                    allow_pow_tickets: true,
-                    ticket_pow_bits: 16,
-                    inode_warning: false,
-                    used_inodes: 0,
-                    max_inodes: 50_000,
-                    probed_at_secs: 1,
-                    delegation: Some(crate::sync_client::SyncLockDelegationDto {
-                        admin_pub: sk1_hex.clone(),
-                        lock_pub: sk1_hex,
-                        write_url: write_url.clone(),
-                        read_url,
-                        issued_at: 1_760_000_000,
-                        sig: del_sig,
-                    }),
-                    error: None,
-                },
-            );
-            bob_state
-                .save_internal_lifecycle(&mut s, lc, Some(password))
-                .unwrap();
-        }
-
-        // 1. Anchored OnlineVerify -> Green Confirmed + newly_committed == Some(true), replay works
-        let v_anchored_id = active_voucher_id(&alice_state);
-        let tx_anchored = create_transfer_bundle_impl(
-            None,
-            bob_did.clone(),
-            vec![FrontendSourceTransfer {
-                local_instance_id: v_anchored_id,
-                amount_to_send: "20".into(),
-            }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
+        let anchor_id = register_single_server_anchor_and_voucher(
             &alice_state,
-        )
-        .await
-        .unwrap();
+            p1,
+            &sk1,
+            &[89u8; 32],
+            "50",
+            password,
+        );
+        assert_ne!(anchor_id, [0u8; 32]);
+        trust_l2_server_on_wallet(&bob_state, p1, &sk1, retain_q, password);
+
+        let v_anchored_id = active_voucher_id(&alice_state);
+        let tx_anchored =
+            send_simple_transfer(&alice_state, &bob_did, &v_anchored_id, "20", &std_map, password).await;
 
         let green = receive_bundle_impl(
             None,
@@ -2119,23 +2036,14 @@ mod offline_and_degraded_transfer_tests {
         .unwrap();
         assert_eq!(green.newly_committed, Some(true));
         assert_eq!(green.is_replay, Some(false));
-        assert_eq!(
-            green.checkout_verdict.as_ref().unwrap().outcome,
-            "Confirmed"
-        );
-        assert!(
-            green
-                .checkout_verdict
-                .as_ref()
-                .unwrap()
-                .is_goods_release_authorized
-        );
+        assert_eq!(green.checkout_verdict.as_ref().unwrap().outcome, "Confirmed");
+        assert!(green.checkout_verdict.as_ref().unwrap().is_goods_release_authorized);
         assert_eq!(green.l2_quorum.as_ref().unwrap().status, "final");
 
         let replay = receive_bundle_impl(
             None,
             tx_anchored.bundle_data.clone(),
-            std_map.clone(),
+            std_map,
             Some(password.into()),
             false,
             None,
@@ -2147,40 +2055,52 @@ mod offline_and_degraded_transfer_tests {
         assert_eq!(replay.newly_committed, Some(false));
         assert_eq!(replay.is_replay, Some(true));
 
-        // verify_bundle_l2_precommit aborts cleanly when SessionToken generation changed
         let stale_token = crate::session::SessionToken {
             generation: bob_state.current_session_generation().saturating_sub(1),
-            owner_did: bob_did.clone(),
+            owner_did: bob_did,
         };
-        assert!(crate::checkout::verify_bundle_l2_precommit(
+        let stale_err = crate::checkout::verify_bundle_l2_precommit(
             &bob_state,
             &stale_token,
             &tx_anchored.bundle_data,
             Some(password),
         )
         .await
-        .is_err());
+        .expect_err("Stale SessionToken must be rejected");
+        assert!(
+            stale_err
+                .message
+                .contains("Wallet session changed before pre-commit L2 verification"),
+            "unexpected stale session error: {:?}",
+            stale_err
+        );
 
-        // 2. Unanchored (N=0) OnlineVerify -> returns OfflineOnly uncommitted -> ForceTrustOffline commits
+        srv.abort();
+    }
+
+    #[tokio::test]
+    async fn f2_receive_bundle_online_unanchored_two_phase_trust_commit() {
+        let dir_guard = TempDirGuard(temp_test_dir("f2_unanchored_two_phase"));
+        let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(
+            &dir_guard.0.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+        let bob_state = create_test_state(setup_test_app(
+            &dir_guard.0.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
+        let bob_did = wallet_did(&bob_state);
+
+        let (std_map, standard_toml) = std_map();
         let v_unanchored_id = issue_100_voucher(&alice_state, &standard_toml, password);
-        let tx_offline = create_transfer_bundle_impl(
-            None,
-            bob_did,
-            vec![FrontendSourceTransfer {
-                local_instance_id: v_unanchored_id,
-                amount_to_send: "15".into(),
-            }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
+        let tx_offline =
+            send_simple_transfer(&alice_state, &bob_did, &v_unanchored_id, "15", &std_map, password)
+                .await;
 
         let pending = receive_bundle_impl(
             None,
@@ -2196,17 +2116,9 @@ mod offline_and_degraded_transfer_tests {
         .unwrap();
         assert_eq!(pending.newly_committed, Some(false));
         assert_eq!(pending.is_replay, Some(false));
-        assert_eq!(
-            pending.checkout_verdict.as_ref().unwrap().outcome,
-            "OfflineOnly"
-        );
-        assert!(
-            !pending
-                .checkout_verdict
-                .as_ref()
-                .unwrap()
-                .is_goods_release_authorized
-        );
+        let pending_verdict = pending.checkout_verdict.as_ref().unwrap();
+        assert_eq!(pending_verdict.outcome, "OfflineOnly");
+        assert!(!pending_verdict.is_goods_release_authorized);
 
         let committed = receive_bundle_impl(
             None,
@@ -2215,50 +2127,36 @@ mod offline_and_degraded_transfer_tests {
             Some(password.into()),
             false,
             Some(ReceiveCommitMode::ForceTrustOffline),
-            pending.purchase_id.clone(),
+            pending.purchase_id,
             &bob_state,
         )
         .await
         .unwrap();
         assert_eq!(committed.newly_committed, Some(true));
         assert_eq!(committed.is_replay, Some(false));
-        assert!(
-            committed
-                .checkout_verdict
-                .as_ref()
-                .unwrap()
-                .is_goods_release_authorized
-        );
-
-        srv.abort();
-        let _ = std::fs::remove_dir_all(base_dir);
+        assert!(committed.checkout_verdict.as_ref().unwrap().is_goods_release_authorized);
     }
 
     #[tokio::test]
     async fn h1_one_shot_pin_grant_completes_transfer_and_post_deposit_in_single_call() {
-        let base_dir = temp_test_dir("h1_single_call_grant");
-        let keystore_dir = base_dir.join("keystore");
+        let dir_guard = TempDirGuard(temp_test_dir("h1_single_call_grant"));
+        let keystore_dir = dir_guard.0.join("keystore");
         let password = "MasterPassword123!";
         let alice_state = create_test_state(setup_test_app(
-            &base_dir.join("alice"),
+            &dir_guard.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             password,
         ));
         let bob_state = create_test_state(setup_test_app(
-            &base_dir.join("bob"),
+            &dir_guard.0.join("bob"),
             "Bob",
             BOB_PHRASE,
             password,
         ));
         let (std_map, standard_toml) = std_map();
         let v_id = issue_100_voucher(&alice_state, &standard_toml, password);
-        let bob_did = bob_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
+        let bob_did = wallet_did(&bob_state);
         let folder = alice_state.service.lock().unwrap().list_profiles().unwrap()[0]
             .folder_name
             .clone();
@@ -2319,34 +2217,36 @@ mod offline_and_degraded_transfer_tests {
             &alice_state,
         )
         .await
-        .expect(
-            "H1: Single-call transfer + PoST outbox deposit must succeed with one-shot PIN grant",
-        );
+        .expect("H1: Single-call transfer + PoST outbox deposit must succeed with one-shot PIN grant");
 
-        assert!(
-            res.post_deposit.is_some(),
-            "post_deposit should be returned (outbox queued): err={:?}",
-            res.post_deposit_error
-        );
-        // Same consumed grant MUST still reject any second command
-        assert!(alice_state
+        let dep = res
+            .post_deposit
+            .expect("post_deposit should be returned (outbox queued)");
+        assert!(!dep.msg_id.is_empty());
+        assert!(res.post_deposit_error.is_none());
+
+        let reuse_err = alice_state
             .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, Some(&grant))
-            .is_err());
-
-        let _ = std::fs::remove_dir_all(base_dir);
+            .map(|_| ())
+            .expect_err("Consumed one-shot PIN grant must reject any second command");
+        assert!(
+            reuse_err
+                .message
+                .contains("One-shot PIN grant missing or already used"),
+            "unexpected grant reuse error: {:?}",
+            reuse_err
+        );
     }
 
     #[test]
     fn s06_f13_receive_payload_fails_closed_on_missing_voucher_and_sets_manifest_meta() {
-        let dir = temp_test_dir("s06_f13_receive_payload");
+        let dir_guard = TempDirGuard(temp_test_dir("s06_f13_receive_payload"));
         let pw = "pw-s06-f13";
         let (mut svc, _) =
-            test_utils::setup_service_with_profile(&dir, &test_utils::ACTORS.alice, "Alice", pw);
+            test_utils::setup_service_with_profile(&dir_guard.0, &test_utils::ACTORS.alice, "Alice", pw);
         svc.unlock_session(pw, 600).unwrap();
         let state = create_test_state(svc);
 
-        // Case 1: Missing committed voucher + corrupt bundle bytes MUST fail closed (not return
-        // Ok with empty opened_vouchers hiding conflicts!).
         let fake_result = human_money_core::wallet::types::ProcessBundleResult {
             involved_vouchers_details: vec![human_money_core::wallet::types::InvolvedVoucherInfo {
                 local_instance_id: "missing-local-id".into(),
@@ -2364,117 +2264,31 @@ mod offline_and_degraded_transfer_tests {
             ..Default::default()
         };
         let mut service = state.lock_service().unwrap();
-        let err = build_receive_success_payload_from_result(
+        let missing_err = build_receive_success_payload_from_result(
             &mut service,
             &state,
             b"{not-a-valid-bundle",
             fake_result,
             "p-1".into(),
             Some(pw),
-        );
+        )
+        .expect_err("S06-F13: missing committed vouchers must fail closed");
         assert!(
-            err.is_err(),
-            "S06-F13: unreadable/missing committed vouchers must fail closed instead of masking conflicts"
+            missing_err
+                .message
+                .contains("Committed voucher 'missing-local-id' missing from wallet after receive"),
+            "unexpected missing voucher error: {:?}",
+            missing_err
         );
 
-        // Case 2: Valid anchored voucher in wallet MUST populate reduced_guarantor_protection & manifest_revision!
         let sk1 = SigningKey::from_bytes(&[81u8; 32]);
         let sk2 = SigningKey::from_bytes(&[82u8; 32]);
         let mig_sk = SigningKey::from_bytes(&[83u8; 32]);
-        let retain_q = encode_quarter(2035, 4).unwrap();
-        let manifest_rev1 = AnchorManifest {
-            revision: 1,
-            threshold: 1,
-            servers: vec![ServerEntry {
-                write_url: "https://s1.example/sync.php".into(),
-                read_url: "https://s1.example/d".into(),
-                admin_pub: sk1.verifying_key().to_bytes(),
-                lock_pub: sk1.verifying_key().to_bytes(),
-                nominated_by: NominatedBy::Creator,
-            }],
-            successors: vec![],
-            authority: AnchorAuthority {
-                creator_mig_pub: mig_sk.verifying_key().to_bytes(),
-                guarantor_mig_pubs: vec![],
-            },
-            migration_chain: vec![],
-            issued_at_ms: 1_760_000_000_000,
-            retain_until_quarter: retain_q,
-        };
-        let anchor_id = manifest_rev1.rev1_anchor_id().unwrap();
-        // Migrate to rev=2 with 2 servers so revision == 2 is observable.
-        let new_servers = vec![
-            manifest_rev1.servers[0].clone(),
-            ServerEntry {
-                write_url: "https://s2.example/sync.php".into(),
-                read_url: "https://s2.example/d".into(),
-                admin_pub: sk2.verifying_key().to_bytes(),
-                lock_pub: sk2.verifying_key().to_bytes(),
-                nominated_by: NominatedBy::Creator,
-            },
-        ];
-        let prop = human_money_core::services::l2_rotation::build_creator_rotation_proposal(
-            anchor_id,
-            &manifest_rev1,
-            2,
-            new_servers,
-            Vec::new(),
-            1_760_000_020,
-            &mig_sk,
-        )
-        .unwrap();
-        let state_hash = human_money_core::humoco_proto::compute_import_union_state_hash(
-            &anchor_id,
-            2,
-            &std::collections::BTreeMap::new(),
-        )
-        .unwrap();
-        let prop_hash = prop.core_digest().unwrap();
-        let acks: Vec<_> = [&sk1, &sk2]
-            .iter()
-            .map(|sk| {
-                let mut ack = human_money_core::humoco_proto::ImportAck {
-                    anchor_id,
-                    proposal_hash: prop_hash,
-                    to_rev: 2,
-                    imported_state_hash: state_hash,
-                    retain_until_quarter: retain_q,
-                    lock_pub: sk.verifying_key().to_bytes(),
-                    acked_at: 1_760_000_020,
-                    sig: [0u8; 64],
-                };
-                ack.sig = sk.sign(&ack.digest()).to_bytes();
-                ack
-            })
-            .collect();
-        let commit_d = human_money_core::humoco_proto::MigrationCert::commit_digest(
-            &anchor_id,
-            &prop_hash,
-            2,
-            &state_hash,
-        );
-        let commit_sig = human_money_core::humoco_proto::CommitteeSignature {
-            lock_pub: sk1.verifying_key().to_bytes(),
-            committed_at: 1_760_000_020,
-            sig: sk1.sign(&commit_d).to_bytes(),
-        };
-        let (rev2_manifest, _) =
-            human_money_core::services::l2_rotation::assemble_migrated_manifest(
-                &manifest_rev1,
-                &anchor_id,
-                prop,
-                state_hash,
-                acks,
-                vec![commit_sig],
-            )
-            .unwrap();
-        service
-            .update_l2_anchor_manifest(rev2_manifest, Some(pw))
-            .unwrap();
+        let (anchor_id, rev2_manifest) =
+            build_rev2_two_server_manifest(&sk1, &sk2, &mig_sk, encode_quarter(2035, 4).unwrap());
+        service.update_l2_anchor_manifest(rev2_manifest, Some(pw)).unwrap();
 
-        let user_id = service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
+        let user_id = service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
         let (_, ft_toml) = std_map();
         let voucher = service
             .create_new_voucher(
@@ -2495,8 +2309,7 @@ mod offline_and_degraded_transfer_tests {
             )
             .unwrap();
         let local_id =
-            human_money_core::wallet::Wallet::calculate_local_instance_id(&voucher, &user_id)
-                .unwrap();
+            human_money_core::wallet::Wallet::calculate_local_instance_id(&voucher, &user_id).unwrap();
 
         let real_result = human_money_core::wallet::types::ProcessBundleResult {
             involved_vouchers_details: vec![human_money_core::wallet::types::InvolvedVoucherInfo {
@@ -2524,27 +2337,21 @@ mod offline_and_degraded_transfer_tests {
         )
         .unwrap();
         let verdict = payload.checkout_verdict.expect("verdict must be present");
-        assert_eq!(
-            verdict.manifest_revision,
-            Some(2),
-            "S06-F13: manifest_revision must be populated from wallet l2_anchor_manifests"
-        );
-        drop(service);
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(verdict.manifest_revision, Some(2));
     }
 
     #[tokio::test]
     async fn s04_q2_create_transfer_bundle_falls_back_offline_when_manifest_missing() {
-        let base_dir = temp_test_dir("s04_q2_send_missing_manifest");
+        let dir_guard = TempDirGuard(temp_test_dir("s04_q2_send_missing_manifest"));
         let password = "TestPassword123!";
         let alice_state = create_test_state(setup_test_app(
-            &base_dir.join("alice"),
+            &dir_guard.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             password,
         ));
         let bob_state = create_test_state(setup_test_app(
-            &base_dir.join("bob"),
+            &dir_guard.0.join("bob"),
             "Bob",
             BOB_PHRASE,
             password,
@@ -2554,18 +2361,14 @@ mod offline_and_degraded_transfer_tests {
         let anchor_id = [0xD5u8; 32];
         let local_instance_id = {
             let mut s = alice_state.service.lock().unwrap();
-            alice_state
-                .save_ui_preferences(&mut s, UiPreferences::default(), Some(password))
-                .unwrap();
-            alice_state
-                .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(password))
-                .unwrap();
+            alice_state.save_ui_preferences(&mut s, UiPreferences::default(), Some(password)).unwrap();
+            alice_state.save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(password)).unwrap();
             let user_id = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
             s.create_new_voucher(
                 &standard_toml,
                 NewVoucherData {
                     creator_profile: PublicProfile {
-                        id: Some(user_id.clone()),
+                        id: Some(user_id),
                         ..Default::default()
                     },
                     nominal_value: ValueDefinition {
@@ -2587,36 +2390,11 @@ mod offline_and_degraded_transfer_tests {
                 .local_instance_id
         };
 
-        let bob_did = bob_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
-
-        let res = create_transfer_bundle_impl(
-            None,
-            bob_did,
-            vec![FrontendSourceTransfer {
-                local_instance_id,
-                amount_to_send: "20".into(),
-            }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            None,
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("sending anchored voucher without local manifest must fall back offline");
-
-        assert!(
-            res.l2_dispatch.is_empty(),
-            "Offline fallback send must not stage online L2 dispatch intents"
-        );
+        let bob_did = wallet_did(&bob_state);
+        let res =
+            send_simple_transfer(&alice_state, &bob_did, &local_instance_id, "20", &std_map, password)
+                .await;
+        assert!(res.l2_dispatch.is_empty());
 
         let recv = receive_bundle_impl(
             None,
@@ -2631,7 +2409,96 @@ mod offline_and_degraded_transfer_tests {
         .await
         .expect("Bob must accept offline-fallback bundle on trust basis");
         assert_eq!(recv.newly_committed, Some(true));
+    }
 
-        let _ = std::fs::remove_dir_all(base_dir);
+    #[test]
+    fn test_build_sent_transaction_record_aggregates_summable_and_countable_items() {
+        let dir_guard = TempDirGuard(temp_test_dir("build_sent_record_units"));
+        let pw = "pw-sent-record";
+        let state = create_test_state(setup_test_app(
+            &dir_guard.0,
+            "Alice",
+            ALICE_PHRASE,
+            pw,
+        ));
+        let s = state.lock_service().unwrap();
+        let mut summable_by_uuid = HashMap::new();
+        let mut summable_by_name = HashMap::new();
+        summable_by_name.insert("FreeTaler".to_string(), true);
+        summable_by_name.insert("ArtworkVoucher".to_string(), false);
+
+        let bundle_res = human_money_core::wallet::CreateBundleResult {
+            bundle_bytes: vec![1, 2, 3],
+            bundle_id: "bundle-rec-1".to_string(),
+            involved_sources_details: vec![
+                human_money_core::wallet::types::InvolvedVoucherInfo {
+                    local_instance_id: "loc-1".into(),
+                    voucher_id: "v-1".into(),
+                    standard_name: "FreeTaler".into(),
+                    unit: "Taler".into(),
+                    amount: "10.50".into(),
+                    allow_partial_transfers: true,
+                    is_test_voucher: false,
+                    display_currency: "Taler".into(),
+                    display_standard_name: "FreeTaler".into(),
+                    counterparty_id: None,
+                    counterparty_name: None,
+                },
+                human_money_core::wallet::types::InvolvedVoucherInfo {
+                    local_instance_id: "loc-2".into(),
+                    voucher_id: "v-2".into(),
+                    standard_name: "FreeTaler".into(),
+                    unit: "Taler".into(),
+                    amount: "4.25".into(),
+                    allow_partial_transfers: true,
+                    is_test_voucher: false,
+                    display_currency: "Taler".into(),
+                    display_standard_name: "FreeTaler".into(),
+                    counterparty_id: None,
+                    counterparty_name: None,
+                },
+                human_money_core::wallet::types::InvolvedVoucherInfo {
+                    local_instance_id: "loc-3".into(),
+                    voucher_id: "v-3".into(),
+                    standard_name: "ArtworkVoucher".into(),
+                    unit: "ItemUnit".into(),
+                    amount: "1".into(),
+                    allow_partial_transfers: false,
+                    is_test_voucher: false,
+                    display_currency: "ItemUnit".into(),
+                    display_standard_name: "ArtworkVoucher".into(),
+                    counterparty_id: None,
+                    counterparty_name: None,
+                },
+            ],
+            forensic_archive_incomplete: Vec::new(),
+        };
+
+        let sender_did = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let record = s
+            .with_wallet(|wallet| {
+                build_sent_transaction_record(
+                    wallet,
+                    sender_did.clone(),
+                    test_utils::ACTORS.bob.user_id.clone(),
+                    &bundle_res,
+                    &summable_by_uuid,
+                    &summable_by_name,
+                    Some("Note 1".into()),
+                    Some("Alice".into()),
+                )
+            })
+            .unwrap();
+
+        assert_eq!(record.direction, "sent");
+        assert_eq!(record.sender_id, sender_did);
+        assert_eq!(record.recipient_id, test_utils::ACTORS.bob.user_id);
+        assert_eq!(record.bundle_id, "bundle-rec-1");
+        assert_eq!(record.summable_amounts.get("Taler").map(String::as_str), Some("14.75"));
+        assert_eq!(record.countable_items.get("ItemUnit").copied(), Some(1));
+        assert_eq!(record.involved_vouchers, vec!["loc-1", "loc-2", "loc-3"]);
+        assert_eq!(record.notes.as_deref(), Some("Note 1"));
+        assert_eq!(record.sender_profile_name.as_deref(), Some("Alice"));
+        summable_by_uuid.clear();
     }
 }

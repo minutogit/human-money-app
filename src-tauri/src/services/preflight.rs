@@ -595,6 +595,7 @@ pub async fn dispatch_l2_send_intents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::fs_helpers::TempDirGuard;
     use ed25519_dalek::{Signer, SigningKey};
     use human_money_core::{
         humoco_proto::{
@@ -602,7 +603,11 @@ mod tests {
             encode_quarter,
             manifest::{AnchorAuthority, AnchorManifest, GenesisTicket, NominatedBy, ServerEntry},
         },
-        models::{profile::PublicProfile, voucher::ValueDefinition},
+        models::{
+            conflict::{ConflictRole, ProofOfDoubleSpend, ProofStoreEntry},
+            profile::PublicProfile,
+            voucher::ValueDefinition,
+        },
         services::l2_gateway,
         test_utils::{self, ACTORS},
         NewVoucherData,
@@ -611,48 +616,39 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    #[tokio::test]
-    async fn k2_corrupt_known_heads_blocks_intent_dispatch_without_http() {
-        let dir = crate::test_support::temp_test_dir("k2_corrupt_sidecar_preflight");
-        let pw = "test-pw";
-        let (mut service, _) =
-            test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
-        service.unlock_session(pw, 600).unwrap();
+    fn make_creator_server_entry(addr: std::net::SocketAddr, sk: &SigningKey) -> ServerEntry {
+        ServerEntry {
+            write_url: format!("http://{addr}/sync.php"),
+            read_url: format!("http://{addr}/d"),
+            admin_pub: sk.verifying_key().to_bytes(),
+            lock_pub: sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        }
+    }
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let hits = Arc::new(AtomicUsize::new(0));
-        let hits_bg = Arc::clone(&hits);
-        let server_task = tokio::spawn(async move {
-            while let Ok((_sock, _)) = listener.accept().await {
-                hits_bg.fetch_add(1, Ordering::SeqCst);
-            }
-        });
-
-        let anchor_nonce = [42u8; 32];
-        let creator_mig_pub = service
+    fn register_anchored_voucher(
+        service: &mut AppService,
+        addr: std::net::SocketAddr,
+        sk: &SigningKey,
+        anchor_nonce: &[u8; 32],
+        pw: &str,
+    ) -> (AnchorManifest, [u8; 32], String, SigningKey) {
+        let mig_sk = service
             .with_wallet_and_identity(|_, id| {
-                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
-                    .map(|k| k.verifying_key().to_bytes())
+                l2_gateway::derive_anchor_mig_signing_key(id, anchor_nonce)
             })
             .unwrap()
             .unwrap();
-        let sk1 = SigningKey::from_bytes(&[73u8; 32]);
         let retain_q = encode_quarter(2035, 4).unwrap();
         let manifest = AnchorManifest {
             revision: 1,
             threshold: 1,
-            servers: vec![ServerEntry {
-                write_url: format!("http://{addr}/sync.php"),
-                read_url: format!("http://{addr}/d"),
-                admin_pub: sk1.verifying_key().to_bytes(),
-                lock_pub: sk1.verifying_key().to_bytes(),
-                nominated_by: NominatedBy::Creator,
-            }],
+            servers: vec![make_creator_server_entry(addr, sk)],
             successors: vec![],
             authority: AnchorAuthority {
-                creator_mig_pub,
+                creator_mig_pub: mig_sk.verifying_key().to_bytes(),
                 guarantor_mig_pubs: vec![],
             },
             migration_chain: vec![],
@@ -660,19 +656,19 @@ mod tests {
             retain_until_quarter: retain_q,
         };
         let anchor_id = manifest.rev1_anchor_id().unwrap();
-        let mut t = GenesisTicket {
+        let mut ticket = GenesisTicket {
             anchor_id,
             retain_until_quarter: retain_q,
             issued_at: 1_760_000_000,
-            lock_pub: sk1.verifying_key().to_bytes(),
+            lock_pub: sk.verifying_key().to_bytes(),
             sig: [0u8; 64],
         };
-        t.sig = sk1.sign(&t.digest()).to_bytes();
+        ticket.sig = sk.sign(&ticket.digest()).to_bytes();
         service
             .register_l2_anchor_template_with_nonce(
-                manifest,
-                vec![t],
-                Some(&anchor_nonce),
+                manifest.clone(),
+                vec![ticket],
+                Some(anchor_nonce),
                 Some(pw),
             )
             .unwrap();
@@ -706,115 +702,26 @@ mod tests {
             .unwrap()[0]
             .local_instance_id
             .clone();
-        service
-            .prepare_l2_send_intent(&local_id, DEFAULT_LOCK_POW_BASE_BITS, Some(pw))
-            .unwrap();
-        let intent = service.pending_l2_send_intent(&local_id).unwrap();
-
-        // Corrupt the anti-rollback sidecar before dispatch.
-        service
-            .save_local_sidecar_data(
-                crate::state::KNOWN_LOCK_HEADS_KEY,
-                b"{corrupt-lock-heads",
-                Some(pw),
-            )
-            .unwrap();
-
-        let state = crate::test_support::create_test_state(service);
-        let session = {
-            let s = state.lock_service().unwrap();
-            state.session_token_for_service(&s).unwrap()
-        };
-        let res = dispatch_l2_send_intents(
-            &state,
-            &session,
-            &[intent],
-            DEFAULT_LOCK_POW_BASE_BITS,
-            Some(pw),
-        )
-        .await;
-
-        server_task.abort();
-        assert!(
-            res.is_err(),
-            "Corrupt anti-rollback sidecar must fail closed before sending L2 requests"
-        );
-        assert_eq!(
-            hits.load(Ordering::SeqCst),
-            0,
-            "Zero HTTP requests may be dispatched when known heads fail to load"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
+        (manifest, anchor_id, local_id, mig_sk)
     }
 
-    #[tokio::test]
-    async fn s06_f4_f9_dispatch_intent_upgrades_on_409_and_demotes_rejected_receipts_to_pending() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let dir = crate::test_support::temp_test_dir("s06_f4_f9_dispatch");
-        let pw = "pw-s06-f4";
-        let (mut service, _) =
-            test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
-        service.unlock_session(pw, 600).unwrap();
-
-        let anchor_nonce = [55u8; 32];
-        let creator_mig_sk = service
-            .with_wallet_and_identity(|_, id| {
-                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
-            })
-            .unwrap()
-            .unwrap();
-        let creator_mig_pub = creator_mig_sk.verifying_key().to_bytes();
-
-        let sk1 = SigningKey::from_bytes(&[91u8; 32]);
-        let sk2 = SigningKey::from_bytes(&[92u8; 32]);
-        let retain_q = encode_quarter(2035, 4).unwrap();
-
-        // Bind server 1 (will respond 409 epoch_frozen with upgraded rev=2 manifest pointing to server 2)
-        // and server 2 (will return a 200 OK with an INVALID signature receipt so recording fails!).
-        let listener1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr1 = listener1.local_addr().unwrap();
-        let listener2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr2 = listener2.local_addr().unwrap();
-
-        let manifest_rev1 = AnchorManifest {
-            revision: 1,
-            threshold: 1,
-            servers: vec![ServerEntry {
-                write_url: format!("http://{addr1}/sync.php"),
-                read_url: format!("http://{addr1}/d"),
-                admin_pub: sk1.verifying_key().to_bytes(),
-                lock_pub: sk1.verifying_key().to_bytes(),
-                nominated_by: NominatedBy::Creator,
-            }],
-            successors: vec![],
-            authority: AnchorAuthority {
-                creator_mig_pub,
-                guarantor_mig_pubs: vec![],
-            },
-            migration_chain: vec![],
-            issued_at_ms: 1_760_000_000_000,
-            retain_until_quarter: retain_q,
-        };
-        let anchor_id = manifest_rev1.rev1_anchor_id().unwrap();
-        let anchor_hex = hex::encode(anchor_id);
-
-        // Build genuine migrated rev=2 manifest switching committee to server 2
-        let new_servers = vec![ServerEntry {
-            write_url: format!("http://{addr2}/sync.php"),
-            read_url: format!("http://{addr2}/d"),
-            admin_pub: sk2.verifying_key().to_bytes(),
-            lock_pub: sk2.verifying_key().to_bytes(),
-            nominated_by: NominatedBy::Creator,
-        }];
+    fn build_migrated_rev2_manifest(
+        manifest_rev1: &AnchorManifest,
+        anchor_id: [u8; 32],
+        sk1: &SigningKey,
+        sk2: &SigningKey,
+        creator_mig_sk: &SigningKey,
+        addr2: std::net::SocketAddr,
+    ) -> AnchorManifest {
+        let retain_q = manifest_rev1.retain_until_quarter;
         let prop = human_money_core::services::l2_rotation::build_creator_rotation_proposal(
             anchor_id,
-            &manifest_rev1,
+            manifest_rev1,
             1,
-            new_servers,
+            vec![make_creator_server_entry(addr2, sk2)],
             Vec::new(),
             1_760_000_050,
-            &creator_mig_sk,
+            creator_mig_sk,
         )
         .unwrap();
         let state_hash = human_money_core::humoco_proto::compute_import_union_state_hash(
@@ -848,7 +755,7 @@ mod tests {
         };
         let (manifest_rev2, _) =
             human_money_core::services::l2_rotation::assemble_migrated_manifest(
-                &manifest_rev1,
+                manifest_rev1,
                 &anchor_id,
                 prop,
                 state_hash,
@@ -856,113 +763,154 @@ mod tests {
                 vec![commit_sig],
             )
             .unwrap();
+        manifest_rev2
+    }
 
-        let rev2_for_s1 = manifest_rev2.clone();
-        let s1_hits = Arc::new(AtomicUsize::new(0));
-        let s1_hits_bg = Arc::clone(&s1_hits);
-        let s1_task = tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener1.accept().await {
-                s1_hits_bg.fetch_add(1, Ordering::SeqCst);
-                let mut buf = vec![0u8; 8192];
-                let _ = sock.read(&mut buf).await;
-                let body = serde_json::json!({
-                    "error": "epoch_frozen",
-                    "latest_manifest": rev2_for_s1,
-                })
-                .to_string();
-                let resp = format!(
-                    "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = sock.write_all(resp.as_bytes()).await;
-            }
-        });
-
-        let s2_hits = Arc::new(AtomicUsize::new(0));
-        let s2_hits_bg = Arc::clone(&s2_hits);
-        let sk2_pub = sk2.verifying_key().to_bytes();
-        let s2_task = tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener2.accept().await {
-                s2_hits_bg.fetch_add(1, Ordering::SeqCst);
+    fn spawn_single_http_response(
+        listener: tokio::net::TcpListener,
+        hits: Arc<AtomicUsize>,
+        status_line: &'static str,
+        body: String,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                hits.fetch_add(1, Ordering::SeqCst);
                 let mut buf = vec![0u8; 16384];
-                let _ = sock.read(&mut buf).await;
-                // Return a 200 OK with a forged-signature receipt (write_seq = 0, invalid sig)
-                let bad_receipt = human_money_core::humoco_proto::types::LockReceipt {
-                    kind: human_money_core::humoco_proto::types::LockReceiptKind::FirstWrite,
-                    lock_pub: sk2_pub,
-                    bucket: human_money_core::humoco_proto::derive_bucket(&anchor_id, &sk2_pub),
-                    slot: [1u8; 32],
-                    child_lock: [2u8; 32],
-                    entry_hash: [3u8; 32],
-                    recipient_nonce: [4u8; 32],
-                    write_seq: 0,
-                    bucket_head: [0u8; 32],
-                    retain_until_quarter: retain_q,
-                    sig: [0u8; 64],
-                };
-                let body = serde_json::json!({
-                    "results": [{
-                        "status": "ok",
-                        "receipt": bad_receipt,
-                    }]
-                })
-                .to_string();
+                let read_n = sock.read(&mut buf).await.unwrap();
+                assert!(read_n > 0);
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
+                    "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
                 );
-                let _ = sock.write_all(resp.as_bytes()).await;
+                sock.write_all(resp.as_bytes()).await.unwrap();
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn k2_corrupt_known_heads_blocks_intent_dispatch_without_http() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir(
+            "k2_corrupt_sidecar_preflight",
+        ));
+        let pw = "test-pw";
+        let (mut service, _) =
+            test_utils::setup_service_with_profile(&dir_guard.0, &ACTORS.alice, "Alice", pw);
+        service.unlock_session(pw, 600).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_bg = Arc::clone(&hits);
+        let server_task = tokio::spawn(async move {
+            while let Ok((_sock, _)) = listener.accept().await {
+                hits_bg.fetch_add(1, Ordering::SeqCst);
             }
         });
 
-        let mut t1 = GenesisTicket {
+        let sk1 = SigningKey::from_bytes(&[73u8; 32]);
+        let (_manifest, _anchor_id, local_id, _mig_sk) =
+            register_anchored_voucher(&mut service, addr, &sk1, &[42u8; 32], pw);
+        service
+            .prepare_l2_send_intent(&local_id, DEFAULT_LOCK_POW_BASE_BITS, Some(pw))
+            .unwrap();
+        let intent = service.pending_l2_send_intent(&local_id).unwrap();
+
+        service
+            .save_local_sidecar_data(
+                crate::state::KNOWN_LOCK_HEADS_KEY,
+                b"{corrupt-lock-heads",
+                Some(pw),
+            )
+            .unwrap();
+
+        let state = crate::test_support::create_test_state(service);
+        let session = {
+            let s = state.lock_service().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
+        let err = dispatch_l2_send_intents(
+            &state,
+            &session,
+            &[intent],
+            DEFAULT_LOCK_POW_BASE_BITS,
+            Some(pw),
+        )
+        .await
+        .expect_err("Corrupt anti-rollback sidecar must fail closed before sending L2 requests");
+
+        server_task.abort();
+        assert!(
+            err.message.contains("Failed to parse")
+                && err.message.contains(crate::state::KNOWN_LOCK_HEADS_KEY),
+            "unexpected corrupt known_heads error: {:?}",
+            err
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "Zero HTTP requests may be dispatched when known heads fail to load"
+        );
+    }
+
+    #[tokio::test]
+    async fn s06_f4_f9_dispatch_intent_upgrades_on_409_and_demotes_rejected_receipts_to_pending() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("s06_f4_f9_dispatch"));
+        let pw = "pw-s06-f4";
+        let (mut service, _) =
+            test_utils::setup_service_with_profile(&dir_guard.0, &ACTORS.alice, "Alice", pw);
+        service.unlock_session(pw, 600).unwrap();
+
+        let sk1 = SigningKey::from_bytes(&[91u8; 32]);
+        let sk2 = SigningKey::from_bytes(&[92u8; 32]);
+        let listener1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr1 = listener1.local_addr().unwrap();
+        let listener2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr2 = listener2.local_addr().unwrap();
+
+        let (manifest_rev1, anchor_id, local_id, creator_mig_sk) =
+            register_anchored_voucher(&mut service, addr1, &sk1, &[55u8; 32], pw);
+        let anchor_hex = hex::encode(anchor_id);
+        let retain_q = manifest_rev1.retain_until_quarter;
+        let manifest_rev2 = build_migrated_rev2_manifest(
+            &manifest_rev1,
             anchor_id,
+            &sk1,
+            &sk2,
+            &creator_mig_sk,
+            addr2,
+        );
+
+        let s1_hits = Arc::new(AtomicUsize::new(0));
+        let s1_body = serde_json::json!({
+            "error": "epoch_frozen",
+            "latest_manifest": manifest_rev2,
+        })
+        .to_string();
+        let s1_task =
+            spawn_single_http_response(listener1, Arc::clone(&s1_hits), "409 Conflict", s1_body);
+
+        let sk2_pub = sk2.verifying_key().to_bytes();
+        let bad_receipt = human_money_core::humoco_proto::types::LockReceipt {
+            kind: human_money_core::humoco_proto::types::LockReceiptKind::FirstWrite,
+            lock_pub: sk2_pub,
+            bucket: human_money_core::humoco_proto::derive_bucket(&anchor_id, &sk2_pub),
+            slot: [1u8; 32],
+            child_lock: [2u8; 32],
+            entry_hash: [3u8; 32],
+            recipient_nonce: [4u8; 32],
+            write_seq: 0,
+            bucket_head: [0u8; 32],
             retain_until_quarter: retain_q,
-            issued_at: 1_760_000_000,
-            lock_pub: sk1.verifying_key().to_bytes(),
             sig: [0u8; 64],
         };
-        t1.sig = sk1.sign(&t1.digest()).to_bytes();
-        service
-            .register_l2_anchor_template_with_nonce(
-                manifest_rev1,
-                vec![t1],
-                Some(&anchor_nonce),
-                Some(pw),
-            )
-            .unwrap();
+        let s2_hits = Arc::new(AtomicUsize::new(0));
+        let s2_body = serde_json::json!({
+            "results": [{ "status": "ok", "receipt": bad_receipt }]
+        })
+        .to_string();
+        let s2_task =
+            spawn_single_http_response(listener2, Arc::clone(&s2_hits), "200 OK", s2_body);
 
-        let user_id = service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
-        let std_toml = test_utils::generate_signed_standard_toml(
-            "voucher_standards/freetaler_v1/standard.toml",
-        );
-        service
-            .create_new_voucher(
-                &std_toml,
-                NewVoucherData {
-                    creator_profile: PublicProfile {
-                        id: Some(user_id),
-                        ..Default::default()
-                    },
-                    nominal_value: ValueDefinition {
-                        amount: "50".into(),
-                        ..Default::default()
-                    },
-                    layer2_anchor: Some(anchor_id),
-                    ..Default::default()
-                },
-                Some(pw),
-            )
-            .unwrap();
-        let local_id = service
-            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
-            .unwrap()[0]
-            .local_instance_id
-            .clone();
         service
             .prepare_l2_send_intent(&local_id, DEFAULT_LOCK_POW_BASE_BITS, Some(pw))
             .unwrap();
@@ -986,11 +934,7 @@ mod tests {
         s1_task.abort();
         s2_task.abort();
 
-        assert_eq!(
-            s1_hits.load(Ordering::SeqCst),
-            1,
-            "Server 1 must be hit first"
-        );
+        assert_eq!(s1_hits.load(Ordering::SeqCst), 1);
         assert_eq!(
             s2_hits.load(Ordering::SeqCst),
             1,
@@ -1006,17 +950,233 @@ mod tests {
                     .map(|m| m.revision)
             })
             .unwrap();
-        assert_eq!(
-            stored_rev,
-            Some(2),
-            "Local manifest must be upgraded to rev=2"
-        );
+        assert_eq!(stored_rev, Some(2));
         assert_eq!(
             obs[0].status, "pending",
             "S06-F9: rejected/unrecorded 200 OK receipts must NOT report confirmed (got {:?})",
             obs[0]
         );
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    fn make_three_server_manifest(
+        s1_sk: &SigningKey,
+        s2_sk: &SigningKey,
+        s3_sk: &SigningKey,
+        threshold: u8,
+    ) -> AnchorManifest {
+        let mk = |n: u8, sk: &SigningKey| ServerEntry {
+            write_url: format!("https://s{n}.example/sync.php"),
+            read_url: format!("https://s{n}.example/d"),
+            admin_pub: sk.verifying_key().to_bytes(),
+            lock_pub: sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        AnchorManifest {
+            revision: 1,
+            threshold,
+            servers: vec![mk(1, s1_sk), mk(2, s2_sk), mk(3, s3_sk)],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub: SigningKey::from_bytes(&[41u8; 32]).verifying_key().to_bytes(),
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: encode_quarter(2035, 4).unwrap(),
+        }
+    }
+
+    #[test]
+    fn test_run_value_outflow_preflight_blocks_restore_offender_and_intent() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("preflight_gates_part1"));
+        let pw = "pw-preflight-gates";
+        let state = crate::test_support::create_test_state(crate::test_support::setup_test_app(
+            &dir_guard.0,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        ));
+        let mut s = state.lock_service().unwrap();
+        let s1_sk = SigningKey::from_bytes(&[31u8; 32]);
+        let dummy_addr: std::net::SocketAddr = ([127, 0, 0, 1], 18080).into();
+        let (_manifest, anchor_id, local_id, _mig_sk) =
+            register_anchored_voucher(&mut s, dummy_addr, &s1_sk, &[41u8; 32], pw);
+        let alice_did = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let bob_did = ACTORS.bob.user_id.as_str();
+        run_value_outflow_preflight(
+            &state,
+            &mut s,
+            Some(pw),
+            &ValueOutflowPreflight {
+                require_restore_reconciled: true,
+                check_known_offender_dids: &[bob_did],
+                check_blocking_intent_local_ids: &[local_id.as_str()],
+                check_anchor_id_quorum_health: Some(anchor_id),
+                preverified_anchor_manifest: None,
+            },
+        )
+        .unwrap();
+
+        state
+            .mutate_internal_lifecycle(&mut s, Some(pw), |lc| {
+                lc.pending_restore_l2_reconciliation = true;
+            })
+            .unwrap();
+        let restore_err = run_value_outflow_preflight(
+            &state,
+            &mut s,
+            Some(pw),
+            &ValueOutflowPreflight {
+                require_restore_reconciled: true,
+                check_known_offender_dids: &[],
+                check_blocking_intent_local_ids: &[],
+                check_anchor_id_quorum_health: None,
+                preverified_anchor_manifest: None,
+            },
+        )
+        .expect_err("Restore lock must block preflight");
+        assert!(restore_err.message.contains("Online-Sicherheitsabgleich"));
+        state
+            .mutate_internal_lifecycle(&mut s, Some(pw), |lc| {
+                lc.pending_restore_l2_reconciliation = false;
+            })
+            .unwrap();
+
+        s.get_unlocked_mut_for_test().0.proof_store.proofs.insert(
+            "proof-h5-pre".to_string(),
+            ProofStoreEntry {
+                proof: ProofOfDoubleSpend {
+                    proof_id: "proof-h5-pre".to_string(),
+                    offender_id: bob_did.to_string(),
+                    suspected_identity: None,
+                    fork_point_prev_hash: "00".repeat(32),
+                    conflicting_transactions: Vec::new(),
+                    fingerprints: Vec::new(),
+                    victim_witnesses: Vec::new(),
+                    deletable_at: "2099-01-01T00:00:00Z".to_string(),
+                    reporter_id: alice_did,
+                    report_timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    reporter_signature: "sig".to_string(),
+                    affected_voucher_name: None,
+                    voucher_standard_uuid: None,
+                    resolutions: None,
+                    non_redeemable_test_voucher: false,
+                },
+                local_override: false,
+                local_note: None,
+                conflict_role: ConflictRole::default(),
+            },
+        );
+        let offender_err = run_value_outflow_preflight(
+            &state,
+            &mut s,
+            Some(pw),
+            &ValueOutflowPreflight {
+                require_restore_reconciled: false,
+                check_known_offender_dids: &[bob_did],
+                check_blocking_intent_local_ids: &[],
+                check_anchor_id_quorum_health: None,
+                preverified_anchor_manifest: None,
+            },
+        )
+        .expect_err("KnownOffender counterparty must block preflight");
+        assert!(offender_err.message.contains(bob_did) && offender_err.message.contains("proof-h5-pre"));
+        s.get_unlocked_mut_for_test().0.proof_store.proofs.remove("proof-h5-pre");
+
+        s.prepare_l2_send_intent(&local_id, DEFAULT_LOCK_POW_BASE_BITS, Some(pw))
+            .unwrap();
+        let intent_err = run_value_outflow_preflight(
+            &state,
+            &mut s,
+            Some(pw),
+            &ValueOutflowPreflight {
+                require_restore_reconciled: false,
+                check_known_offender_dids: &[],
+                check_blocking_intent_local_ids: &[local_id.as_str()],
+                check_anchor_id_quorum_health: None,
+                preverified_anchor_manifest: None,
+            },
+        )
+        .expect_err("Blocking L2 intent must block preflight");
+        assert_eq!(intent_err.code, "error.validation.intentPendingL2");
+    }
+
+    #[test]
+    fn test_run_value_outflow_preflight_quorum_health_gates() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("preflight_quorum_gates"));
+        let pw = "pw-preflight-quorum";
+        let state = crate::test_support::create_test_state(crate::test_support::setup_test_app(
+            &dir_guard.0,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        ));
+        let mut s = state.lock_service().unwrap();
+        let s1_sk = SigningKey::from_bytes(&[31u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[32u8; 32]);
+        let s3_sk = SigningKey::from_bytes(&[33u8; 32]);
+        let manifest_t2 = make_three_server_manifest(&s1_sk, &s2_sk, &s3_sk, 2);
+        let anchor_id = manifest_t2.rev1_anchor_id().unwrap();
+        s.update_l2_anchor_manifest(manifest_t2, Some(pw)).unwrap();
+
+        let missing_err = run_value_outflow_preflight(
+            &state,
+            &mut s,
+            Some(pw),
+            &ValueOutflowPreflight {
+                require_restore_reconciled: false,
+                check_known_offender_dids: &[],
+                check_blocking_intent_local_ids: &[],
+                check_anchor_id_quorum_health: Some([0xEE; 32]),
+                preverified_anchor_manifest: None,
+            },
+        )
+        .expect_err("Missing anchor manifest must fail preflight");
+        assert_eq!(missing_err.code, "error.l2.anchorManifestMissing");
+
+        // 1 banned -> 2 healthy == threshold 2 passes exact boundary.
+        let mut offenders = humoco_wot::ServerOffenderList::new();
+        offenders
+            .revoked_lock_pubs
+            .insert(s1_sk.verifying_key().to_bytes());
+        crate::l2_lifecycle::save_server_offender_list(&mut s, &offenders, Some(pw)).unwrap();
+        state.write_cache_slot_for_service(&s, |c| &mut c.server_offenders, Some(offenders.clone()));
+
+        run_value_outflow_preflight(
+            &state,
+            &mut s,
+            Some(pw),
+            &ValueOutflowPreflight {
+                require_restore_reconciled: false,
+                check_known_offender_dids: &[],
+                check_blocking_intent_local_ids: &[],
+                check_anchor_id_quorum_health: Some(anchor_id),
+                preverified_anchor_manifest: None,
+            },
+        )
+        .expect("2 healthy == threshold 2 must satisfy quorum health");
+
+        // 2 banned -> 1 healthy < threshold 2 must fail with anchorQuorumUnhealthy.
+        offenders
+            .revoked_lock_pubs
+            .insert(s2_sk.verifying_key().to_bytes());
+        crate::l2_lifecycle::save_server_offender_list(&mut s, &offenders, Some(pw)).unwrap();
+        state.write_cache_slot_for_service(&s, |c| &mut c.server_offenders, Some(offenders));
+
+        let unhealthy_err = run_value_outflow_preflight(
+            &state,
+            &mut s,
+            Some(pw),
+            &ValueOutflowPreflight {
+                require_restore_reconciled: false,
+                check_known_offender_dids: &[],
+                check_blocking_intent_local_ids: &[],
+                check_anchor_id_quorum_health: Some(anchor_id),
+                preverified_anchor_manifest: None,
+            },
+        )
+        .expect_err("1 healthy / threshold 2 must return anchorQuorumUnhealthy");
+        assert_eq!(unhealthy_err.code, "error.l2.anchorQuorumUnhealthy");
     }
 }

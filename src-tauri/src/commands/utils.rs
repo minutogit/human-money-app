@@ -364,12 +364,13 @@ pub fn ack_startup_launch_item(
 #[cfg(test)]
 mod launch_queue_tests {
     use super::{ack_startup_launch_item_from_state, peek_startup_launch_items_from_state};
+    use crate::services::fs_helpers::TempDirGuard;
     use crate::test_support::{create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE};
 
     #[test]
     fn h9_peek_is_non_destructive_and_ack_removes_first_matching_fifo_item() {
-        let dir = temp_test_dir("h9_launch_queue");
-        let service = setup_test_app(&dir, "Alice", ALICE_PHRASE, "pw123");
+        let dir_guard = TempDirGuard(temp_test_dir("h9_launch_queue"));
+        let service = setup_test_app(&dir_guard.0, "Alice", ALICE_PHRASE, "pw123");
         let state = create_test_state(service);
         {
             let mut guard = state.startup_launch_items.lock().unwrap();
@@ -397,13 +398,12 @@ mod launch_queue_tests {
         assert!(peek_startup_launch_items_from_state(&state)
             .unwrap()
             .is_empty());
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn s11_f7_standards_isolation_log_sanitization_and_bounded_tail() {
-        let dir = temp_test_dir("s11_f7_utils");
+        let dir_guard = TempDirGuard(temp_test_dir("s11_f7_utils"));
+        let dir = &dir_guard.0;
         let valid_toml = include_str!("../../../voucher_standards/minuto_v1/standard.toml");
 
         std::fs::create_dir_all(dir.join("zeta_std")).unwrap();
@@ -425,7 +425,7 @@ mod launch_queue_tests {
         )
         .unwrap();
 
-        let loaded = super::load_voucher_standards_from_dir(&dir).unwrap();
+        let loaded = super::load_voucher_standards_from_dir(dir).unwrap();
         let ids: Vec<&str> = loaded.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["alpha_std", "zeta_std"]);
 
@@ -454,11 +454,55 @@ mod launch_queue_tests {
         {
             let link_path = dir.join("link.log");
             std::os::unix::fs::symlink(&log_path, &link_path).unwrap();
-            assert!(
-                super::read_log_tail_bounded(&link_path, super::MAX_LATEST_LOGS_BYTES).is_err()
-            );
+            let link_err = super::read_log_tail_bounded(&link_path, super::MAX_LATEST_LOGS_BYTES)
+                .expect_err("Symlink log path must be rejected");
+            assert_eq!(link_err.message, "Log file path is not a regular file");
         }
+    }
 
-        let _ = std::fs::remove_dir_all(dir);
+    #[test]
+    fn test_read_log_tail_bounded_edge_cases() {
+        let dir_guard = TempDirGuard(temp_test_dir("utils_read_log_tail_edges"));
+        let dir = &dir_guard.0;
+
+        assert_eq!(
+            super::read_log_tail_bounded(&dir.join("missing.log"), 1024).unwrap(),
+            ""
+        );
+
+        let dir_err = super::read_log_tail_bounded(dir, 1024)
+            .expect_err("Directory path must be rejected as non-regular file");
+        assert_eq!(dir_err.message, "Log file path is not a regular file");
+
+        let exact_path = dir.join("exact.log");
+        let content = "first\nsecond\n";
+        std::fs::write(&exact_path, content).unwrap();
+        assert_eq!(super::read_log_tail_bounded(&exact_path, 0).unwrap(), "");
+        assert_eq!(
+            super::read_log_tail_bounded(&exact_path, content.len()).unwrap(),
+            content
+        );
+
+        let not_dir_err = super::read_log_tail_bounded(&exact_path.join("child.log"), 1024)
+            .expect_err("Path under a regular file must fail metadata inspection");
+        assert!(
+            not_dir_err.message.starts_with("Failed to inspect log file:"),
+            "unexpected error: {}",
+            not_dir_err.message
+        );
+
+        // Slice offset lands inside a 2-byte 'ä' sequence before "\ntail\n".
+        let utf8_path = dir.join("utf8.log");
+        let utf8_body = format!("prefix\n{}\ntail\n", "ä".repeat(10));
+        std::fs::write(&utf8_path, utf8_body.as_bytes()).unwrap();
+        let tail_len = "\ntail\n".len();
+        let cropped = super::read_log_tail_bounded(&utf8_path, tail_len + 3).unwrap();
+        assert_eq!(cropped, "tail\n");
+
+        // Without '\n', leading UTF-8 continuation bytes after seek must still be dropped.
+        let no_nl_path = dir.join("utf8_no_nl.log");
+        std::fs::write(&no_nl_path, "ä".repeat(5).as_bytes()).unwrap();
+        let no_nl_cropped = super::read_log_tail_bounded(&no_nl_path, 5).unwrap();
+        assert_eq!(no_nl_cropped, "ää");
     }
 }
