@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `bb8e068`
-- **Total Test Files:** 165 | **Total Test Functions:** 1383
+- **Updated at HEAD:** `c4bc457`
+- **Total Test Files:** 165 | **Total Test Functions:** 1404
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -23,19 +23,19 @@
 | `crates/humoco-market/tests/media_tests.rs` | P1 | 14 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test (150/150 humoco-market, 14/14 media_tests); fixed PNG short-len & avatar prefix placebos; cargo mutants media.rs: 52/52 CAUGHT` |
 | `src/components/auth/__tests__/CreateNewProfile.test.tsx` | P1 | 19 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 19/19 (98 files / 752 tests full pass); deferred seed promise replaces setTimeout sleep; Revert-Red CreateNewProfile.tsx password.length < 8` |
 | `crates/humoco-market/tests/market_view_tests.rs` | P1 | 16 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test (150/150 humoco-market, 16/16 market_view_tests); cargo mutants market_view.rs: 14/14 viable CAUGHT (2 unviable)` |
-| `src-tauri/src/checkout/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/checkout/mod.rs` | P1 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
 | `src-tauri/src/commands/integrity.rs` | P1 | 4 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test --lib (364/364 pass, 4/4 commands::integrity::tests); cargo mutants commands/integrity.rs: 3/3 viable CAUGHT (2 unviable)` |
 | `src-tauri/src/commands/l2.rs` | P1 | 6 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test --lib (364/364 pass, 6/6 commands::l2::tests); cargo mutants commands/l2.rs: 4/4 viable CAUGHT (1 unviable)` |
-| `src-tauri/src/l2_lifecycle/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/l2_lifecycle/rotation_runner.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/l2_lifecycle/mod.rs` | P1 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
+| `src-tauri/src/l2_lifecycle/rotation_runner.rs` | P1 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] test helpers only, covered by verified sibling l2_lifecycle/tests.rs` |
 | `src-tauri/src/models/conflicts.rs` | P1 | 2 | 0/0/0 | 🟢 Verified | `efd5939` | `cargo test --lib (364/364 pass, 2/2 models::conflicts::tests); fixed missing positive attribution baseline; cargo mutants models/conflicts.rs: 2/2 viable CAUGHT (4 unviable)` |
-| `src-tauri/src/services/backup_service/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/services/backup_service/mod.rs` | P1 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
 | `src-tauri/src/services/backup_service/tests.rs` | P1 | 26 | 0/0/0 | 🟢 Verified | `dbf62cf` | 0/0/0 C/H/M; 26/26 pass; 5/5 viable mutants caught + Revert-Red USB is_dir() |
-| `src-tauri/src/services/l2_anchor_service/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/services/l2_anchor_service/mod.rs` | P1 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
 | `src-tauri/src/services/l2_anchor_service/tests.rs` | P1 | 11 | 0/0/0 | 🟢 Verified | `dbf62cf` | 0/0/0 C/H/M; 11/11 pass; 13/13 mutants caught (overview 5/5, sources 8/8) |
-| `src-tauri/src/services/market_service/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/services/market_service/view_and_import.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/services/recovery_service/mod.rs` | P1 | 0 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/services/market_service/mod.rs` | P1 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
+| `src-tauri/src/services/market_service/view_and_import.rs` | P1 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] test helper only, covered by verified sibling market_service/tests.rs` |
+| `src-tauri/src/services/recovery_service/mod.rs` | P1 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
 | `src-tauri/src/services/wot_service.rs` | P1 | 14 | 0/0/0 | 🟢 Verified | `dbf62cf` | 0/0/0 C/H/M; 14/14 pass; 22/23 mutants caught (+1 equiv) + Revert-Red deny_unknown_fields |
 | `src/components/auth/__tests__/EmergencyKitModal.test.tsx` | P1 | 8 | 0/0/0 | 🟢 Verified | `c29e83a` | `vitest 8/8 (98 files / 779 tests full pass); deterministic word idx, baseElement portal SVG check & null/error guards; Revert-Red EmergencyKitModal.tsx not-retained guard` |
 | `src/components/auth/__tests__/ForkLockOverlay.test.tsx` | P1 | 9 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 9/9 (752/752 pass); Revert-Red ForkLockOverlay.tsx needs_profile navigation on last profile delete` |
@@ -65,14 +65,14 @@
 | `src/components/ui/__tests__/L2QuorumBadge.test.tsx` | P1 | 14 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 16/16 pass (14 fn); hardened standalone props & added quorum precedence, yellow/0-node/NaN/100% clamp & rose conflict bar; Revert-Red L2QuorumBadge unsupportedConfirmation` |
 | `src/locales/__tests__/i18nIntegrity.test.ts` | P1 | 4 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 4/4 (752/752 pass); removed silent typeof skips & weak asserts; Revert-Red de.json missing anchorIssue key` |
 | `src/utils/__tests__/signatureHints.test.ts` | P1 | 15 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 15/15 pass; removed eslint-disable/any, covered 2-field and, whitespace/address, deduplication, ISO-5218 rules & gentle hints; Revert-Red signatureHints genderBalanceMale` |
-| `src-tauri/src/sync_client/tests.rs` | P2 | 25 | 1/25/19 | ⚪ Pending | — | — |
+| `src-tauri/src/sync_client/tests.rs` | P2 | 34 | 0/0/0 | 🟢 Verified | `c4bc457` | `34/34 pass (385/385 lib); Fail-First RED->GREEN revocation vk.is_weak(); cargo mutants revocation.rs 21/21 viable caught (1 unviable) + ssrf.rs 8/8 viable caught (1 unviable)` |
 | `src-tauri/src/commands/vouchers.rs` | P2 | 6 | 1/2/13 | ⚪ Pending | — | — |
 | `src-tauri/src/services/sync_engine/channel_reader.rs` | P2 | 5 | 1/0/14 | ⚪ Pending | — | — |
 | `src/components/wallet/__tests__/Dashboard.test.tsx` | P2 | 9 | 1/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/commands/contacts.rs` | P2 | 6 | 0/7/1 | ⚪ Pending | — | — |
-| `src-tauri/src/services/fs_helpers.rs` | P2 | 3 | 0/7/3 | ⚪ Pending | — | — |
+| `src-tauri/src/commands/contacts.rs` | P2 | 8 | 0/0/0 | 🟢 Verified | `c4bc457` | `8/8 pass; hardened roundtrip, get_cached_contacts & exact descriptor validation errors + DID norm & delete tests; cargo mutants validate_contact_sync_descriptor(s) 7/7 caught` |
+| `src-tauri/src/services/fs_helpers.rs` | P2 | 8 | 0/0/0 | 🟢 Verified | `c4bc457` | `8/8 pass; Fail-First RED->GREEN collect_custom_standards_from_dir symlinks/1MiB guard, RAII TempDirGuard & exact errors; cargo mutants 15/17 caught (+2 equiv is_symlink||!is_dir)` |
 | `src-tauri/src/services/post_service/tests.rs` | P2 | 27 | 0/5/40 | ⚪ Pending | — | — |
-| `src-tauri/src/services/sync_endpoints.rs` | P2 | 1 | 0/4/0 | ⚪ Pending | — | — |
+| `src-tauri/src/services/sync_endpoints.rs` | P2 | 6 | 0/0/0 | 🟢 Verified | `c4bc457` | `6/6 pass; split into focused unit tests with exact errors & single-field/overlap/sanitize boundary checks; cargo mutants 58/63 + recheck 25/25 caught (63/63 total)` |
 | `src-tauri/src/services/transfer_service.rs` | P2 | 9 | 0/4/15 | ⚪ Pending | — | — |
 | `src-tauri/src/services/settings_service.rs` | P2 | 4 | 0/2/5 | ⚪ Pending | — | — |
 | `src-tauri/src/services/sync_engine/mod.rs` | P2 | 22 | 0/2/41 | ⚪ Pending | — | — |
@@ -91,7 +91,7 @@
 | `src-tauri/src/services/post_service/mod.rs` | P2 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/services/post_service/outbox.rs` | P2 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/services/sync_engine/admin.rs` | P2 | 0 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/sync_client/mod.rs` | P2 | 0 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/sync_client/mod.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
 | `src-tauri/src/sync_zip.rs` | P2 | 3 | 0/0/1 | ⚪ Pending | — | — |
 | `src/components/profile/__tests__/QuickContactModal.test.tsx` | P2 | 5 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/settings/__tests__/AutoSyncSummaryCard.test.tsx` | P2 | 1 | 0/0/0 | ⚪ Pending | — | — |
