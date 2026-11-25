@@ -332,28 +332,22 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
 /// Lightweight parser using `split_once()` — no regex crate needed.
 /// Extracts values from patterns like "... Expected: 100, Found: 50"
 fn extract_expected_found(msg: &str) -> Option<(String, String)> {
-    let expected_part = msg.split_once("Expected: ")?.1;
-    let expected = expected_part.split(',').next()?.trim().to_string();
-
-    let found_part = msg.split_once("Found: ")?.1;
-    let found = found_part
-        .trim_matches(|c: char| c == '.' || c == ' ')
-        .to_string();
-
-    Some((expected, found))
+    extract_two_labeled_values(msg, "Expected:", "Found:")
 }
 
-/// Generic parser for two labeled values: "... Label1: X ... Label2: Y"
+/// Generic parser for two labeled values: "... Label1: X ... Label2: Y" regardless of order.
 fn extract_two_labeled_values(msg: &str, label1: &str, label2: &str) -> Option<(String, String)> {
-    let val1_part = msg.split_once(label1)?.1;
-    let val1 = val1_part.split(',').next()?.trim().to_string();
+    let extract = |label: &str| -> Option<String> {
+        let part = msg.split_once(label)?.1;
+        Some(
+            part.split(',')
+                .next()?
+                .trim_matches(|c: char| c == '.' || c == ' ')
+                .to_string(),
+        )
+    };
 
-    let val2_part = msg.split_once(label2)?.1;
-    let val2 = val2_part
-        .trim_matches(|c: char| c == '.' || c == ' ')
-        .to_string();
-
-    Some((val1, val2))
+    Some((extract(label1)?, extract(label2)?))
 }
 
 #[cfg(test)]
