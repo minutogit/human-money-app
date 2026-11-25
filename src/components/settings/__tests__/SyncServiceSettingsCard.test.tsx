@@ -1,5 +1,4 @@
-/* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SyncServiceSettingsCard, normalizeSyncUrlInput } from '../SyncServiceSettingsCard';
 import { marketService } from '../../../services/marketService';
@@ -8,26 +7,33 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { copyToClipboard } from '../../../utils/clipboard';
-import { AppConfigDto, FrontendSyncAdminStatus } from '../../../types';
+import { SYNC_STATUS_UPDATED_EVENT } from '../../../utils/syncEvents';
+import {
+    AppConfigDto,
+    FrontendDiscoveredSync,
+    FrontendPublicSyncInfo,
+    FrontendSyncAdminStatus,
+    FrontendSyncDescriptor,
+} from '../../../types';
 
-vi.mock('react-i18next', () => {
-    const fs = require('fs');
-    const path = require('path');
-    const enPath = path.resolve(process.cwd(), 'src/locales/en.json');
-    let enTranslations = {};
-    try {
-        enTranslations = JSON.parse(fs.readFileSync(enPath, 'utf-8'));
-    } catch (err) {
-        console.error(err);
-    }
-
-    const stableT = (key: string, options?: any) => {
-        let val = (enTranslations as Record<string, string>)[key] || (typeof options === 'string' ? options : key);
-        if (options && typeof options === 'object') {
-            if (options.defaultValue) {
-                val = (enTranslations as Record<string, string>)[key] || options.defaultValue;
-            }
-            for (const [k, v] of Object.entries(options)) {
+vi.mock('react-i18next', async () => {
+    const { default: enTranslations } = await import('../../../locales/en.json');
+    const translations = enTranslations as Record<string, string>;
+    const stableT = (
+        key: string,
+        defaultOrOptions?: string | Record<string, unknown>,
+        options?: Record<string, unknown>,
+    ) => {
+        const opts = typeof defaultOrOptions === 'object' ? defaultOrOptions : options;
+        let val =
+            translations[key] ||
+            (typeof defaultOrOptions === 'string'
+                ? defaultOrOptions
+                : opts && typeof opts.defaultValue === 'string'
+                  ? opts.defaultValue
+                  : key);
+        if (opts) {
+            for (const [k, v] of Object.entries(opts)) {
                 val = val.replace(new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, 'g'), String(v));
             }
         }
@@ -80,7 +86,7 @@ vi.mock('../../../services/settingsService', () => ({
     },
 }));
 
-const mockProtectAction = vi.fn(async (cb: (pw: string) => Promise<any>) => cb('mock-wallet-pw'));
+const mockProtectAction = vi.fn(async <T,>(cb: (pw: string) => Promise<T>) => cb('mock-wallet-pw'));
 
 vi.mock('../../../context/SessionContext', () => ({
     useSession: () => ({
@@ -178,14 +184,15 @@ describe('SyncServiceSettingsCard Component', () => {
     });
 
     it('probes a public sync drop URL and adds it to publicSyncs', async () => {
-        vi.mocked(marketService.probePublicSync).mockResolvedValue({
+        const probeInfo: FrontendPublicSyncInfo = {
             writeUrl: 'https://test-drop.org/sync.php',
             readUrl: 'https://test-drop.org/sync.php',
             dropPub: 'test-pubkey',
-            isAuthorized: true,
+            accessPubkey: 'test-access-pubkey',
             authorizedChannels: ['mailbox', 'market', 'backup'],
-        } as any);
-        vi.mocked(marketService.savePublicSync).mockResolvedValue(undefined as any);
+        };
+        vi.mocked(marketService.probePublicSync).mockResolvedValue(probeInfo);
+        vi.mocked(marketService.savePublicSync).mockResolvedValue(probeInfo);
 
         render(
             <SyncServiceSettingsCard
@@ -719,10 +726,12 @@ describe('SyncServiceSettingsCard Component', () => {
             },
         ];
         vi.mocked(settingsService.getConfig).mockResolvedValue(publicConfig);
-        vi.mocked(marketService.removePublicSync).mockRejectedValue({
+        const remoteErr = {
             code: 'error.sync.remoteDeleteFailed',
             message: 'Remote cleanup HTTP 500',
-        });
+            details: { error: 'Remote cleanup HTTP 500' },
+        };
+        vi.mocked(marketService.removePublicSync).mockRejectedValue(remoteErr);
 
         render(
             <SyncServiceSettingsCard
@@ -747,8 +756,19 @@ describe('SyncServiceSettingsCard Component', () => {
         });
 
         const errBanner = await within(dialog).findByTestId('public-sync-delete-error');
-        expect(errBanner).toBeInTheDocument();
+        expect(errBanner).toHaveTextContent(
+            'Remote sync deletion failed; local sync settings were preserved: Remote cleanup HTTP 500'
+        );
         expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+        fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/i }));
+        await waitFor(() => {
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+        const reopenedDialog = await screen.findByRole('dialog');
+        expect(within(reopenedDialog).queryByTestId('public-sync-delete-error')).not.toBeInTheDocument();
     });
 
     it('S11-F1: renders camelCase SyncRevocationNotice fields on host admin panel', async () => {
@@ -804,22 +824,28 @@ describe('SyncServiceSettingsCard Component', () => {
     });
 
     it('probes contact syncs at most once on mount even when discovered drops are unverified', async () => {
-        vi.mocked(marketService.discoverAvailableSyncs).mockResolvedValue([
-            {
-                descriptor: {
-                    readUrl: 'https://friend.example/data',
-                    writeUrl: 'https://friend.example/sync.php',
-                    dropPub: 'c'.repeat(64),
-                    status: 'unverified',
-                    failCount: 0,
-                },
+        const unverifiedDrop: FrontendDiscoveredSync = {
+            descriptor: {
+                readUrl: 'https://friend.example/data',
+                writeUrl: 'https://friend.example/sync.php',
+                dropPub: 'c'.repeat(64),
                 status: 'unverified',
-                contactName: 'Bob',
-                contactDid: 'did:key:z6MkBob',
-                isSelected: false,
-                isAuthorized: false,
-            } as any,
-        ]);
+                failCount: 0,
+            },
+            status: 'unverified',
+            sourceLabel: 'Bob',
+            isSelected: false,
+            isAuthorized: false,
+        };
+        vi.mocked(marketService.discoverAvailableSyncs).mockResolvedValue([unverifiedDrop]);
+
+        let resolveProbe!: (val: FrontendSyncDescriptor[]) => void;
+        vi.mocked(marketService.probeContactSyncs).mockImplementationOnce(
+            () =>
+                new Promise((resolve) => {
+                    resolveProbe = resolve;
+                })
+        );
 
         render(
             <SyncServiceSettingsCard
@@ -831,8 +857,91 @@ describe('SyncServiceSettingsCard Component', () => {
         await waitFor(() => {
             expect(marketService.probeContactSyncs).toHaveBeenCalledTimes(1);
         });
-        // Give any secondary effects a tick to run and assert no duplicate call occurred.
-        await new Promise((r) => setTimeout(r, 20));
+
+        // A sync-status update event while probe is in-flight reloads discovery
+        // without triggering a duplicate probeContactSyncs call.
+        act(() => {
+            window.dispatchEvent(new CustomEvent(SYNC_STATUS_UPDATED_EVENT));
+        });
+
+        await waitFor(() => {
+            expect(marketService.discoverAvailableSyncs).toHaveBeenCalledTimes(2);
+        });
         expect(marketService.probeContactSyncs).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+            resolveProbe([]);
+        });
+
+        expect(marketService.probeContactSyncs).toHaveBeenCalledTimes(1);
+    });
+
+    it('saves unauthorized public sync drop with enabled=false and shows unauthorized status', async () => {
+        const unauthInfo: FrontendPublicSyncInfo = {
+            writeUrl: 'https://unauth.example/sync.php',
+            readUrl: 'https://unauth.example/data',
+            dropPub: 'pk-unauth',
+            accessPubkey: 'ak-unauth',
+            authorizedChannels: [],
+        };
+        vi.mocked(marketService.probePublicSync).mockResolvedValue(unauthInfo);
+        vi.mocked(marketService.savePublicSync).mockResolvedValue(unauthInfo);
+
+        render(
+            <SyncServiceSettingsCard
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
+            />
+        );
+
+        fireEvent.change(screen.getByPlaceholderText(/https:\/\//i), {
+            target: { value: 'https://unauth.example/sync.php' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: /Verbinden & Prüfen|Connect & Probe/i }));
+
+        await waitFor(() => {
+            expect(marketService.savePublicSync).toHaveBeenCalledWith(
+                {
+                    writeUrl: 'https://unauth.example/sync.php',
+                    readUrl: 'https://unauth.example/data',
+                    dropPub: 'pk-unauth',
+                    registerUrl: undefined,
+                    enabled: false,
+                },
+                'mock-wallet-pw'
+            );
+            expect(
+                screen.getByText(
+                    'Server reachable, but your key is not authorized yet. Ask the operator to set your contact to trusted.'
+                )
+            ).toBeInTheDocument();
+        });
+    });
+
+    it('reverts channel toggle and renders error feedback when patchUiPreferences rejects', async () => {
+        vi.mocked(settingsService.patchUiPreferences).mockRejectedValueOnce({
+            code: 'error.auth.sessionTimeout',
+            message: 'raw session error',
+        });
+
+        render(
+            <SyncServiceSettingsCard
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
+            />
+        );
+
+        const mailboxToggle = screen.getByLabelText(/Postfach aktivieren|mailbox/i) as HTMLInputElement;
+        expect(mailboxToggle).toBeChecked();
+
+        fireEvent.click(mailboxToggle);
+
+        await waitFor(() => {
+            expect(mailboxToggle).toBeChecked();
+            expect(
+                screen.getByText('Session timed out. Please provide your password.')
+            ).toBeInTheDocument();
+        });
+        expect(screen.queryByText('raw session error')).not.toBeInTheDocument();
     });
 });

@@ -36,19 +36,20 @@ describe('QuickContactModal Component', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         localStorage.clear();
+        vi.mocked(writeFile).mockResolvedValue(undefined);
         vi.mocked(marketService.getMyMarketProfile).mockResolvedValue(
             null as unknown as Awaited<ReturnType<typeof marketService.getMyMarketProfile>>
         );
     });
 
     it('renders loading state initially and displays shortened ID in Simple mode and full DID in Expert mode', async () => {
-        vi.mocked(profileService.getMyQuickContact).mockResolvedValue({
-            did: 'did:key:z6MkpTHR8VNsBxYqzFoH1oMrY',
-            name: 'Alice Example',
-            syncUrls: ['https://sync1.example.org/sync.php'],
-            uri: 'humoco://contact?did=did%3Akey%3Az6MkpTHR8VNsBxYqzFoH1oMrY&name=Alice%20Example&sync=https%3A%2F%2Fsync1.example.org%2Fsync.php',
-            qrSvg: '<svg data-testid="qr-svg-mock"></svg>',
-        });
+        let resolveQuickContact!: (val: Awaited<ReturnType<typeof profileService.getMyQuickContact>>) => void;
+        vi.mocked(profileService.getMyQuickContact).mockImplementationOnce(
+            () =>
+                new Promise((resolve) => {
+                    resolveQuickContact = resolve;
+                })
+        );
 
         const { unmount } = render(
             <QuickContactModal
@@ -57,15 +58,35 @@ describe('QuickContactModal Component', () => {
             />
         );
 
+        expect(screen.getByText('Loading...')).toBeInTheDocument();
+
+        resolveQuickContact({
+            did: 'did:key:z6MkpTHR8VNsBxYqzFoH1oMrY',
+            name: 'Alice Example',
+            syncUrls: ['https://sync1.example.org/sync.php'],
+            uri: 'humoco://contact?did=did%3Akey%3Az6MkpTHR8VNsBxYqzFoH1oMrY&name=Alice%20Example&sync=https%3A%2F%2Fsync1.example.org%2Fsync.php',
+            qrSvg: '<svg data-testid="qr-svg-mock"></svg>',
+        });
+
         await waitFor(() => {
             expect(screen.getByText('Alice Example')).toBeInTheDocument();
         });
 
+        expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+        expect(screen.getByText('Sync available')).toBeInTheDocument();
         expect(screen.getByTestId('quick-contact-qr-svg')).toBeInTheDocument();
         expect(screen.getByText(/H1oMrY/)).toBeInTheDocument();
         expect(screen.queryByText(/did:key:z6MkpTHR8VNs/)).not.toBeInTheDocument();
         expect(screen.getByTestId('quick-contact-copy-button')).toBeInTheDocument();
         unmount();
+
+        vi.mocked(profileService.getMyQuickContact).mockResolvedValueOnce({
+            did: 'did:key:z6MkpTHR8VNsBxYqzFoH1oMrY',
+            name: 'Alice Example',
+            syncUrls: ['https://sync1.example.org/sync.php'],
+            uri: 'humoco://contact?did=did%3Akey%3Az6MkpTHR8VNsBxYqzFoH1oMrY&name=Alice%20Example&sync=https%3A%2F%2Fsync1.example.org%2Fsync.php',
+            qrSvg: '<svg data-testid="qr-svg-mock"></svg>',
+        });
 
         render(
             <UiModeProvider initialMode="expert">
@@ -200,8 +221,13 @@ describe('QuickContactModal Component', () => {
 
         await waitFor(() => {
             expect(save).toHaveBeenCalled();
-            expect(writeFile).toHaveBeenCalledWith('/tmp/charlie.hmcard', expect.anything());
+            expect(writeFile).toHaveBeenCalledTimes(1);
         });
+        const [writtenPath, writtenBytes] = vi.mocked(writeFile).mock.calls[0];
+        expect(writtenPath).toBe('/tmp/charlie.hmcard');
+        expect(Array.from(writtenBytes as Uint8Array)).toEqual(
+            Array.from(new TextEncoder().encode('{"signed":"wire"}'))
+        );
     });
 
     it('translates structured BackendError codes when loading quick contact fails', async () => {
@@ -223,5 +249,80 @@ describe('QuickContactModal Component', () => {
             ).toBeInTheDocument();
         });
         expect(screen.queryByText('raw session timeout backend text')).not.toBeInTheDocument();
+    });
+
+    it('does not load quick contact or render modal when isOpen is false', () => {
+        render(
+            <QuickContactModal
+                isOpen={false}
+                onClose={vi.fn()}
+            />
+        );
+
+        expect(profileService.getMyQuickContact).not.toHaveBeenCalled();
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('renders translated publishError and keeps card unpublished when setCardPublished fails', async () => {
+        vi.mocked(profileService.getMyQuickContact).mockResolvedValueOnce({
+            did: 'did:key:z6MkpTHR8VNsBxYqzFoH1oMrY',
+            name: 'Charlie',
+            syncUrls: [],
+            uri: 'humoco://contact?did=did%3Akey%3Az6MkpTHR8VNsBxYqzFoH1oMrY',
+            qrSvg: '<svg></svg>',
+        });
+        vi.mocked(marketService.getMyMarketProfile).mockResolvedValueOnce({
+            did: 'did:key:z6MkpTHR8VNsBxYqzFoH1oMrY',
+            published: false,
+            shareUri: undefined,
+            fileWire: undefined,
+            qrSvg: undefined,
+        } as unknown as Awaited<ReturnType<typeof marketService.getMyMarketProfile>>);
+        vi.mocked(marketService.setCardPublished).mockRejectedValueOnce({
+            code: 'error.auth.sessionTimeout',
+            message: 'raw publish timeout',
+        });
+
+        render(
+            <QuickContactModal
+                isOpen={true}
+                onClose={vi.fn()}
+            />
+        );
+
+        fireEvent.click(await screen.findByTestId('share-tab-card'));
+        const publishBtn = await screen.findByTestId('publish-card-in-share-btn');
+        fireEvent.click(publishBtn);
+
+        await waitFor(() => {
+            expect(
+                screen.getByText('Session timed out. Please provide your password.')
+            ).toBeInTheDocument();
+            expect(publishBtn).not.toBeDisabled();
+        });
+        expect(screen.queryByText('raw publish timeout')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('share-card-save-file-button')).not.toBeInTheDocument();
+    });
+
+    it('omits Sync available badge when syncUrls is empty', async () => {
+        vi.mocked(profileService.getMyQuickContact).mockResolvedValueOnce({
+            did: 'did:key:z6MkpTHR8VNsBxYqzFoH1oMrY',
+            name: 'Offline Alice',
+            syncUrls: [],
+            uri: 'humoco://contact?did=did%3Akey%3Az6MkpTHR8VNsBxYqzFoH1oMrY',
+            qrSvg: '<svg></svg>',
+        });
+
+        render(
+            <QuickContactModal
+                isOpen={true}
+                onClose={vi.fn()}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Offline Alice')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('Sync available')).not.toBeInTheDocument();
     });
 });

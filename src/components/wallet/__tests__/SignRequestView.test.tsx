@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { SignRequestView } from '../SignRequestView';
 import { invoke } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
 import { VoucherDetails, VoucherStandardInfo, AppConfigDto, SignatureImpact } from '../../../types';
 
 // Mock the Tauri API
@@ -44,6 +45,7 @@ vi.mock('../../../context/SessionContext', () => ({
 vi.mock('../../../services/postService', () => ({
   postService: {
     replyDetachedSignatureViaPost: vi.fn(),
+    dismissPendingPostItem: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -277,6 +279,19 @@ uuid = "minuto-uuid-123"`,
     fireEvent.click(signButton);
 
     await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('create_detached_signature_response_bundle', {
+        voucher: mockVoucherDetails.voucher,
+        role: 'guarantor',
+        includeDetails: true,
+        config: { type: 'TargetDid', value: ['did:key:z123', 'TrialDecryption'] },
+        password: 'test-password',
+        anchorManifestJson: null,
+        anchorDelegationsJson: null,
+      });
+      expect(writeFile).toHaveBeenCalledWith(
+        '/tmp/signature-voucher-.sig',
+        new Uint8Array([1, 2, 3, 4]),
+      );
       expect(screen.getAllByText(/Signature \(\.sig\) Saved!/i).length).toBeGreaterThan(0);
       expect(screen.getByText('/tmp/signature-voucher-.sig')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument();
@@ -353,8 +368,17 @@ uuid = "minuto-uuid-123"`,
     fireEvent.click(signButton);
 
     await waitFor(() => {
-      // Must fall back to file save
+      // Must fall back to file save and dismiss the pending request item
       expect(save).toHaveBeenCalled();
+      expect(writeFile).toHaveBeenCalledWith(
+        '/tmp/signature-fallback.sig',
+        new Uint8Array([1, 2, 3, 4]),
+      );
+      expect(postService.dismissPendingPostItem).toHaveBeenCalledWith(
+        'sign_request',
+        'msg-req-123',
+        'test-password',
+      );
       expect(screen.getAllByText(/Signature \(\.sig\) Saved!/i).length).toBeGreaterThan(0);
       expect(screen.getByText('/tmp/signature-fallback.sig')).toBeInTheDocument();
     });
@@ -540,5 +564,159 @@ uuid = "minuto-uuid-123"`,
         })
       );
     });
+  });
+
+  it('disables Sign Now when signature impact reports disallowed role or fatal conflicts', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'evaluate_signature_suitability') {
+        return Promise.resolve({
+          isAllowedRole: false,
+          fatalConflicts: ['Creator cannot co-sign'],
+          resolvedRules: [],
+          gentleHints: [],
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<SignRequestView voucherData={mockVoucherDetails} onBack={mockOnBack} />);
+
+    expect(
+      await screen.findByText('Standard Violation: The specified role is not authorized for this asset.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Creator cannot co-sign')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Sign Now/i })).toBeDisabled();
+  });
+
+  it('auto-discovers anchor manifest when voucher has layer2Anchor without inline manifest', async () => {
+    const discoveredManifest = JSON.stringify({ revision: 1 });
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'discover_anchor_manifest_cmd') {
+        return Promise.resolve({ manifestJson: discoveredManifest });
+      }
+      if (cmd === 'evaluate_guarantor_anchor_check') {
+        return Promise.resolve({
+          required: true,
+          passed: true,
+          hasLayer2Anchor: true,
+          retentionOk: true,
+          sybilIndependentCount: 1,
+          threshold: 1,
+          serverCount: 1,
+          untrustedServersCount: 0,
+          servers: [],
+          issues: [],
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(
+      <SignRequestView
+        voucherData={{
+          ...mockVoucherDetails,
+          voucher: {
+            ...mockVoucherDetails.voucher,
+            layer2Anchor: 'aa'.repeat(32),
+          },
+        }}
+        onBack={mockOnBack}
+      />
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'evaluate_guarantor_anchor_check',
+        expect.objectContaining({
+          manifestJson: discoveredManifest,
+        })
+      );
+    });
+  });
+
+  it('blocks guarantor signing when standard is missing for an L2-anchored voucher', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_voucher_standards') {
+        return Promise.resolve([]);
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(
+      <SignRequestView
+        voucherData={{
+          ...mockVoucherDetails,
+          voucher: {
+            ...mockVoucherDetails.voucher,
+            layer2Anchor: 'aa'.repeat(32),
+          },
+        }}
+        onBack={mockOnBack}
+      />
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('get_voucher_standards');
+    });
+    expect(screen.getByRole('button', { name: /Sign Now/i })).toBeDisabled();
+  });
+
+  it('does not sign and renders translated error when set_lock_server_trust fails in trust-and-sign flow', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'evaluate_guarantor_anchor_check') {
+        return Promise.resolve({
+          required: true,
+          passed: true,
+          hasLayer2Anchor: true,
+          retentionOk: true,
+          sybilIndependentCount: 2,
+          threshold: 2,
+          serverCount: 2,
+          untrustedServersCount: 1,
+          servers: [
+            {
+              lockPub: '11'.repeat(32),
+              adminPub: 'aa'.repeat(32),
+              writeUrl: 'https://s1.example/sync.php',
+              trusted: true,
+            },
+            {
+              lockPub: '22'.repeat(32),
+              adminPub: 'bb'.repeat(32),
+              writeUrl: 'https://s2.example/sync.php',
+              trusted: false,
+            },
+          ],
+          issues: [],
+        });
+      }
+      if (cmd === 'set_lock_server_trust') {
+        return Promise.reject({
+          code: 'error.auth.sessionTimeout',
+          message: 'raw trust error',
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<SignRequestView voucherData={mockVoucherDetails} onBack={mockOnBack} />);
+
+    const trustBtn = await screen.findByRole('button', { name: /Trust these services & sign/i });
+    fireEvent.click(trustBtn);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Session timed out. Please provide your password.')
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByText('raw trust error')).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith(
+      'create_detached_signature_response_bundle',
+      expect.anything()
+    );
   });
 });

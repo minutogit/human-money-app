@@ -8,6 +8,8 @@ import { settingsService } from '../../../services/settingsService';
 import { transferService } from '../../../services/transferService';
 import { contactService } from '../../../services/contactService';
 import { marketService } from '../../../services/marketService';
+import { recoveryService } from '../../../services/recoveryService';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { AggregatedBalance, VoucherSummary, AppConfigDto, IntegrityReport } from '../../../types';
 
 vi.mock('../../../services/profileService');
@@ -16,6 +18,7 @@ vi.mock('../../../services/settingsService');
 vi.mock('../../../services/transferService');
 vi.mock('../../../services/contactService');
 vi.mock('../../../services/marketService');
+vi.mock('../../../services/recoveryService');
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
     writeText: vi.fn(),
 }));
@@ -134,6 +137,8 @@ describe('Dashboard Component', () => {
         vi.clearAllMocks();
         localStorage.clear();
         mockIntegrityReport = null;
+        vi.mocked(writeText).mockResolvedValue(undefined);
+        vi.mocked(recoveryService.getRecoveryProtectionStatus).mockResolvedValue(null as never);
         vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
             connectedCount: 0,
             pendingCount: 0,
@@ -216,7 +221,11 @@ describe('Dashboard Component', () => {
             expect(screen.getByText(/dashboard\.breakdownReceived/i)).toBeInTheDocument();
             expect(screen.getByText(/dashboard\.breakdownOwnAvailable/i)).toBeInTheDocument();
             expect(screen.getByText(/dashboard\.breakdownOwnCirculating/i)).toBeInTheDocument();
+            expect(screen.getByText(/\+0[.,]00/)).toBeInTheDocument();
+            expect(screen.getByText(/\+700[.,]00/)).toBeInTheDocument();
+            expect(screen.getAllByText(/-300[.,]00/)).toHaveLength(2);
         });
+        expect(mockNavigate).not.toHaveBeenCalled();
     });
 
     it('displays expiring soon warning banner and navigates to wallet with filter', async () => {
@@ -229,14 +238,12 @@ describe('Dashboard Component', () => {
         const bannerText = screen.getByText('dashboard.expiringSoonTitle:1');
         const bannerCard = bannerText.closest('.cursor-pointer');
         expect(bannerCard).not.toBeNull();
-        if (bannerCard) {
-            fireEvent.click(bannerCard);
-            expect(mockNavigate).toHaveBeenCalledWith({
-                view: 'wallet',
-                initialStatusFilter: 'active',
-                initialFilter: 'expiringSoon',
-            });
-        }
+        fireEvent.click(bannerCard as HTMLElement);
+        expect(mockNavigate).toHaveBeenCalledWith({
+            view: 'wallet',
+            initialStatusFilter: 'active',
+            initialFilter: 'expiringSoon',
+        });
     });
 
     it('provides copyable TechId in expert mode', async () => {
@@ -248,6 +255,11 @@ describe('Dashboard Component', () => {
         await waitFor(() => {
             expect(screen.getByTestId('tech-id-value')).toHaveTextContent('did:key:own');
             expect(screen.getByTestId('tech-id-copy')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('tech-id-copy'));
+        await waitFor(() => {
+            expect(writeText).toHaveBeenCalledWith('did:key:own');
         });
     });
 
@@ -355,5 +367,71 @@ describe('Dashboard Component', () => {
         const openWalletBtn = await screen.findByTestId('dashboard-open-wallet-btn');
         fireEvent.click(openWalletBtn);
         expect(mockNavigate).toHaveBeenCalledWith({ view: 'wallet' });
+    });
+
+    it('hides security warning card when integrityReport is null and maps invalidSignature report', async () => {
+        mockIntegrityReport = null;
+        const firstRender = render(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Minuto Standard')).toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('security-warning-card')).not.toBeInTheDocument();
+        firstRender.unmount();
+
+        mockIntegrityReport = { type: 'invalidSignature' };
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('security-warning-card')).toBeInTheDocument();
+        });
+        expect(screen.getByText('Ungültige Profil-Signatur erkannt')).toBeInTheDocument();
+    });
+
+    it('wires FirstStepsChecklist completion props and hides checklist when all setup steps are complete', async () => {
+        const firstRender = render(<Dashboard />);
+
+        expect(await screen.findByTestId('first-steps-checklist')).toBeInTheDocument();
+        firstRender.unmount();
+
+        vi.mocked(contactService.getContacts).mockResolvedValue([
+            { did: 'did:key:contact1', name: 'Bob', isFavorite: false } as never,
+        ]);
+        vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
+            connectedCount: 1,
+            pendingCount: 0,
+            friendSyncs: 1,
+            publicSyncs: 0,
+            hasOwnSync: false,
+            lastSyncAt: 1700000000,
+        });
+        vi.mocked(recoveryService.getRecoveryProtectionStatus).mockResolvedValue({
+            hasVoucher: true,
+            confirmedGuardiansCount: 0,
+            requiredThreshold: 0,
+            guardians: [],
+            emergencySheetConfirmedAt: 1700000000,
+            hasIdentityRecovery: true,
+            syncBackupCount: 1,
+            hasSyncBackup: true,
+            hasLocalBackup: true,
+            hasVoucherBackup: true,
+            guardianWards: [],
+            rehearsalDue: false,
+        });
+        vi.mocked(settingsService.getConfig).mockResolvedValue({
+            ...mockConfig,
+            lifecycle: {
+                ...mockConfig.lifecycle,
+                lastBackupAt: '2026-01-01T00:00:00Z',
+            },
+        });
+
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Minuto Standard')).toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('first-steps-checklist')).not.toBeInTheDocument();
     });
 });

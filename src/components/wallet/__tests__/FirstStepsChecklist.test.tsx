@@ -82,7 +82,7 @@ describe('FirstStepsChecklist Component', () => {
 
     it('is dismissed when clicking the X button and persists in localStorage', () => {
         const onDismiss = vi.fn();
-        const { rerender } = render(
+        const { unmount } = render(
             <FirstStepsChecklist 
                 hasBackup={false}
                 hasContact={false}
@@ -100,8 +100,9 @@ describe('FirstStepsChecklist Component', () => {
         expect(localStorage.getItem('humoco_first_steps_dismissed_did:key:user1')).toBe('true');
         expect(screen.queryByTestId('first-steps-checklist')).not.toBeInTheDocument();
 
-        // On remount / rerender, remains hidden
-        rerender(
+        // On fresh mount, useState initializer reads localStorage and keeps checklist hidden
+        unmount();
+        render(
             <FirstStepsChecklist 
                 hasBackup={false}
                 hasContact={false}
@@ -125,5 +126,81 @@ describe('FirstStepsChecklist Component', () => {
         );
 
         expect(screen.queryByTestId('first-steps-checklist')).not.toBeInTheDocument();
+    });
+
+    it('keeps backup step incomplete when hasIdentityRecovery is false and routes click to security section', () => {
+        render(
+            <FirstStepsChecklist
+                hasBackup={true}
+                hasContact={true}
+                hasVoucher={true}
+                hasSync={true}
+                hasIdentityRecovery={false}
+                userId="did:key:user1"
+            />
+        );
+
+        expect(screen.getByTestId('first-steps-checklist')).toBeInTheDocument();
+        expect(screen.getByText('3 von 4 erledigt')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByTestId('checklist-step-backup'));
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'settings', initialSection: 'security' });
+    });
+
+    it('isolates dismissal state per userId and falls back to profileScope', () => {
+        const first = render(
+            <FirstStepsChecklist
+                hasBackup={false}
+                hasContact={false}
+                hasVoucher={false}
+                hasSync={false}
+                userId="did:key:user1"
+            />
+        );
+        fireEvent.click(screen.getByTestId('dismiss-checklist-button'));
+        expect(screen.queryByTestId('first-steps-checklist')).not.toBeInTheDocument();
+        first.unmount();
+
+        const second = render(
+            <FirstStepsChecklist
+                hasBackup={false}
+                hasContact={false}
+                hasVoucher={false}
+                hasSync={false}
+                userId="did:key:user2"
+            />
+        );
+        expect(screen.getByTestId('first-steps-checklist')).toBeInTheDocument();
+        second.unmount();
+
+        render(
+            <FirstStepsChecklist
+                hasBackup={false}
+                hasContact={false}
+                hasVoucher={false}
+                hasSync={false}
+                profileScope="profile-a"
+            />
+        );
+        fireEvent.click(screen.getByTestId('dismiss-checklist-button'));
+        expect(localStorage.getItem('humoco_first_steps_dismissed_profile-a')).toBe('true');
+    });
+
+    it('activates checklist steps via Enter and Space keys', () => {
+        render(
+            <FirstStepsChecklist
+                hasBackup={false}
+                hasContact={false}
+                hasVoucher={false}
+                hasSync={false}
+                userId="did:key:user1"
+            />
+        );
+
+        fireEvent.keyDown(screen.getByTestId('checklist-step-contact'), { key: 'Enter' });
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'address_book' });
+
+        fireEvent.keyDown(screen.getByTestId('checklist-step-sync'), { key: ' ' });
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'settings', initialSection: 'sync' });
     });
 });
