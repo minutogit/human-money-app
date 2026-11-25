@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `c4bc457`
-- **Total Test Files:** 165 | **Total Test Functions:** 1404
+- **Updated at HEAD:** `1ab2edd`
+- **Total Test Files:** 165 | **Total Test Functions:** 1421
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -66,15 +66,15 @@
 | `src/locales/__tests__/i18nIntegrity.test.ts` | P1 | 4 | 0/0/0 | 🟢 Verified | `9c2354c` | `vitest 4/4 (752/752 pass); removed silent typeof skips & weak asserts; Revert-Red de.json missing anchorIssue key` |
 | `src/utils/__tests__/signatureHints.test.ts` | P1 | 15 | 0/0/0 | 🟢 Verified | `cc02db3` | `vitest 15/15 pass; removed eslint-disable/any, covered 2-field and, whitespace/address, deduplication, ISO-5218 rules & gentle hints; Revert-Red signatureHints genderBalanceMale` |
 | `src-tauri/src/sync_client/tests.rs` | P2 | 34 | 0/0/0 | 🟢 Verified | `c4bc457` | `34/34 pass (385/385 lib); Fail-First RED->GREEN revocation vk.is_weak(); cargo mutants revocation.rs 21/21 viable caught (1 unviable) + ssrf.rs 8/8 viable caught (1 unviable)` |
-| `src-tauri/src/commands/vouchers.rs` | P2 | 6 | 1/2/13 | ⚪ Pending | — | — |
-| `src-tauri/src/services/sync_engine/channel_reader.rs` | P2 | 5 | 1/0/14 | ⚪ Pending | — | — |
+| `src-tauri/src/commands/vouchers.rs` | P2 | 11 | 0/0/0 | 🟢 Verified | `1ab2edd` | `11/11 pass (402/402 lib); split 5 mega-tests, removed outer-JSON if-let-Ok skip, bare is_err/is_some & TempDir discards, added edge/locked-fallback checks; cargo mutants open_voucher_signing_request_impl 7/7, resolve_manifest_candidate 5/5 & evaluate_guarantor_anchor_check_with_service 23/23 caught (35/35 total)` |
+| `src-tauri/src/services/sync_engine/channel_reader.rs` | P2 | 11 | 0/0/0 | 🟢 Verified | `1ab2edd` | `11/11 pass (402/402 lib); Fail-First RED->GREEN Commit 1 e0a9a11 sticky revocation & disabled revoked public_sync; removed accept if-let-Ok, split mega-tests & checked HTTP mocks; cargo mutants apply_revocation_notice 2/2 & channel_reader targets 22/22 viable caught (1 unviable)` |
 | `src/components/wallet/__tests__/Dashboard.test.tsx` | P2 | 9 | 1/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/commands/contacts.rs` | P2 | 8 | 0/0/0 | 🟢 Verified | `c4bc457` | `8/8 pass; hardened roundtrip, get_cached_contacts & exact descriptor validation errors + DID norm & delete tests; cargo mutants validate_contact_sync_descriptor(s) 7/7 caught` |
 | `src-tauri/src/services/fs_helpers.rs` | P2 | 8 | 0/0/0 | 🟢 Verified | `c4bc457` | `8/8 pass; Fail-First RED->GREEN collect_custom_standards_from_dir symlinks/1MiB guard, RAII TempDirGuard & exact errors; cargo mutants 15/17 caught (+2 equiv is_symlink||!is_dir)` |
 | `src-tauri/src/services/post_service/tests.rs` | P2 | 27 | 0/5/40 | ⚪ Pending | — | — |
 | `src-tauri/src/services/sync_endpoints.rs` | P2 | 6 | 0/0/0 | 🟢 Verified | `c4bc457` | `6/6 pass; split into focused unit tests with exact errors & single-field/overlap/sanitize boundary checks; cargo mutants 58/63 + recheck 25/25 caught (63/63 total)` |
 | `src-tauri/src/services/transfer_service.rs` | P2 | 9 | 0/4/15 | ⚪ Pending | — | — |
-| `src-tauri/src/services/settings_service.rs` | P2 | 4 | 0/2/5 | ⚪ Pending | — | — |
+| `src-tauri/src/services/settings_service.rs` | P2 | 10 | 0/0/0 | 🟢 Verified | `1ab2edd` | `10/10 pass (402/402 lib); split 2 mega-tests, TempDirGuard, exact preset/fault errors, wake parity incl. wifi-unlock & DailyPay/Full/conflict override gates; cargo mutants presets 13/13, patch_ui_preferences_impl 18/18 & patch_security_policy_impl 22/22 caught (53/53 total)` |
 | `src-tauri/src/services/sync_engine/mod.rs` | P2 | 22 | 0/2/41 | ⚪ Pending | — | — |
 | `src-tauri/src/commands/utils.rs` | P2 | 2 | 0/1/2 | ⚪ Pending | — | — |
 | `src-tauri/src/services/preflight.rs` | P2 | 2 | 0/1/7 | ⚪ Pending | — | — |
