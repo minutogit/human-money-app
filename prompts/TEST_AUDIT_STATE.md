@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `95bf67b`
-- **Total Test Files:** 165 | **Total Test Functions:** 1478
+- **Updated at HEAD:** `feada67`
+- **Total Test Files:** 165 | **Total Test Functions:** 1483
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -73,11 +73,11 @@
 | `src-tauri/src/services/fs_helpers.rs` | P2 | 8 | 0/0/0 | 🟢 Verified | `c4bc457` | `8/8 pass; Fail-First RED->GREEN collect_custom_standards_from_dir symlinks/1MiB guard, RAII TempDirGuard & exact errors; cargo mutants 15/17 caught (+2 equiv is_symlink||!is_dir)` |
 | `src-tauri/src/services/post_service/tests.rs` | P2 | 33 | 0/0/0 | 🟢 Verified | `95bf67b` | `33/33 pass (410/410 lib, clippy clean); replaced 5 .is_err() w/ BundleAlreadyProcessed/KnownOffenderTransactionBlocked/exact FrontendError msgs, fixed bare is_some & TempDir/call discards, split/refactored 15 mega-tests & added time-window/tombstone unit test; cargo mutants mod.rs helpers 15/15 (+9 unrelated delete field) & outbox verify_outgoing_post_container 4/4 (+2 unrelated delete field) caught` |
 | `src-tauri/src/services/sync_endpoints.rs` | P2 | 6 | 0/0/0 | 🟢 Verified | `c4bc457` | `6/6 pass; split into focused unit tests with exact errors & single-field/overlap/sanitize boundary checks; cargo mutants 58/63 + recheck 25/25 caught (63/63 total)` |
-| `src-tauri/src/services/transfer_service.rs` | P2 | 9 | 0/4/15 | ⚪ Pending | — | — |
+| `src-tauri/src/services/transfer_service.rs` | P2 | 11 | 0/0/0 | 🟢 Verified | `feada67` | `scan 0/0/0/0`, `11/11` tests + `415/415` lib, `clippy` clean, `cargo mutants` `14/14` viable caught |
 | `src-tauri/src/services/settings_service.rs` | P2 | 10 | 0/0/0 | 🟢 Verified | `1ab2edd` | `10/10 pass (402/402 lib); split 2 mega-tests, TempDirGuard, exact preset/fault errors, wake parity incl. wifi-unlock & DailyPay/Full/conflict override gates; cargo mutants presets 13/13, patch_ui_preferences_impl 18/18 & patch_security_policy_impl 22/22 caught (53/53 total)` |
 | `src-tauri/src/services/sync_engine/mod.rs` | P2 | 22 | 0/2/41 | ⚪ Pending | — | — |
-| `src-tauri/src/commands/utils.rs` | P2 | 2 | 0/1/2 | ⚪ Pending | — | — |
-| `src-tauri/src/services/preflight.rs` | P2 | 2 | 0/1/7 | ⚪ Pending | — | — |
+| `src-tauri/src/commands/utils.rs` | P2 | 3 | 0/0/0 | 🟢 Verified | `feada67` | `scan 0/0/0/0`, `3/3` tests + `415/415` lib, `clippy` clean, `cargo mutants` `8/8` sanitize/peek/ack + `read_log_tail_bounded` (`6/7` recheck, `18+6` caught, `1` timeout) |
+| `src-tauri/src/services/preflight.rs` | P2 | 4 | 0/0/0 | 🟢 Verified | `feada67` | `scan 0/0/0/0`, `4/4` tests + `415/415` lib, `clippy` clean, `cargo mutants` `9/9` caught (`run_value_outflow_preflight`) |
 | `src-tauri/src/services/sync_coordinator.rs` | P2 | 5 | 0/1/3 | ⚪ Pending | — | — |
 | `src-tauri/src/services/sync_engine/card_sync.rs` | P2 | 4 | 0/1/6 | ⚪ Pending | — | — |
 | `src/components/settings/__tests__/SyncServiceSettingsCard.test.tsx` | P2 | 18 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 18/18 (906 full pass); replaced setTimeout(20) w/ deferred probe + SYNC_STATUS_UPDATED_EVENT dedup, removed eslint-disable/require/any, tested unauthorized enabled=false & toggle rollback; Revert-Red useSyncServiceAdmin enabled=hasAuth` |
