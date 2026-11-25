@@ -64,26 +64,66 @@ describe('useCopyFeedback', () => {
     });
 
     it('clears pending reset timers cleanly on unmount and manual reset()', async () => {
-        const { result, unmount } = renderHook(() => useCopyFeedback(2000));
+        const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+        try {
+            const { result, unmount } = renderHook(() => useCopyFeedback(2000));
+
+            await act(async () => {
+                await result.current.copyText('abc');
+            });
+            expect(result.current.copied).toBe(true);
+
+            const callsBeforeReset = clearSpy.mock.calls.length;
+            act(() => {
+                result.current.reset();
+            });
+            expect(result.current.copied).toBe(false);
+            expect(clearSpy.mock.calls.length).toBeGreaterThan(callsBeforeReset);
+
+            await act(async () => {
+                await result.current.copyText('def');
+            });
+            expect(result.current.copied).toBe(true);
+
+            const callsBeforeUnmount = clearSpy.mock.calls.length;
+            unmount();
+            expect(clearSpy.mock.calls.length).toBeGreaterThan(callsBeforeUnmount);
+
+            act(() => {
+                vi.advanceTimersByTime(5000);
+            });
+        } finally {
+            clearSpy.mockRestore();
+        }
+    });
+
+    it('replaces prior reset timer when copyText is called consecutively with object options', async () => {
+        const { result } = renderHook(() => useCopyFeedback({ resetDelayMs: 2000 }));
 
         await act(async () => {
-            await result.current.copyText('abc');
+            await result.current.copyText('first');
         });
         expect(result.current.copied).toBe(true);
 
         act(() => {
-            result.current.reset();
+            vi.advanceTimersByTime(1200);
+        });
+        expect(result.current.copied).toBe(true);
+
+        await act(async () => {
+            await result.current.copyText('second');
+        });
+
+        // At t=2100ms (900ms after second copy, past first copy's 2000ms), copied must still be true
+        act(() => {
+            vi.advanceTimersByTime(900);
+        });
+        expect(result.current.copied).toBe(true);
+
+        // At t=3200ms (2000ms after second copy), copied resets to false
+        act(() => {
+            vi.advanceTimersByTime(1100);
         });
         expect(result.current.copied).toBe(false);
-
-        await act(async () => {
-            await result.current.copyText('def');
-        });
-        expect(result.current.copied).toBe(true);
-
-        unmount();
-        act(() => {
-            vi.advanceTimersByTime(5000);
-        });
     });
 });

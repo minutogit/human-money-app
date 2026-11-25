@@ -160,4 +160,49 @@ describe('useContactResolver', () => {
         expect(result.current.contacts).toEqual([]);
         expect(result.current.isKnownContact(alice.did)).toBe(false);
     });
+
+    it('recovers cleanly after a fetch rejection and refetches after TTL expiry', async () => {
+        const consoleErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+        try {
+            vi.mocked(contactService.getContacts)
+                .mockRejectedValueOnce(new Error('IPC down'))
+                .mockResolvedValueOnce([alice])
+                .mockResolvedValueOnce([alice, bob]);
+
+            const firstHook = renderHook(() => useContactResolver());
+            await waitFor(() => {
+                expect(firstHook.result.current.isLoading).toBe(false);
+            });
+            expect(firstHook.result.current.contacts).toEqual([]);
+            firstHook.unmount();
+
+            // Retry mounts must NOT stick to a rejected inFlightFetch promise
+            const secondHook = renderHook(() => useContactResolver());
+            await waitFor(() => {
+                expect(secondHook.result.current.isLoading).toBe(false);
+            });
+            expect(contactService.getContacts).toHaveBeenCalledTimes(2);
+            expect(secondHook.result.current.resolveIdentity(alice.did)).toBe('Alice Wonder');
+            secondHook.unmount();
+
+            // Within 2000ms TTL: uses cached snapshot
+            nowSpy.mockReturnValue(11_000);
+            const cachedHook = renderHook(() => useContactResolver());
+            expect(cachedHook.result.current.isLoading).toBe(false);
+            expect(contactService.getContacts).toHaveBeenCalledTimes(2);
+            cachedHook.unmount();
+
+            // After >= 2000ms TTL: triggers fresh IPC fetch
+            nowSpy.mockReturnValue(12_001);
+            const expiredHook = renderHook(() => useContactResolver());
+            await waitFor(() => {
+                expect(expiredHook.result.current.isKnownContact(bob.did)).toBe(true);
+            });
+            expect(contactService.getContacts).toHaveBeenCalledTimes(3);
+        } finally {
+            nowSpy.mockRestore();
+            consoleErrSpy.mockRestore();
+        }
+    });
 });

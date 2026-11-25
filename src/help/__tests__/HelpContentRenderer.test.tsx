@@ -49,5 +49,19 @@ describe('HelpContentRenderer', () => {
         expect(nodes[0]).toBe('Hello ');
         expect(nodes[2]).toBe(' and ');
         expect(nodes[4]).toBe(' world');
+
+        render(<div>{nodes}</div>);
+        expect(screen.getByText('A').tagName).toBe('STRONG');
+        expect(screen.getByText('B').tagName).toBe('STRONG');
+    });
+
+    it('renders raw HTML as literal text without script execution and leaves unclosed bold markers plain', () => {
+        const { container } = render(
+            <HelpContentRenderer content={'Unsafe <script>alert(1)</script> and **unclosed bold'} />
+        );
+
+        expect(container.querySelector('script')).toBeNull();
+        expect(container.querySelector('strong')).toBeNull();
+        expect(screen.getByText('Unsafe <script>alert(1)</script> and **unclosed bold')).toBeInTheDocument();
     });
 });

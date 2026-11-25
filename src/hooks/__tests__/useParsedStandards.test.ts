@@ -88,4 +88,59 @@ describe('useParsedStandards', () => {
         rerender({ items: standards });
         expect(result.current.parsedMap).toBe(initialMap);
     });
+
+    it('unescapes quoted TOML strings with hashtags and falls back safely on empty content', () => {
+        const quotedStd: VoucherStandardInfo = {
+            id: 'quoted_std',
+            displayName: 'Quoted Fallback Display',
+            content: [
+                'name = "Token #1 \\"Pro\\" \\\\ v1"',
+                "unit = 'Min#1'",
+                'privacy_mode = "flexible"',
+                'issuer_name = "Local Guild"',
+                'default_validity_duration = "P2Y"',
+                'malformed line without equals',
+            ].join('\n'),
+        };
+        const emptyStd: VoucherStandardInfo = {
+            id: 'empty_std',
+            displayName: 'Empty Display Fallback',
+            content: '',
+        };
+
+        const parsedQuoted = parseStandardInfo(quotedStd);
+        expect(parsedQuoted.name).toBe('Token #1 "Pro" \\ v1');
+        expect(parsedQuoted.unit).toBe('Min#1');
+        expect(parsedQuoted.privacyMode).toBe('flexible');
+        expect(parsedQuoted.issuerName).toBe('Local Guild');
+        expect(parsedQuoted.defaultValidityDuration).toBe('P2Y');
+
+        const parsedEmpty = parseStandardInfo(emptyStd);
+        expect(parsedEmpty.decimalPlaces).toBe(4);
+        expect(parsedEmpty.uuid).toBeNull();
+        expect(parsedEmpty.name).toBeNull();
+        expect(parsedEmpty.allowPartialTransfers).toBeNull();
+
+        const { result } = renderHook(() => useParsedStandards([emptyStd]));
+        expect(result.current.getStandardName('empty_std')).toBe('Empty Display Fallback');
+    });
+
+    it('isolates TOML sections so unrelated sections cannot override identity or features fields', () => {
+        const sectionedStd: VoucherStandardInfo = {
+            id: 'isolated_std',
+            displayName: 'Isolated Standard',
+            content: [
+                '[immutable.identity]',
+                'name = "RealName"',
+                '',
+                '[other.section]',
+                'name = "SpoofedName"',
+                'amount_decimal_places = 9',
+            ].join('\n'),
+        };
+
+        const parsed = parseStandardInfo(sectionedStd);
+        expect(parsed.name).toBe('RealName');
+        expect(parsed.decimalPlaces).toBe(4);
+    });
 });

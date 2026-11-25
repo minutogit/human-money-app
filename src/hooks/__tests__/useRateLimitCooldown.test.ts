@@ -67,29 +67,32 @@ describe('useRateLimitCooldown & rateLimitManager', () => {
 
     it('does not re-subscribe on inline options changes and invokes the latest onCooldownEnd callback', () => {
         const subscribeSpy = vi.spyOn(rateLimitManager, 'subscribe');
-        const firstCb = vi.fn();
-        const secondCb = vi.fn();
+        try {
+            const firstCb = vi.fn();
+            const secondCb = vi.fn();
 
-        const { result, rerender } = renderHook(
-            ({ cb }: { cb: () => void }) => useRateLimitCooldown({ onCooldownEnd: cb }),
-            { initialProps: { cb: firstCb } }
-        );
+            const { result, rerender } = renderHook(
+                ({ cb }: { cb: () => void }) => useRateLimitCooldown({ onCooldownEnd: cb }),
+                { initialProps: { cb: firstCb } }
+            );
 
-        expect(subscribeSpy).toHaveBeenCalledTimes(1);
+            expect(subscribeSpy).toHaveBeenCalledTimes(1);
 
-        rerender({ cb: secondCb });
-        expect(subscribeSpy).toHaveBeenCalledTimes(1);
+            rerender({ cb: secondCb });
+            expect(subscribeSpy).toHaveBeenCalledTimes(1);
 
-        act(() => {
-            result.current.triggerCooldown(2);
-        });
-        act(() => {
-            vi.advanceTimersByTime(2000);
-        });
+            act(() => {
+                result.current.triggerCooldown(2);
+            });
+            act(() => {
+                vi.advanceTimersByTime(2000);
+            });
 
-        expect(firstCb).not.toHaveBeenCalled();
-        expect(secondCb).toHaveBeenCalledTimes(1);
-        subscribeSpy.mockRestore();
+            expect(firstCb).not.toHaveBeenCalled();
+            expect(secondCb).toHaveBeenCalledTimes(1);
+        } finally {
+            subscribeSpy.mockRestore();
+        }
     });
 
     it('avoids 1-second re-renders when trackCountdown is false while still updating isCoolingDown', () => {
@@ -196,5 +199,24 @@ describe('useRateLimitCooldown & rateLimitManager', () => {
         expect(rateLimitManager.extractRetryAfter('Retry-After: 120s')).toBe(120);
         expect(rateLimitManager.extractRetryAfter('Too Many Requests')).toBe(60);
         expect(rateLimitManager.extractRetryAfter('Rate limit exceeded')).toBe(60);
+    });
+
+    it('returns false for non-429 errors and unsubscribes callbacks cleanly on unmount', () => {
+        const onEnd = vi.fn();
+        const { result, unmount } = renderHook(() => useRateLimitCooldown({ onCooldownEnd: onEnd }));
+
+        let triggered = true;
+        act(() => {
+            triggered = result.current.checkAndTriggerCooldown('Connection refused');
+        });
+        expect(triggered).toBe(false);
+        expect(result.current.isCoolingDown).toBe(false);
+
+        unmount();
+        act(() => {
+            rateLimitManager.setCooldown(2);
+            vi.advanceTimersByTime(2000);
+        });
+        expect(onEnd).not.toHaveBeenCalled();
     });
 });
