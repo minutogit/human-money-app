@@ -1650,14 +1650,16 @@ fn handle_guardian_revoke(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::fs_helpers::TempDirGuard;
     use crate::state::RECOVERY_GUARDIAN_VAULT_KEY;
     use crate::test_support::{create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE};
 
     #[tokio::test]
     async fn test_corrupt_guardian_vault_returns_retry_later_and_preserves_bytes() {
-        let base_dir = temp_test_dir("handlers_corrupt_guardian_vault");
+        let base_dir_guard = TempDirGuard(temp_test_dir("handlers_corrupt_guardian_vault"));
+        let base_dir = &base_dir_guard.0;
         let password = "TestPassword123!";
-        let service = setup_test_app(&base_dir, "Alice", ALICE_PHRASE, password);
+        let service = setup_test_app(base_dir, "Alice", ALICE_PHRASE, password);
         let state = create_test_state(service);
 
         let (session, my_identity, sender_did) = {
@@ -1737,15 +1739,14 @@ mod tests {
             .unwrap()
         };
         assert_eq!(stored_raw, b"{corrupt-vault");
-
-        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[tokio::test]
     async fn h14_unknown_post_payload_records_unsupported_and_dismisses() {
-        let base_dir = temp_test_dir("h14_unsupported_payload");
+        let base_dir_guard = TempDirGuard(temp_test_dir("h14_unsupported_payload"));
+        let base_dir = &base_dir_guard.0;
         let password = "TestPassword123!";
-        let service = setup_test_app(&base_dir, "Alice", ALICE_PHRASE, password);
+        let service = setup_test_app(base_dir, "Alice", ALICE_PHRASE, password);
         let state = create_test_state(service);
 
         let (session, my_identity, sender_did) = {
@@ -1845,7 +1846,177 @@ mod tests {
         )
         .unwrap();
         assert!(after.unsupported_messages.is_empty());
+    }
 
-        let _ = std::fs::remove_dir_all(&base_dir);
+    #[test]
+    fn test_extract_payment_uri_recipient_enforces_scheme_pay_and_single_to() {
+        assert_eq!(
+            extract_payment_uri_recipient("humoco://pay?to=did:key:z1&amount=10"),
+            Some("did:key:z1".to_string())
+        );
+        assert_eq!(
+            extract_payment_uri_recipient("humoco:pay?to=did:key:z2"),
+            Some("did:key:z2".to_string())
+        );
+        assert_eq!(
+            extract_payment_uri_recipient("https://pay?to=did:key:z1"),
+            None
+        );
+        assert_eq!(
+            extract_payment_uri_recipient("humoco://send?to=did:key:z1"),
+            None
+        );
+        assert_eq!(
+            extract_payment_uri_recipient("humoco://pay?to=did:key:z1&to=did:key:z2"),
+            None
+        );
+        assert_eq!(extract_payment_uri_recipient("humoco://pay?to=%20"), None);
+        assert_eq!(
+            extract_payment_uri_recipient("humoco://pay?amount=5"),
+            None
+        );
+        assert_eq!(extract_payment_uri_recipient("not-a-uri"), None);
+    }
+
+    #[tokio::test]
+    async fn test_handle_guardian_revoke_rejects_mismatched_sender_and_revokes_matching_ward() {
+        let base_dir_guard = TempDirGuard(temp_test_dir("handlers_guardian_revoke"));
+        let password = "TestPassword123!";
+        let service = setup_test_app(&base_dir_guard.0, "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+        let bob_did = human_money_core::test_utils::ACTORS.bob.user_id.clone();
+        let bob_key = humoco_market::canonicalize_owner_account_id(&bob_did).unwrap();
+
+        let (session, my_identity, alice_did) = {
+            let mut s = state.service.lock().unwrap();
+            let session = state.session_token_for_service(&s).unwrap();
+            let mut vault = humoco_market::GuardianVaultStore::new();
+            vault.wards.insert(
+                bob_key.clone(),
+                humoco_market::GuardianVaultEntry {
+                    owner_did: bob_did.clone(),
+                    owner_display_name: "Bob".to_string(),
+                    rotation_epoch: 1,
+                    threshold_m: 2,
+                    total_n: 3,
+                    share: humoco_market::ShamirShare {
+                        index: 1,
+                        y: [5u8; 32],
+                    },
+                    share_commitments: Vec::new(),
+                    r_enc: Vec::new(),
+                    kdf_params: humoco_market::RecoveryKdfParams::new_fast_test(),
+                    question_ids: [1, 2, 3],
+                    owner_sig: [0u8; 64],
+                    backup_sync_descriptors: Vec::new(),
+                    updated_at: 1_750_000_000,
+                },
+            );
+            save_guardian_vault_with_cache(&state, &mut s, &vault, Some(password)).unwrap();
+            let id = s.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+            let did = id.user_id.clone();
+            (session, id, did)
+        };
+
+        let revoke = humoco_market::GuardianRevoke {
+            owner_did: bob_did.clone(),
+            rotation_epoch: 1,
+        };
+        let payload_bytes = serde_json::to_vec(&revoke).unwrap();
+        let my_ed_sk = my_identity.signing_key.clone();
+        let tag16 = [9u8; 16];
+
+        // Subcase A: sender DID mismatch must be rejected without revoking Bob's ward
+        let env_spoof = humoco_market::PostEnvelope::new(
+            "msg-revoke-spoof",
+            alice_did.clone(),
+            1_750_000_010,
+            Vec::new(),
+            Vec::new(),
+        );
+        let ctx_spoof = PostEnvelopeContext {
+            state: &state,
+            session: &session,
+            app: None,
+            extra_standards: None,
+            password: Some(password),
+            my_identity: &my_identity,
+            my_ed_sk: &my_ed_sk,
+            own_reply_syncs: &[],
+            sender_did: &alice_did,
+            envelope: &env_spoof,
+            tag16: &tag16,
+            decrypted_bytes: &payload_bytes,
+            now_secs: 1_750_000_010,
+        };
+        let mut post_state = StoredPostState::default();
+        let mut baseline_post_state = post_state.clone();
+        let mut stats = PostDispatchStats::default();
+        let spoof_outcome = dispatch_post_payload(
+            &ctx_spoof,
+            &PayloadType::Generic(humoco_market::PAYLOAD_GUARDIAN_REVOKE_V1.to_string()),
+            &mut post_state,
+            &mut baseline_post_state,
+            &mut stats,
+        )
+        .await;
+        assert_eq!(spoof_outcome, PostDispatchOutcome::Handled);
+        assert!(
+            stats
+                .errors
+                .iter()
+                .any(|e| e.contains("Guardian revoke sender mismatch")),
+            "expected sender mismatch error, got {:?}",
+            stats.errors
+        );
+        assert!(post_state.outbox_entries.is_empty());
+        {
+            let mut s = state.service.lock().unwrap();
+            let vault = load_guardian_vault(&mut s, Some(password)).unwrap();
+            assert!(vault.wards.contains_key(&bob_key));
+        }
+
+        // Subcase B: matching owner sender revokes ward, records epoch 1, and queues ACK receipt
+        let errors_before = stats.errors.len();
+        let env_valid = humoco_market::PostEnvelope::new(
+            "msg-revoke-valid",
+            bob_did.clone(),
+            1_750_000_020,
+            Vec::new(),
+            Vec::new(),
+        );
+        let ctx_valid = PostEnvelopeContext {
+            state: &state,
+            session: &session,
+            app: None,
+            extra_standards: None,
+            password: Some(password),
+            my_identity: &my_identity,
+            my_ed_sk: &my_ed_sk,
+            own_reply_syncs: &[],
+            sender_did: &bob_did,
+            envelope: &env_valid,
+            tag16: &tag16,
+            decrypted_bytes: &payload_bytes,
+            now_secs: 1_750_000_020,
+        };
+        let valid_outcome = dispatch_post_payload(
+            &ctx_valid,
+            &PayloadType::Generic(humoco_market::PAYLOAD_GUARDIAN_REVOKE_V1.to_string()),
+            &mut post_state,
+            &mut baseline_post_state,
+            &mut stats,
+        )
+        .await;
+        assert_eq!(valid_outcome, PostDispatchOutcome::Handled);
+        assert_eq!(stats.errors.len(), errors_before, "unexpected errors: {:?}", stats.errors);
+        assert_eq!(post_state.outbox_entries.len(), 1);
+        assert_eq!(post_state.outbox_entries[0].msg_id, "ack-msg-revoke-valid");
+        let vault_after = {
+            let mut s = state.service.lock().unwrap();
+            load_guardian_vault(&mut s, Some(password)).unwrap()
+        };
+        assert!(!vault_after.wards.contains_key(&bob_key));
+        assert_eq!(vault_after.revoked_epoch_by_owner.get(&bob_key), Some(&1));
     }
 }
