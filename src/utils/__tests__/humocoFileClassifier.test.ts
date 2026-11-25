@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { classifyHumocoFile } from '../humocoFileClassifier';
+import {
+    classifyHumocoFile,
+    isSupportedHumocoFileName,
+    classifyExtension,
+    isReceiveImportKind,
+} from '../humocoFileClassifier';
 
 describe('humocoFileClassifier', () => {
     it('classifies wot-provider-filter+v1 JSON payloads as wot packages', () => {
@@ -69,5 +74,99 @@ describe('humocoFileClassifier', () => {
         expect(classifyHumocoFile({ fileName: 'reply.sig', bytes: canonicalBytes }).kind).toBe(
             'sig',
         );
+    });
+
+    it('detects JSON container magic types and embedded humoco:// deeplinks', () => {
+        const toBytes = (str: string) => Array.from(new TextEncoder().encode(str));
+
+        expect(
+            classifyHumocoFile({
+                fileName: 'data.json',
+                bytes: toBytes(JSON.stringify({ format: 'hmc-backup-manifest-v1' })),
+            }),
+        ).toEqual({
+            kind: 'backup',
+            source: 'magic',
+            containerType: 'hmc-backup-manifest-v1',
+        });
+
+        expect(
+            classifyHumocoFile({
+                fileName: 'bundle.dat',
+                bytes: toBytes(JSON.stringify({ c: 'TransactionBundle' })),
+            }),
+        ).toEqual({
+            kind: 'transfer',
+            source: 'magic',
+            containerType: 'TransactionBundle',
+        });
+
+        expect(
+            classifyHumocoFile({
+                fileName: 'card.json',
+                bytes: toBytes(JSON.stringify({ card_wire: 'abc' })),
+            }),
+        ).toEqual({
+            kind: 'card',
+            source: 'magic',
+            containerType: 'CardEnvelope',
+        });
+
+        expect(
+            classifyHumocoFile({
+                fileName: 'wot.json',
+                bytes: toBytes(JSON.stringify({ lists: ['did:key:z1'] })),
+            }),
+        ).toEqual({
+            kind: 'wot',
+            source: 'magic',
+            containerType: 'WotSyncPackage',
+        });
+
+        expect(
+            classifyHumocoFile({
+                fileName: 'note.txt',
+                bytes: toBytes('Visit humoco://pay?to=did:key:z6MkNewerSigner111 today'),
+            }),
+        ).toEqual({
+            kind: 'deeplink',
+            source: 'magic',
+            deepLink: 'humoco://pay?to=did:key:z6MkNewerSigner111',
+        });
+    });
+
+    it('prioritizes content magic over misleading extensions and falls back to extension on empty bytes', () => {
+        const transferBytes = Array.from(
+            new TextEncoder().encode(JSON.stringify({ c: 'TransactionBundle' })),
+        );
+        expect(classifyHumocoFile({ fileName: 'fake.hmcbackup', bytes: transferBytes })).toEqual({
+            kind: 'transfer',
+            source: 'magic',
+            containerType: 'TransactionBundle',
+        });
+
+        expect(classifyHumocoFile({ fileName: 'voucher.ask', bytes: new Uint8Array([]) })).toEqual({
+            kind: 'ask',
+            source: 'extension',
+        });
+    });
+
+    it('checks extension filters and receive import eligibility accurately', () => {
+        expect(isSupportedHumocoFileName('backup.hmcbackup', true)).toBe(true);
+        expect(isSupportedHumocoFileName('backup.hmcbackup', false)).toBe(false);
+        expect(isSupportedHumocoFileName('  PAYMENT.TRANSFER  ', false)).toBe(true);
+        expect(classifyExtension('NOTES.TXT')).toBe('unknown');
+
+        expect(isReceiveImportKind('transfer')).toBe(true);
+        expect(isReceiveImportKind('ask')).toBe(true);
+        expect(isReceiveImportKind('sig')).toBe(true);
+        expect(isReceiveImportKind('wot')).toBe(true);
+        expect(isReceiveImportKind('proof')).toBe(true);
+        expect(isReceiveImportKind('card')).toBe(true);
+
+        expect(isReceiveImportKind('standard')).toBe(false);
+        expect(isReceiveImportKind('backup')).toBe(false);
+        expect(isReceiveImportKind('deeplink')).toBe(false);
+        expect(isReceiveImportKind('unknown')).toBe(false);
     });
 });

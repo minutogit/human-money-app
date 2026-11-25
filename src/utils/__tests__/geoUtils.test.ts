@@ -155,6 +155,38 @@ describe("geoUtils", () => {
                 "No coordinates found for this address"
             );
         });
+
+        it("should reject non-OK HTTP responses and honor explicit coarseOnly option", async () => {
+            vi.mocked(fetch).mockResolvedValueOnce({
+                ok: false,
+                status: 503,
+            } as Response);
+
+            await expect(geocodeAddress({ city: "Berlin" })).rejects.toThrow(
+                "Geocoding server responded with status: 503"
+            );
+
+            vi.mocked(fetch).mockResolvedValueOnce({
+                ok: true,
+                json: async () => [{ lat: "52.520008", lon: "13.404954" }],
+            } as Response);
+
+            const result = await geocodeAddress(
+                {
+                    street: "Geheimweg",
+                    houseNumber: "99",
+                    zipCode: "10117",
+                    city: "Berlin",
+                    country: "Germany",
+                },
+                6,
+                { coarseOnly: true },
+            );
+            expect(result).toBe("52.520008, 13.404954");
+            const calledUrl = String(vi.mocked(fetch).mock.calls[1][0]);
+            expect(calledUrl).not.toContain("Geheimweg");
+            expect(calledUrl).not.toContain("99");
+        });
     });
 
     describe("getCurrentLocation", () => {
@@ -213,6 +245,46 @@ describe("geoUtils", () => {
 
             await expect(getCurrentLocation()).rejects.toThrow("Location permission denied");
         });
+
+        it("should surface unavailable, timeout, and out-of-range GPS errors", async () => {
+            vi.mocked(navigator.geolocation.getCurrentPosition).mockImplementationOnce((_success, error) => {
+                error?.({
+                    code: 2,
+                    message: "unavailable",
+                    PERMISSION_DENIED: 1,
+                    POSITION_UNAVAILABLE: 2,
+                    TIMEOUT: 3,
+                });
+            });
+            await expect(getCurrentLocation()).rejects.toThrow("Location information is unavailable");
+
+            vi.mocked(navigator.geolocation.getCurrentPosition).mockImplementationOnce((_success, error) => {
+                error?.({
+                    code: 3,
+                    message: "timeout",
+                    PERMISSION_DENIED: 1,
+                    POSITION_UNAVAILABLE: 2,
+                    TIMEOUT: 3,
+                });
+            });
+            await expect(getCurrentLocation()).rejects.toThrow("Location request timed out");
+
+            vi.mocked(navigator.geolocation.getCurrentPosition).mockImplementationOnce((success) => {
+                success({
+                    coords: {
+                        latitude: 999,
+                        longitude: 13.4,
+                        accuracy: 0,
+                        altitude: null,
+                        altitudeAccuracy: null,
+                        heading: null,
+                        speed: null,
+                    } as unknown as GeolocationCoordinates,
+                    timestamp: Date.now(),
+                } as unknown as GeolocationPosition);
+            });
+            await expect(getCurrentLocation()).rejects.toThrow("Received invalid coordinates from GPS");
+        });
     });
 
     describe("roundCoordinates", () => {
@@ -240,10 +312,11 @@ describe("geoUtils", () => {
         it("should calculate distance correctly between two known locations (Berlin to Munich)", () => {
             // Berlin: 52.5200, 13.4050; Munich: 48.1371, 11.5761
             const dist = calculateDistanceKm("52.5200, 13.4050", "48.1371, 11.5761");
-            expect(dist).not.toBeNull();
+            expect(typeof dist).toBe("number");
+            const distanceKm = dist as number;
             // Distance is approx 504 km
-            expect(dist!).toBeGreaterThan(500);
-            expect(dist!).toBeLessThan(510);
+            expect(distanceKm).toBeGreaterThan(500);
+            expect(distanceKm).toBeLessThan(510);
         });
 
         it("should return 0 for identical coordinates", () => {

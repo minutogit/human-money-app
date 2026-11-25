@@ -119,5 +119,44 @@ describe('csvExport', () => {
             const csv = buildStatementCsv(countableRecord);
             expect(csv).toContain('3;Gutschein');
         });
+
+        it('neutralizes CSV formula injection triggers while leaving negative numbers intact', () => {
+            expect(escapeCsvField('=SUM(A1:A2)')).toBe("'=SUM(A1:A2)");
+            expect(escapeCsvField('+1+1')).toBe("'+1+1");
+            expect(escapeCsvField('-cmd|x')).toBe("'-cmd|x");
+            expect(escapeCsvField('@evil')).toBe("'@evil");
+            expect(escapeCsvField('  =1')).toBe("'  =1");
+            expect(escapeCsvField('\t=1')).toBe("'\t=1");
+            expect(escapeCsvField('-15.50')).toBe('-15.50');
+        });
+
+        it('formats sent countable items with negative sign and emits 0.00 fallback when both amount maps are empty', () => {
+            const sentAndEmptyRecords: TransactionRecord[] = [
+                {
+                    id: 'tx-sent-count',
+                    direction: 'sent',
+                    recipientId: 'did:key:z6MkpTHR',
+                    timestamp: '2026-06-04T09:00:00.000Z',
+                    summableAmounts: {},
+                    countableItems: { Gutschein: 3 },
+                    involvedVouchers: ['v-4'],
+                    notes: 'Sent items',
+                },
+                {
+                    id: 'tx-empty-amt',
+                    direction: 'received',
+                    senderId: 'did:key:z6MkhaXG',
+                    timestamp: '2026-06-05T09:00:00.000Z',
+                    summableAmounts: {},
+                    countableItems: {},
+                    involvedVouchers: ['v-5'],
+                    notes: 'Empty note',
+                },
+            ];
+
+            const csv = buildStatementCsv(sentAndEmptyRecords);
+            expect(csv).toContain('Ausgabe;did:key:z6MkpTHR;did:key:z6MkpTHR;-3;Gutschein;');
+            expect(csv).toContain('Einnahme;did:key:z6MkhaXG;did:key:z6MkhaXG;0.00;;Empty note;');
+        });
     });
 });

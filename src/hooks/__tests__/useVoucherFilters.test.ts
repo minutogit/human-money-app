@@ -187,4 +187,69 @@ describe('useVoucherFilters', () => {
         });
         expect(result.current.filteredVouchers.map(v => v.localInstanceId)).toEqual(['inst-1', 'inst-2', 'inst-3']);
     });
+
+    it('excludes already-expired vouchers from expiringSoonOnly and tracks toggle/reset activeFilterCount', () => {
+        const alreadyExpiredActive: VoucherSummary = {
+            ...mockVouchers[0],
+            localInstanceId: 'inst-expired-active',
+            validUntil: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        };
+
+        const { result } = renderHook(() =>
+            useVoucherFilters({
+                vouchers: [...mockVouchers, alreadyExpiredActive],
+                ownUserId: 'did:key:user-own',
+                initialFilter: 'expiringSoon',
+            }),
+        );
+
+        expect(result.current.expiringSoonOnly).toBe(true);
+        expect(result.current.activeFilterCount).toBe(1);
+        expect(result.current.filteredVouchers.map((v) => v.localInstanceId)).toEqual(['inst-1']);
+
+        act(() => {
+            result.current.toggleStatusFilter('active');
+        });
+        expect(result.current.activeFilterCount).toBe(2);
+
+        act(() => {
+            result.current.toggleStatusFilter('active');
+        });
+        expect(result.current.activeFilterCount).toBe(1);
+
+        act(() => {
+            result.current.resetFilters();
+        });
+        expect(result.current.activeFilterCount).toBe(0);
+        expect(result.current.filteredVouchers).toHaveLength(4);
+    });
+
+    it('normalizes object-shaped statuses and places missing validUntil last on expiry_asc', () => {
+        const objectStatusVoucher: VoucherSummary = {
+            ...mockVouchers[1],
+            localInstanceId: 'inst-quarantined',
+            status: { Quarantined: { reason: 'dup' } } as unknown as VoucherSummary['status'],
+            validUntil: undefined as unknown as string,
+        };
+
+        const { result } = renderHook(() =>
+            useVoucherFilters({
+                vouchers: [...mockVouchers, objectStatusVoucher],
+                ownUserId: 'did:key:user-own',
+            }),
+        );
+
+        expect(result.current.statusCounts.quarantined).toBe(1);
+        expect(
+            result.current.filteredVouchers[result.current.filteredVouchers.length - 1]
+                ?.localInstanceId,
+        ).toBe('inst-quarantined');
+
+        act(() => {
+            result.current.toggleStatusFilter('quarantined');
+        });
+        expect(result.current.filteredVouchers.map((v) => v.localInstanceId)).toEqual([
+            'inst-quarantined',
+        ]);
+    });
 });

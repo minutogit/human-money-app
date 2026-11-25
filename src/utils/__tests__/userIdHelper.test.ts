@@ -83,5 +83,21 @@ describe('userIdHelper', () => {
             expect(isSameRootIdentity(saiId, bobId)).toBe(false);
             expect(isSameRootIdentity('not-a-did', 'not-a-did')).toBe(false);
         });
+
+        it('suggestFilename sanitizes path traversal and unsupported characters from prefixes', () => {
+            expect(suggestFilename(`../evil/dir:chk@${rootId}`)).toBe('___evil_dir');
+            expect(suggestFilename('plain-no-did')).toBe('transfer');
+        });
+
+        it('handles empty, short DID, and non-DID inputs in truncateUserId and extractDisplayName', () => {
+            const shortRoot = 'did:key:zShort12345';
+            const shortSai = 'alice:chk@did:key:zShort12345';
+
+            expect(truncateUserId('')).toBe('');
+            expect(truncateUserId(shortRoot)).toBe(shortRoot);
+            expect(truncateUserId(shortSai)).toBe(shortSai);
+            expect(truncateUserId('abcdefghijklmnopqrstuvwxyz')).toBe('abcdefghij...uvwxyz');
+            expect(extractDisplayName('plain-label')).toBe('plain-label');
+        });
     });
 });

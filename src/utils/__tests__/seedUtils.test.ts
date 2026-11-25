@@ -25,4 +25,10 @@ describe('seedUtils - cleanSeedText', () => {
     it('collapses multiple consecutive spaces and trims leading/trailing spaces', () => {
         expect(cleanSeedText('   apple    banana   ')).toBe('apple banana');
     });
+
+    it('returns empty string for empty or punctuation/digit-only input and normalizes numbered multiline seed pastes', () => {
+        expect(cleanSeedText('')).toBe('');
+        expect(cleanSeedText('1. 2: 3-\r\n\t')).toBe('');
+        expect(cleanSeedText('1. Abandon\n2: ABILITY\t3-able,')).toBe('abandon ability able');
+    });
 });
