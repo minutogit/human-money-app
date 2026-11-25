@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `75f3986`
-- **Total Test Files:** 165 | **Total Test Functions:** 1538
+- **Updated at HEAD:** `2bb1d9f`
+- **Total Test Files:** 165 | **Total Test Functions:** 1553
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -133,14 +133,14 @@
 | `src/components/contacts/__tests__/AddressBook.test.tsx` | P3 | 25 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 25/25 (951 pass)`, `tsc/lint 0`; fixed stale `get_drop_overview_status` mock -> `get_sync_overview_status`, added delete cancel & error paths; Revert-Red `WotNetworkOptionsPanel.tsx` |
 | `src/components/contacts/__tests__/ContactDialog.test.tsx` | P3 | 13 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 13/13 (951 pass)`, `tsc/lint 0`; covered `isOpen=false`, `probePublicSync` error, cancel sync-delete & rejected `onSave` error state; Revert-Red `ContactDialog.tsx` `isExactSelf` |
 | `src/components/contacts/__tests__/TrustLevelRadioCards.test.tsx` | P3 | 8 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 8/8 (951 pass)`, `tsc/lint 0`; removed `.closest('button')!` & added radiogroup `aria-checked`, `idPrefix`, `onChange(null)` & `allowedLevels+allowUnrated`; Revert-Red `TrustLevelRadioCards.tsx` |
-| `src/components/send/__tests__/PrivacyToggle.test.tsx` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/settings/__tests__/SettingsView.test.tsx` | P3 | 16 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/shell/__tests__/GlobalFileDropZone.test.tsx` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/shell/__tests__/NotificationsAndAvatar.test.tsx` | P3 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/shell/__tests__/Sidebar.test.tsx` | P3 | 7 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/standards/__tests__/StandardsManager.test.tsx` | P3 | 6 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/support/__tests__/BugReportView.test.tsx` | P3 | 6 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/support/__tests__/HelpCenterView.test.tsx` | P3 | 7 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/send/__tests__/PrivacyToggle.test.tsx` | P3 | 5 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 5/5 (98/98 files, 966/966 pass)`, `tsc/lint 0`; interactive flexible Public/Stealth switch, `privacyError` ring & flex+stealth mix; Revert-Red `PrivacyToggle.tsx` |
+| `src/components/settings/__tests__/SettingsView.test.tsx` | P3 | 16 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 16/16 (966 pass)`, `tsc/lint 0`; removed `eslint-disable`/`require`/`any`, deferred `getConfig` loading check & `try/finally` `setItemSpy`; Revert-Red `SettingsView.tsx` |
+| `src/components/shell/__tests__/GlobalFileDropZone.test.tsx` | P3 | 6 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 6/6 (966 pass)`, `tsc/lint 0`; removed `parentElement!`, covered `humoco:deeplink`, `.hmcbackup` stage+err, `.transfer` offline/online, `.hmcard` accept/offender/unknown & `receive_bundle` guard; Revert-Red `GlobalFileDropZone.tsx` |
+| `src/components/shell/__tests__/NotificationsAndAvatar.test.tsx` | P3 | 6 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 6/6 (966 pass)`, `tsc/lint 0`; removed `img!`, covered empty badge/popover, Escape close & already-read inquiry route; Revert-Red `NotificationBell.tsx` |
+| `src/components/shell/__tests__/Sidebar.test.tsx` | P3 | 8 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 8/8 (966 pass)`, `tsc/lint 0`; `try/finally` `openSpy`, removed `as never` & added persisted `Mehr` open + support/bug routing; Revert-Red `Sidebar.tsx` |
+| `src/components/standards/__tests__/StandardsManager.test.tsx` | P3 | 8 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 8/8 (966 pass)`, `tsc/lint 0`; removed `eslint-disable`/`require`/`any`, `try/finally` `consoleWarnSpy`, export flow, cancel-delete & in-use error; Revert-Red `StandardsManager.tsx` |
+| `src/components/support/__tests__/BugReportView.test.tsx` | P3 | 7 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 7/7 (966 pass)`, `tsc/lint 0`; deferred `getLatestLogs` loading state & empty-logs / `openUrl` failure test; Revert-Red `BugReportView.tsx` |
+| `src/components/support/__tests__/HelpCenterView.test.tsx` | P3 | 9 | 0/0/0 | 🟢 Verified | `2bb1d9f` | `scan 0/0/0/0`, `vitest 9/9 (966 pass)`, `tsc/lint 0`; simple disclosure vs expert pill & empty-search noResults restore; Revert-Red `HelpCenterView.tsx` |
 | `src/components/support/__tests__/SupportView.test.tsx` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/transfer/__tests__/ReceiveSuccessView.test.tsx` | P3 | 14 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/transfer/__tests__/ReceiveView.test.tsx` | P3 | 7 | 0/0/0 | ⚪ Pending | — | — |
