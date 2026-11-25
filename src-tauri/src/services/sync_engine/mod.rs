@@ -616,296 +616,168 @@ pub(crate) mod tests {
     use crate::state::{canonicalize_did, MARKET_CARD_STORE_KEY};
     use crate::test_support::*;
 
-    #[tokio::test]
-    async fn test_phase_3_acceptance_criteria_flow() {
-        let base_dir = temp_test_dir("phase3_flow");
-        let password = "TestPassword123!";
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
-        // 1. Setup actors: Alice (Admin), Bob, Charlie, Reader L1, Reader L2
-        let alice_service =
-            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
-        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
-        let charlie_service = setup_test_app(
-            &base_dir.join("charlie"),
-            "Charlie",
-            CHARLIE_PHRASE,
-            password,
-        );
-        let l1_service = setup_test_app(&base_dir.join("l1"), "Reader1", READER1_PHRASE, password);
-        let l2_service = setup_test_app(&base_dir.join("l2"), "Reader2", READER2_PHRASE, password);
+    fn wallet_did(state: &AppState) -> String {
+        let s = state.service.lock().unwrap();
+        s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+    }
 
-        let alice_state = create_test_state(alice_service);
-        let bob_state = create_test_state(bob_service);
-        let charlie_state = create_test_state(charlie_service);
-        let l1_state = create_test_state(l1_service);
-        let l2_state = create_test_state(l2_service);
+    fn make_contact(
+        did: String,
+        name: &str,
+        trust_level: u8,
+        syncs: Vec<FrontendSyncDescriptor>,
+    ) -> FrontendContact {
+        FrontendContact {
+            did,
+            profile: FrontendUserProfile {
+                first_name: Some(name.to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: "2026-01-01T00:00:00Z".to_string(),
+            notes: None,
+            trust_level: Some(trust_level),
+            desired_hops: Some(3),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs,
+        }
+    }
 
-        let alice_did = {
-            let s = alice_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
-        let bob_did = {
-            let s = bob_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
-        let charlie_did = {
-            let s = charlie_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
-        let l1_did = {
-            let s = l1_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
+    fn save_contact_for(state: &AppState, password: &str, contact: FrontendContact) {
+        let mut s = state.service.lock().unwrap();
+        state.save_contact(&mut s, contact, Some(password)).unwrap();
+    }
 
-        // 2. Alice prepares drop setup and finalize on MockSyncServer A
+    fn select_sync_target(
+        state: &AppState,
+        password: &str,
+        desc: FrontendSyncDescriptor,
+        wot_share: Option<bool>,
+    ) {
+        let mut s = state.service.lock().unwrap();
+        state
+            .mutate_security_policy(&mut s, Some(password), |policy| {
+                policy.market_selected_syncs = vec![desc];
+            })
+            .unwrap();
+        if let Some(share) = wot_share {
+            state
+                .mutate_ui_preferences(&mut s, Some(password), |prefs| {
+                    prefs.wot_share_via_sync = share;
+                })
+                .unwrap();
+        }
+    }
+
+    async fn setup_finalized_server(
+        state: &AppState,
+        password: &str,
+        policy: Option<FrontendMemberPolicyDto>,
+        max_members: Option<usize>,
+        max_total_mb: Option<usize>,
+    ) -> (
+        crate::models::FrontendSyncSetupDraft,
+        MockSyncServer,
+        crate::models::FrontendSyncAdminStatus,
+    ) {
         let draft = prepare_sync_setup_impl(
-            Some(FrontendMemberPolicyDto {
-                direct_min: 2,
-                hop2_enabled: true,
-                bridge_min: 2,
-                hop2_min: 2,
-            }),
-            Some(300),
-            Some(256),
+            policy,
+            max_members,
+            max_total_mb,
             None,
             Some(password.to_string()),
-            &alice_state,
+            state,
         )
         .unwrap();
-
-        let server_a =
+        let server =
             MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
-
-        let finalize_status = finalize_sync_setup_impl(
-            server_a.base_url.clone(),
+        let status = finalize_sync_setup_impl(
+            server.base_url.clone(),
             Some(password.to_string()),
-            &alice_state,
+            state,
         )
         .await
         .unwrap();
+        (draft, server, status)
+    }
 
-        assert_eq!(finalize_status.data_dir, draft.data_dir);
-        assert_eq!(finalize_status.total_member_count, 1); // Alice is in allow list automatically
-
-        // Test connection
-        let conn_test = test_sync_connection_impl(
-            server_a.base_url.clone(),
+    async fn sync_market_ok(
+        state: &AppState,
+        force_upload: bool,
+        password: &str,
+    ) -> FrontendMarketSyncResult {
+        let res = sync_market_channels_impl(
+            Some(true),
+            Some(force_upload),
             Some(password.to_string()),
-            &alice_state,
+            state,
         )
         .await
         .unwrap();
-        assert!(conn_test.success);
-        assert!(conn_test.write_ok);
-        assert!(conn_test.read_ok);
+        assert_eq!(res.status, MarketSyncStatus::Completed);
+        assert!(res.errors.is_empty(), "unexpected sync errors: {:?}", res.errors);
+        res
+    }
 
-        // 3. Alice authorizes Bob directly (Level 2). Bob authorizes Charlie (Level 2).
-        {
-            let mut s = alice_state.service.lock().unwrap();
-            let bob_contact = FrontendContact {
-                did: bob_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Bob".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            alice_state
-                .save_contact(&mut s, bob_contact, Some(password))
-                .unwrap();
-        }
+    fn load_card_store(state: &AppState, password: &str) -> humoco_market::CardStore {
+        let mut s = state.service.lock().unwrap();
+        crate::state::load_encrypted_json_or_default(&mut s, MARKET_CARD_STORE_KEY, Some(password))
+            .unwrap()
+    }
 
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            let charlie_contact = FrontendContact {
-                did: charlie_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Charlie".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            bob_state
-                .save_contact(&mut s, charlie_contact, Some(password))
-                .unwrap();
-        }
-
-        // Bob signs his SD-JWT and Alice stores it in her raw_list_store
-        let bob_sd_jwt = {
-            let mut s = bob_state.service.lock().unwrap();
-            let mut reg = bob_state
-                .get_or_load_wot_register(&mut s, Some(password))
-                .unwrap();
-            bob_state.ensure_wot_list_signed(&mut s, &mut reg).unwrap();
-            reg.own_signed_list.unwrap()
-        };
-
-        {
-            let mut s = alice_state.service.lock().unwrap();
-            let mut reg = alice_state
-                .get_or_load_wot_register(&mut s, Some(password))
-                .unwrap();
-            let can_bob = canonicalize_did(&bob_did).unwrap();
-            reg.raw_list_store.insert(can_bob, bob_sd_jwt);
-            alice_state
-                .save_wot_register(&mut s, &reg, Some(password))
-                .unwrap();
-        }
-
-        // Alice updates drop admin config and pushes to Server A
-        let updated_status = update_sync_admin_config_impl(
-            FrontendSyncAdminUpdateRequest::default(),
-            true,
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-
-        // Admin A authorizes B directly and C via B's SD-JWT trust list
-        assert_eq!(updated_status.total_member_count, 3);
-        assert_eq!(server_a.members.lock().unwrap().len(), 3);
-        {
-            let mut s = alice_state.service.lock().unwrap();
-            let admin_cfg = admin::load_stored_sync_admin_opt(&mut s, Some(password))
-                .unwrap()
-                .unwrap();
-            let (stats, _) = compute_admin_sync_members_with_stats(
-                &alice_state,
-                &mut s,
-                &admin_cfg,
-                "card",
-                Some(password),
-            )
-            .unwrap();
-            assert_eq!(stats.direct_count, 2); // Alice + Bob
-            assert_eq!(stats.hop2_count, 1); // Charlie
-        }
-
-        // 4. Charlie discovers its own authorization via discover_available_syncs
-        {
-            let mut s = charlie_state.service.lock().unwrap();
-            let alice_contact = FrontendContact {
-                did: alice_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Alice".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(1),
-                desired_hops: Some(2),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![finalize_status.descriptor.clone()],
-            };
-            charlie_state
-                .save_contact(&mut s, alice_contact, Some(password))
-                .unwrap();
-        }
-
-        // Charlie probes contacts to check reachability and authorization on Server A
-        let probe_results =
-            probe_contact_syncs_impl(false, Some(password.to_string()), &charlie_state)
-                .await
-                .unwrap();
-        assert!(!probe_results.is_empty(), "Charlie should probe Server A");
-
-        let charlie_discovered =
-            discover_available_syncs_impl(Some(password.to_string()), &charlie_state)
-                .await
-                .unwrap();
-
-        assert_eq!(charlie_discovered.len(), 1);
-        assert!(
-            charlie_discovered[0].is_authorized,
-            "Charlie should discover authorization on Server A!"
-        );
-
-        // 5. Start Server E for redundant public drop upload
+    async fn setup_phase3_bob_profile_and_public_sync(
+        bob_state: &AppState,
+        finalize_desc: &FrontendSyncDescriptor,
+        l1_did: &str,
+        password: &str,
+    ) -> MockSyncServer {
         let server_e = MockSyncServer::start(
             "d-server-e".to_string(),
             "2222222222222222222222222222222222222222222222222222222222222222".to_string(),
         )
         .await;
         let server_e_url = format!("{}/sync.php", server_e.base_url);
-
-        // Bob probes Server E
         let e_info =
-            probe_public_sync_impl(server_e_url.clone(), Some(password.to_string()), &bob_state)
+            probe_public_sync_impl(server_e_url.clone(), Some(password.to_string()), bob_state)
                 .await
                 .unwrap();
         assert_eq!(e_info.access_pubkey.len(), 64);
+        server_e.members.lock().unwrap().push(e_info.access_pubkey);
 
-        // Authorize Bob's access pubkey on Server E
-        server_e
-            .members
-            .lock()
-            .unwrap()
-            .push(e_info.access_pubkey.clone());
-
-        // Bob saves Server E as a public drop
         save_public_sync_impl(
-            server_e_url.clone(),
+            server_e_url,
             format!("{}/d-server-e", server_e.base_url),
-            e_info.drop_pub.clone(),
+            e_info.drop_pub,
             None,
             true,
             Some(password.to_string()),
-            &bob_state,
+            bob_state,
         )
         .await
         .unwrap();
 
-        // Bob configures selected upload targets: Drop A
         let selected = set_selected_upload_syncs_impl(
-            vec![finalize_status.descriptor.clone()],
+            vec![finalize_desc.clone()],
             Some(password.to_string()),
-            &bob_state,
+            bob_state,
         )
         .await
         .unwrap();
         assert_eq!(selected.len(), 1);
 
-        // Bob adds Reader 1 (L1) with level 2 (>= share_min_level 1)
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            let l1_contact = FrontendContact {
-                did: l1_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Reader1".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            bob_state
-                .save_contact(&mut s, l1_contact, Some(password))
-                .unwrap();
-        }
-
-        // Bob creates and saves his own market profile and publishes it
+        save_contact_for(
+            bob_state,
+            password,
+            make_contact(l1_did.to_string(), "Reader1", 2, vec![]),
+        );
         let save_req = FrontendSaveMyMarketProfileRequest {
             profile: FrontendUserProfile {
                 first_name: Some("Bob".to_string()),
@@ -924,131 +796,61 @@ pub(crate) mod tests {
             allow_inquiries: true,
             published: None,
         };
-        save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
-        set_card_published_impl(true, Some(password.to_string()), &bob_state)
+        save_my_market_profile_impl(save_req, Some(password.to_string()), bob_state).unwrap();
+        set_card_published_impl(true, Some(password.to_string()), bob_state)
             .await
             .unwrap();
+        server_e
+    }
 
-        // Bob uploads redundantly to Drop A (selected) and Drop E (active public drop)
-        let bob_sync =
-            sync_market_channels_impl(None, Some(true), Some(password.to_string()), &bob_state)
+    #[tokio::test]
+    async fn test_phase_3_acceptance_criteria_flow() {
+        let base_dir = TempDirGuard(temp_test_dir("phase3_flow"));
+        let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(&base_dir.0.join("alice"), "Alice", ALICE_PHRASE, password));
+        let bob_state = create_test_state(setup_test_app(&base_dir.0.join("bob"), "Bob", BOB_PHRASE, password));
+        let charlie_state = create_test_state(setup_test_app(&base_dir.0.join("charlie"), "Charlie", CHARLIE_PHRASE, password));
+        let l1_state = create_test_state(setup_test_app(&base_dir.0.join("l1"), "Reader1", READER1_PHRASE, password));
+        let l2_state = create_test_state(setup_test_app(&base_dir.0.join("l2"), "Reader2", READER2_PHRASE, password));
+
+        let alice_did = wallet_did(&alice_state);
+        let bob_did = wallet_did(&bob_state);
+        let charlie_did = wallet_did(&charlie_state);
+        let l1_did = wallet_did(&l1_state);
+
+        let policy_dto = Some(FrontendMemberPolicyDto {
+            direct_min: 2,
+            hop2_enabled: true,
+            bridge_min: 2,
+            hop2_min: 2,
+        });
+        let (draft, server_a, finalize_status) =
+            setup_finalized_server(&alice_state, password, policy_dto, Some(300), Some(256)).await;
+        assert_eq!(finalize_status.data_dir, draft.data_dir);
+        assert_eq!(finalize_status.total_member_count, 1);
+
+        let conn_test =
+            test_sync_connection_impl(server_a.base_url.clone(), Some(password.to_string()), &alice_state)
                 .await
                 .unwrap();
-        assert_eq!(
-            bob_sync.uploaded_to, 4,
-            "Bob should upload card and wot channels to both Drop A and Drop E"
-        );
-        assert_eq!(server_a.slots.lock().unwrap().len(), 2);
-        assert_eq!(server_e.slots.lock().unwrap().len(), 2);
+        assert!(conn_test.success && conn_test.write_ok && conn_test.read_ok);
 
-        // 6. Authorized reader L1 decrypts Bob's slot and imports cards and wot list
-        {
-            let mut s = l1_state.service.lock().unwrap();
-            let bob_contact = FrontendContact {
-                did: bob_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Bob".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![finalize_status.descriptor.clone()],
-            };
-            l1_state
-                .save_contact(&mut s, bob_contact, Some(password))
-                .unwrap();
-        }
-
-        let l1_sync = sync_market_channels_impl(None, None, Some(password.to_string()), &l1_state)
-            .await
-            .unwrap();
-        assert_eq!(
-            l1_sync.decrypted_slots, 2,
-            "Authorized reader L1 should decrypt both card and wot slots"
-        );
-        assert_eq!(
-            l1_sync.imported_cards, 1,
-            "Authorized reader L1 should import card"
-        );
-        assert_eq!(
-            l1_sync.imported_wot_lists, 1,
-            "Authorized reader L1 should import wot list"
-        );
-
-        // Verify Bob's card appears in L1's market view with Drop entry source
-        let l1_market = get_market_view_impl(Some(password.to_string()), &l1_state).unwrap();
-        let can_bob_did = canonicalize_did(&bob_did).unwrap();
-        let bob_person = l1_market.people.iter().find(|p| p.did == can_bob_did);
-        assert!(bob_person.is_some(), "Bob should be in L1 market view");
-        let has_sync_source = bob_person.unwrap().sources.iter().any(|s| {
-            matches!(s, crate::models::FrontendEntrySource::Sync { read_url } if *read_url == finalize_status.descriptor.read_url)
-        });
-        assert!(
-            has_sync_source,
-            "Bob's market person should have Drop entry source!"
-        );
-
-        // 7. Unauthorized reader L2 gets 0 decrypted slots
-        {
-            let mut s = l2_state.service.lock().unwrap();
-            l2_state
-                .mutate_security_policy(&mut s, Some(password), |policy| {
-                    policy.market_selected_syncs = vec![finalize_status.descriptor.clone()];
-                })
-                .unwrap();
-        }
-
-        let l2_sync = sync_market_channels_impl(None, None, Some(password.to_string()), &l2_state)
-            .await
-            .unwrap();
-        assert_eq!(
-            l2_sync.decrypted_slots, 0,
-            "Unauthorized reader L2 should decrypt 0 slots"
-        );
-        assert_eq!(
-            l2_sync.imported_cards, 0,
-            "Unauthorized reader L2 should import 0 cards"
-        );
-
-        // 8. Withdrawing trust from Bob and pushing removes Bob's stealth pubkey from members and purges slots
-        let bob_stealth_pk_a = {
-            let mut s = alice_state.service.lock().unwrap();
-            let seed = get_wallet_master_seed(&mut s, Some(password)).unwrap();
-            let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(&seed, 0);
-            let bob_vk = human_money_core::crypto::get_pubkey_from_user_id(&bob_did).unwrap();
-            humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &bob_vk).unwrap()
+        save_contact_for(&alice_state, password, make_contact(bob_did.clone(), "Bob", 2, vec![]));
+        save_contact_for(&bob_state, password, make_contact(charlie_did.clone(), "Charlie", 2, vec![]));
+        let bob_sd_jwt = {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut reg = bob_state.get_or_load_wot_register(&mut s, Some(password)).unwrap();
+            bob_state.ensure_wot_list_signed(&mut s, &mut reg).unwrap();
+            reg.own_signed_list.unwrap()
         };
-
         {
             let mut s = alice_state.service.lock().unwrap();
-            alice_state
-                .save_contact(
-                    &mut s,
-                    FrontendContact {
-                        did: bob_did.clone(),
-                        profile: FrontendUserProfile {
-                            first_name: Some("Bob".to_string()),
-                            ..Default::default()
-                        },
-                        tags: vec![],
-                        added_at: "2026-01-01T00:00:00Z".to_string(),
-                        notes: None,
-                        trust_level: Some(0),
-                        desired_hops: Some(3),
-                        has_peer_list: false,
-                        peer_list_updated_at: None,
-                        syncs: vec![],
-                    },
-                    Some(password),
-                )
-                .unwrap();
+            let mut reg = alice_state.get_or_load_wot_register(&mut s, Some(password)).unwrap();
+            reg.raw_list_store.insert(canonicalize_did(&bob_did).unwrap(), bob_sd_jwt);
+            alice_state.save_wot_register(&mut s, &reg, Some(password)).unwrap();
         }
-        let _revoked_push_status = update_sync_admin_config_impl(
+
+        let updated_status = update_sync_admin_config_impl(
             FrontendSyncAdminUpdateRequest::default(),
             true,
             Some(password.to_string()),
@@ -1056,59 +858,106 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-
+        assert_eq!(updated_status.total_member_count, 3);
+        assert_eq!(server_a.members.lock().unwrap().len(), 3);
         {
             let mut s = alice_state.service.lock().unwrap();
-            let admin_after = admin::load_stored_sync_admin_opt(&mut s, Some(password))
-                .unwrap()
-                .unwrap();
-            let (_, active_pks) = admin::compute_admin_sync_members_with_stats(
-                &alice_state,
-                &mut s,
-                &admin_after,
-                "card",
-                Some(password),
-            )
-            .unwrap();
-            assert!(!active_pks.contains(&bob_stealth_pk_a));
+            let admin_cfg = admin::load_stored_sync_admin_opt(&mut s, Some(password)).unwrap().unwrap();
+            let (stats, _) =
+                compute_admin_sync_members_with_stats(&alice_state, &mut s, &admin_cfg, "card", Some(password))
+                    .unwrap();
+            assert_eq!(stats.direct_count, 2);
+            assert_eq!(stats.hop2_count, 1);
         }
-        assert!(!server_a.members.lock().unwrap().contains(&bob_stealth_pk_a));
-        assert!(
-            !server_a
-                .slots
-                .lock()
-                .unwrap()
-                .contains_key(&format!("{}.card", bob_stealth_pk_a)),
-            "Slot file should be purged on Server A"
-        );
-        assert!(
-            !server_a
-                .slots
-                .lock()
-                .unwrap()
-                .contains_key(&format!("{}_pc.card", bob_stealth_pk_a)),
-            "Prefixed slot file should be purged on Server A"
-        );
-        assert!(
-            !server_a
-                .slots
-                .lock()
-                .unwrap()
-                .contains_key(&format!("{}.wot", bob_stealth_pk_a)),
-            "WoT slot file should be purged on Server A"
-        );
-        assert!(
-            !server_a
-                .slots
-                .lock()
-                .unwrap()
-                .contains_key(&format!("{}_pc.wot", bob_stealth_pk_a)),
-            "Prefixed WoT slot file should be purged on Server A"
-        );
 
-        // 9. Check overview status
-        let overview =
-            get_sync_overview_status_impl(Some(password.to_string()), &alice_state).unwrap();
+        save_contact_for(
+            &charlie_state,
+            password,
+            FrontendContact {
+                trust_level: Some(1),
+                desired_hops: Some(2),
+                ..make_contact(alice_did.clone(), "Alice", 1, vec![finalize_status.descriptor.clone()])
+            },
+        );
+        let probe_results = probe_contact_syncs_impl(false, Some(password.to_string()), &charlie_state)
+            .await
+            .unwrap();
+        assert!(!probe_results.is_empty(), "Charlie should probe Server A");
+        let charlie_discovered = discover_available_syncs_impl(Some(password.to_string()), &charlie_state)
+            .await
+            .unwrap();
+        assert_eq!(charlie_discovered.len(), 1);
+        assert!(charlie_discovered[0].is_authorized);
+
+        let server_e = setup_phase3_bob_profile_and_public_sync(
+            &bob_state,
+            &finalize_status.descriptor,
+            &l1_did,
+            password,
+        )
+        .await;
+        let bob_sync = sync_market_channels_impl(None, Some(true), Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        assert_eq!(bob_sync.uploaded_to, 4);
+        assert_eq!(server_a.slots.lock().unwrap().len(), 2);
+        assert_eq!(server_e.slots.lock().unwrap().len(), 2);
+
+        save_contact_for(
+            &l1_state,
+            password,
+            make_contact(bob_did.clone(), "Bob", 2, vec![finalize_status.descriptor.clone()]),
+        );
+        let l1_sync = sync_market_channels_impl(None, None, Some(password.to_string()), &l1_state)
+            .await
+            .unwrap();
+        assert_eq!(l1_sync.decrypted_slots, 2);
+        assert_eq!(l1_sync.imported_cards, 1);
+        assert_eq!(l1_sync.imported_wot_lists, 1);
+
+        let l1_market = get_market_view_impl(Some(password.to_string()), &l1_state).unwrap();
+        let can_bob_did = canonicalize_did(&bob_did).unwrap();
+        let bob_person = l1_market
+            .people
+            .iter()
+            .find(|p| p.did == can_bob_did)
+            .expect("Bob should be in L1 market view");
+        assert!(bob_person.sources.iter().any(|s| {
+            matches!(s, crate::models::FrontendEntrySource::Sync { read_url } if *read_url == finalize_status.descriptor.read_url)
+        }));
+
+        select_sync_target(&l2_state, password, finalize_status.descriptor.clone(), None);
+        let l2_sync = sync_market_channels_impl(None, None, Some(password.to_string()), &l2_state)
+            .await
+            .unwrap();
+        assert_eq!(l2_sync.decrypted_slots, 0);
+        assert_eq!(l2_sync.imported_cards, 0);
+
+        let bob_stealth_pk_a = {
+            let mut s = alice_state.service.lock().unwrap();
+            let seed = get_wallet_master_seed(&mut s, Some(password)).unwrap();
+            let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(&seed, 0);
+            let bob_vk = human_money_core::crypto::get_pubkey_from_user_id(&bob_did).unwrap();
+            humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &bob_vk).unwrap()
+        };
+        save_contact_for(&alice_state, password, make_contact(bob_did, "Bob", 0, vec![]));
+        let revoked_push_status = update_sync_admin_config_impl(
+            FrontendSyncAdminUpdateRequest::default(),
+            true,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(revoked_push_status.total_member_count, 1);
+
+        let slots_a = server_a.slots.lock().unwrap();
+        assert!(!server_a.members.lock().unwrap().contains(&bob_stealth_pk_a));
+        for ext in [".card", "_pc.card", ".wot", "_pc.wot"] {
+            assert!(!slots_a.contains_key(&format!("{bob_stealth_pk_a}{ext}")));
+        }
+
+        let overview = get_sync_overview_status_impl(Some(password.to_string()), &alice_state).unwrap();
         assert!(overview.has_own_sync);
         assert_eq!(overview.connected_count, 1);
         assert_eq!(overview.pending_count, 0);
@@ -1173,84 +1022,61 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_probe_contact_syncs_lifecycle_and_auto_activation() {
-        let base_dir = temp_test_dir("probe_lifecycle");
+        let base_dir = TempDirGuard(temp_test_dir("probe_lifecycle"));
         let password = "TestPassword123!";
-        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
-        let bob_state = create_test_state(bob_service);
+        let bob_state =
+            create_test_state(setup_test_app(&base_dir.0.join("bob"), "Bob", BOB_PHRASE, password));
 
         let server_admin_pub = crate::test_support::test_ed25519_pub_hex(0x11);
         let server =
             MockSyncServer::start("alice_data".to_string(), server_admin_pub.clone()).await;
 
-        // 1. Initially Bob has no syncs in security_policy
         {
             let mut s = bob_state.service.lock().unwrap();
-            let policy = bob_state
+            assert!(bob_state
                 .load_security_policy(&mut s, Some(password))
-                .unwrap();
-            assert!(policy.market_selected_syncs.is_empty());
+                .unwrap()
+                .market_selected_syncs
+                .is_empty());
         }
 
-        // 2. Add Alice contact with unverified sync
         let alice_did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
         let unverified_sync = FrontendSyncDescriptor {
             write_url: format!("{}/sync.php", server.base_url),
-            read_url: String::new(),
-            slot_id: None,
-            drop_pub: String::new(),
-            last_seen_at: None,
-            last_error_at: None,
-            fail_count: 0,
             status: "unverified".to_string(),
-            last_probed_at: None,
             ..Default::default()
         };
-        let alice_contact = FrontendContact {
-            did: alice_did.to_string(),
-            profile: FrontendUserProfile::default(),
-            tags: vec![],
-            added_at: chrono::Utc::now().to_rfc3339(),
-            notes: None,
-            trust_level: Some(2),
-            desired_hops: Some(1),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![unverified_sync],
-        };
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            bob_state
-                .save_contact(&mut s, alice_contact, Some(password))
-                .unwrap();
-        }
+        save_contact_for(
+            &bob_state,
+            password,
+            make_contact(alice_did.to_string(), "Alice", 2, vec![unverified_sync]),
+        );
 
-        // 3. First probe: Bob not in server members -> becomes pending_auth, NOT auto-activated
         let probed = probe_contact_syncs_impl(false, Some(password.to_string()), &bob_state)
             .await
             .unwrap();
         assert_eq!(probed.len(), 1);
         assert_eq!(probed[0].status, "pending_auth");
         assert_eq!(probed[0].drop_pub, server_admin_pub);
-        assert!(probed[0].last_probed_at.is_some());
-
-        // Verify security_policy still empty (no auto-activation for pending_auth)
+        let initial_probed_at = probed[0]
+            .last_probed_at
+            .expect("pending probe must record last_probed_at");
+        assert!(initial_probed_at > 0);
         {
             let mut s = bob_state.service.lock().unwrap();
-            let policy = bob_state
+            assert!(bob_state
                 .load_security_policy(&mut s, Some(password))
-                .unwrap();
-            assert!(policy.market_selected_syncs.is_empty());
+                .unwrap()
+                .market_selected_syncs
+                .is_empty());
         }
 
-        // 4. Backoff check: immediate re-probe with force=false skips pending_auth
-        let initial_probed_at = probed[0].last_probed_at;
         let reprobed = probe_contact_syncs_impl(false, Some(password.to_string()), &bob_state)
             .await
             .unwrap();
         assert_eq!(reprobed[0].status, "pending_auth");
-        assert_eq!(reprobed[0].last_probed_at, initial_probed_at);
+        assert_eq!(reprobed[0].last_probed_at, Some(initial_probed_at));
 
-        // 5. Authorize Bob on the mock drop server
         let bob_signing_key = {
             let s = bob_state.service.lock().unwrap();
             s.with_wallet_and_identity(|_w, id| id.signing_key.clone())
@@ -1261,13 +1087,11 @@ pub(crate) mod tests {
                 .unwrap();
         server.members.lock().unwrap().push(stealth_pk);
 
-        // 6. Force probe: Bob is now authorized -> becomes active and auto-activates into selected syncs
         let active_probed = probe_contact_syncs_impl(true, Some(password.to_string()), &bob_state)
             .await
             .unwrap();
         assert_eq!(active_probed.len(), 1);
         assert_eq!(active_probed[0].status, "active");
-
         {
             let mut s = bob_state.service.lock().unwrap();
             let policy = bob_state
@@ -1278,46 +1102,20 @@ pub(crate) mod tests {
             assert_eq!(policy.market_selected_syncs[0].drop_pub, server_admin_pub);
         }
 
-        // 7. Test unreachable handling with invalid endpoint
-        let charlie_service = setup_test_app(
-            &base_dir.join("charlie"),
-            "Charlie",
-            CHARLIE_PHRASE,
-            password,
-        );
-        let charlie_did = charlie_service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
+        let charlie_did =
+            setup_test_app(&base_dir.0.join("charlie"), "Charlie", CHARLIE_PHRASE, password)
+                .with_wallet(|w| w.get_user_id().to_string())
+                .unwrap();
         let unreachable_sync = FrontendSyncDescriptor {
             write_url: "http://127.0.0.1:9/sync.php".to_string(),
-            read_url: String::new(),
-            slot_id: None,
-            drop_pub: String::new(),
-            last_seen_at: None,
-            last_error_at: None,
-            fail_count: 0,
             status: "unverified".to_string(),
-            last_probed_at: None,
             ..Default::default()
         };
-        let charlie_contact = FrontendContact {
-            did: charlie_did,
-            profile: FrontendUserProfile::default(),
-            tags: vec![],
-            added_at: chrono::Utc::now().to_rfc3339(),
-            notes: None,
-            trust_level: Some(1),
-            desired_hops: Some(1),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![unreachable_sync],
-        };
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            bob_state
-                .save_contact(&mut s, charlie_contact, Some(password))
-                .unwrap();
-        }
+        save_contact_for(
+            &bob_state,
+            password,
+            make_contact(charlie_did, "Charlie", 1, vec![unreachable_sync]),
+        );
 
         let all_probed = probe_contact_syncs_impl(true, Some(password.to_string()), &bob_state)
             .await
@@ -1328,17 +1126,20 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(unreach.status, "unreachable");
         assert_eq!(unreach.fail_count, 1);
-        assert!(unreach.last_probed_at.is_some());
+        let unreach_probed_at = unreach
+            .last_probed_at
+            .expect("unreachable probe must record last_probed_at timestamp");
+        assert!(unreach_probed_at > 0);
     }
 
     #[tokio::test]
     async fn test_local_validation_error_does_not_penalize_contact_sync_health() {
-        let base_dir = temp_test_dir("local_val_no_health_penalty");
+        let base_dir = TempDirGuard(temp_test_dir("local_val_no_health_penalty"));
         let password = "TestPassword123!";
-        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let bob_service = setup_test_app(&base_dir.0.join("bob"), "Bob", BOB_PHRASE, password);
         let bob_state = create_test_state(bob_service);
         let charlie_service = setup_test_app(
-            &base_dir.join("charlie"),
+            &base_dir.0.join("charlie"),
             "Charlie",
             CHARLIE_PHRASE,
             password,
@@ -1391,9 +1192,12 @@ pub(crate) mod tests {
             batch.commit(&bob_state, &mut s, Some(password)).unwrap();
         }
 
-        let _ = probe_contact_syncs_impl(true, Some(password.to_string()), &bob_state)
+        let probed = probe_contact_syncs_impl(true, Some(password.to_string()), &bob_state)
             .await
             .unwrap();
+        assert_eq!(probed.len(), 1);
+        assert_eq!(probed[0].status, "active");
+        assert_eq!(probed[0].fail_count, 0);
 
         let ab: crate::models::FrontendAddressBook = {
             let mut s = bob_state.service.lock().unwrap();
@@ -1411,8 +1215,6 @@ pub(crate) mod tests {
         );
         assert_eq!(saved_ep.fail_count, 0);
         assert!(saved_ep.last_probed_at.is_none());
-
-        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[tokio::test]
@@ -1575,7 +1377,7 @@ pub(crate) mod tests {
             .unwrap();
 
         // Prepare drop setup on Alice with direct_min 2
-        let _draft = prepare_sync_setup_impl(
+        let draft = prepare_sync_setup_impl(
             Some(FrontendMemberPolicyDto {
                 direct_min: 2,
                 hop2_enabled: true,
@@ -1589,6 +1391,7 @@ pub(crate) mod tests {
             &alice_state,
         )
         .unwrap();
+        assert_eq!(draft.admin_pubkey.len(), 64);
 
         // 1. Initially Bob has no trust level (0)
         let preview_upgrade = preview_contact_trust_change_impl(
@@ -1646,383 +1449,115 @@ pub(crate) mod tests {
         assert!(!preview_downgrade.can_send_me_post_after);
     }
 
+    fn setup_wot_flow_trust_graph(
+        alice_state: &AppState,
+        bob_state: &AppState,
+        carol_state: &AppState,
+        alice_did: &str,
+        bob_did: &str,
+        carol_did: &str,
+        password: &str,
+    ) {
+        save_contact_for(alice_state, password, make_contact(bob_did.to_string(), "Bob", 2, vec![]));
+        save_contact_for(bob_state, password, make_contact(alice_did.to_string(), "Alice", 2, vec![]));
+        save_contact_for(bob_state, password, make_contact(carol_did.to_string(), "Carol", 2, vec![]));
+        save_contact_for(carol_state, password, make_contact(bob_did.to_string(), "Bob", 2, vec![]));
+        save_contact_for(carol_state, password, make_contact(alice_did.to_string(), "Alice", 1, vec![]));
+
+        let can_alice = canonicalize_did(alice_did).unwrap();
+        let can_bob = canonicalize_did(bob_did).unwrap();
+        let bob_sync_pkg = {
+            let mut bob_s = bob_state.service.lock().unwrap();
+            let mut bob_reg = bob_state.get_or_load_wot_register(&mut bob_s, Some(password)).unwrap();
+            bob_state.ensure_wot_list_signed(&mut bob_s, &mut bob_reg).unwrap();
+            bob_reg.prepare_sync_package(Some(&can_alice), None, true).unwrap().0
+        };
+        let mut alice_s = alice_state.service.lock().unwrap();
+        let mut alice_reg = alice_state.get_or_load_wot_register(&mut alice_s, Some(password)).unwrap();
+        let now = sync_client::current_unix_timestamp();
+        let stats = alice_reg.import_sync_package(&bob_sync_pkg, Some(&can_bob), now).unwrap();
+        assert!(stats.accepted_total() >= 1);
+        alice_state.save_wot_register(&mut alice_s, &alice_reg, Some(password)).unwrap();
+    }
+
     #[tokio::test]
     async fn test_wot_channel_sync_flow_and_idempotency() {
-        let base_dir = temp_test_dir("wot_sync_flow");
+        let base_dir = TempDirGuard(temp_test_dir("wot_sync_flow"));
         let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(&base_dir.0.join("alice"), "Alice", ALICE_PHRASE, password));
+        let bob_state = create_test_state(setup_test_app(&base_dir.0.join("bob"), "Bob", BOB_PHRASE, password));
+        let carol_state = create_test_state(setup_test_app(&base_dir.0.join("carol"), "Carol", CHARLIE_PHRASE, password));
+        let david_state = create_test_state(setup_test_app(&base_dir.0.join("david"), "David", READER1_PHRASE, password));
 
-        // 1. Setup actors: Alice (Hoster/Admin), Bob (Direct Friend, Level 2), Carol (Hop-2 from Alice via Bob, Level 2), David (Outsider)
-        let alice_service =
-            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
-        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
-        let carol_service =
-            setup_test_app(&base_dir.join("carol"), "Carol", CHARLIE_PHRASE, password);
-        let david_service =
-            setup_test_app(&base_dir.join("david"), "David", READER1_PHRASE, password);
+        let alice_did = wallet_did(&alice_state);
+        let bob_did = wallet_did(&bob_state);
+        let carol_did = wallet_did(&carol_state);
 
-        let alice_state = create_test_state(alice_service);
-        let bob_state = create_test_state(bob_service);
-        let carol_state = create_test_state(carol_service);
-        let david_state = create_test_state(david_service);
-
-        let alice_did = {
-            let s = alice_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
-        let bob_did = {
-            let s = bob_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
-        let carol_did = {
-            let s = carol_state.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
-
-        // 2. Alice sets up her drop
-        let draft = prepare_sync_setup_impl(
-            Some(FrontendMemberPolicyDto {
-                direct_min: 2,
-                hop2_enabled: true,
-                bridge_min: 2,
-                hop2_min: 2,
-            }),
-            Some(300),
-            Some(256),
-            None,
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .unwrap();
-
-        let server =
-            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
-
-        let finalize_status = finalize_sync_setup_impl(
-            server.base_url.clone(),
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-
-        // Configure Alice's drop as target drop for Alice, Bob, and Carol
+        let policy_dto = Some(FrontendMemberPolicyDto {
+            direct_min: 2,
+            hop2_enabled: true,
+            bridge_min: 2,
+            hop2_min: 2,
+        });
+        let (_draft, server, finalize_status) =
+            setup_finalized_server(&alice_state, password, policy_dto, Some(300), Some(256)).await;
         for st in [&alice_state, &bob_state, &carol_state] {
-            let mut s = st.service.lock().unwrap();
-            st.mutate_security_policy(&mut s, Some(password), |policy| {
-                policy.market_selected_syncs = vec![finalize_status.descriptor.clone()];
-            })
-            .unwrap();
+            select_sync_target(st, password, finalize_status.descriptor.clone(), None);
         }
+        setup_wot_flow_trust_graph(
+            &alice_state,
+            &bob_state,
+            &carol_state,
+            &alice_did,
+            &bob_did,
+            &carol_did,
+            password,
+        );
 
-        // 3. Establish Trust Network:
-        // Alice rates Bob as Level 2 (Direct, class 1)
-        {
-            let mut s = alice_state.service.lock().unwrap();
-            let bob_contact = FrontendContact {
-                did: bob_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Bob".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            alice_state
-                .save_contact(&mut s, bob_contact, Some(password))
-                .unwrap();
-        }
-
-        // Bob rates Alice as Level 2 (so Bob recognizes Alice) and Carol as Level 2
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            let alice_contact = FrontendContact {
-                did: alice_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Alice".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            bob_state
-                .save_contact(&mut s, alice_contact, Some(password))
-                .unwrap();
-
-            let carol_contact = FrontendContact {
-                did: carol_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Carol".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            bob_state
-                .save_contact(&mut s, carol_contact, Some(password))
-                .unwrap();
-        }
-
-        // Carol rates Bob as Level 2 and Alice as Level 1
-        {
-            let mut s = carol_state.service.lock().unwrap();
-            let bob_contact = FrontendContact {
-                did: bob_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Bob".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            carol_state
-                .save_contact(&mut s, bob_contact, Some(password))
-                .unwrap();
-
-            let alice_contact = FrontendContact {
-                did: alice_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Alice".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(1),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            carol_state
-                .save_contact(&mut s, alice_contact, Some(password))
-                .unwrap();
-        }
-
-        // Alice learns Bob's list so Carol is in Alice's graph as reachable Hop-2:
-        {
-            let can_alice = canonicalize_did(&alice_did).unwrap();
-            let can_bob = canonicalize_did(&bob_did).unwrap();
-
-            let mut bob_s = bob_state.service.lock().unwrap();
-            let mut bob_reg = bob_state
-                .get_or_load_wot_register(&mut bob_s, Some(password))
-                .unwrap();
-            bob_state
-                .ensure_wot_list_signed(&mut bob_s, &mut bob_reg)
-                .unwrap();
-            let bob_sync_pkg = bob_reg
-                .prepare_sync_package(Some(&can_alice), None, true)
-                .unwrap()
-                .0;
-
-            let mut alice_s = alice_state.service.lock().unwrap();
-            let mut alice_reg = alice_state
-                .get_or_load_wot_register(&mut alice_s, Some(password))
-                .unwrap();
-            let now = sync_client::current_unix_timestamp();
-            let stats = alice_reg
-                .import_sync_package(&bob_sync_pkg, Some(&can_bob), now)
-                .unwrap();
-            assert!(stats.accepted_total() >= 1);
-            alice_state
-                .save_wot_register(&mut alice_s, &alice_reg, Some(password))
-                .unwrap();
-        }
-
-        // Verify Alice's authorized drop readers: Bob (class 1) and Carol (class 2)
+        let can_alice = canonicalize_did(&alice_did).unwrap();
         {
             let mut alice_s = alice_state.service.lock().unwrap();
-            let alice_reg = alice_state
-                .get_or_load_wot_register(&mut alice_s, Some(password))
-                .unwrap();
+            let alice_reg = alice_state.get_or_load_wot_register(&mut alice_s, Some(password)).unwrap();
             let readers = alice_reg.authorized_drop_readers();
-            let can_bob = canonicalize_did(&bob_did).unwrap();
-            let can_carol = canonicalize_did(&carol_did).unwrap();
-            assert!(
-                readers.iter().any(|(d, c)| d == &can_bob && *c == 1),
-                "Bob must be in class 1"
-            );
-            assert!(
-                readers.iter().any(|(d, c)| d == &can_carol && *c == 2),
-                "Carol must be in class 2"
-            );
+            assert!(readers.iter().any(|(d, c)| d == &canonicalize_did(&bob_did).unwrap() && *c == 1));
+            assert!(readers.iter().any(|(d, c)| d == &canonicalize_did(&carol_did).unwrap() && *c == 2));
         }
 
-        // 4. Alice Syncs (Uploads "wot" channel to drop server)
-        let alice_sync_res =
-            sync_market_channels_impl(None, Some(true), Some(password.to_string()), &alice_state)
-                .await
-                .unwrap();
-        assert!(
-            alice_sync_res.uploaded_to >= 1,
-            "Alice must upload to drop server"
-        );
-        assert!(
-            alice_sync_res.errors.is_empty(),
-            "Alice sync should have 0 errors: {:?}",
-            alice_sync_res.errors
-        );
+        let alice_sync_res = sync_market_channels_impl(None, Some(true), Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert!(alice_sync_res.uploaded_to >= 1 && alice_sync_res.errors.is_empty());
 
-        // Verify slot exists on mock drop server and has multi-class magic
-        let slot_keys: Vec<String> = server.slots.lock().unwrap().keys().cloned().collect();
-        let wot_slot_key = slot_keys
-            .iter()
-            .find(|k| k.ends_with(".wot"))
-            .expect("Wot slot must exist on server");
-        let wot_slot_bytes = server
-            .slots
-            .lock()
-            .unwrap()
-            .get(wot_slot_key)
-            .unwrap()
-            .clone();
+        let wot_slot_bytes = {
+            let slots = server.slots.lock().unwrap();
+            let wot_key = slots.keys().find(|k| k.ends_with(".wot")).expect("Wot slot must exist on server");
+            slots.get(wot_key).unwrap().clone()
+        };
         assert_eq!(&wot_slot_bytes[0..8], humoco_market::SLOT_MULTI_MAGIC);
 
-        // 5. Bob (Class 1) Syncs (Downloads Alice's list)
-        let bob_sync_res =
-            sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state)
-                .await
-                .unwrap();
-        assert!(
-            bob_sync_res.imported_wot_lists >= 1,
-            "Bob must import Alice's wot list: {:?}",
-            bob_sync_res
-        );
-        assert!(
-            bob_sync_res.errors.is_empty(),
-            "Bob sync should have 0 errors: {:?}",
-            bob_sync_res.errors
-        );
-
-        // Verify Bob's register now has Alice's list
+        let bob_sync_res = sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state).await.unwrap();
+        assert!(bob_sync_res.imported_wot_lists >= 1 && bob_sync_res.errors.is_empty());
         {
             let mut bob_s = bob_state.service.lock().unwrap();
-            let bob_reg = bob_state
-                .get_or_load_wot_register(&mut bob_s, Some(password))
-                .unwrap();
-            let can_alice = canonicalize_did(&alice_did).unwrap();
-            assert!(
-                bob_reg.raw_list_store.contains_key(&can_alice),
-                "Bob must have Alice's raw list"
-            );
+            assert!(bob_state.get_or_load_wot_register(&mut bob_s, Some(password)).unwrap().raw_list_store.contains_key(&can_alice));
         }
+        assert_eq!(sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state).await.unwrap().imported_wot_lists, 0);
 
-        // Bob second sync before any new uploads -> strict idempotency (0 new imports)
-        let bob_idempotent_sync =
-            sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state)
-                .await
-                .unwrap();
-        assert_eq!(
-            bob_idempotent_sync.imported_wot_lists, 0,
-            "Bob second sync before new uploads must be 0 imports"
-        );
-
-        // 6. Carol (Class 2) Syncs (Downloads Alice's list with Selective Disclosure)
-        let carol_sync_res =
-            sync_market_channels_impl(None, None, Some(password.to_string()), &carol_state)
-                .await
-                .unwrap();
-        assert!(
-            carol_sync_res.imported_wot_lists >= 1,
-            "Carol must import Alice's wot list"
-        );
-        assert!(
-            carol_sync_res.errors.is_empty(),
-            "Carol sync should have 0 errors: {:?}",
-            carol_sync_res.errors
-        );
-
-        // Verify Carol's register now has Alice's list
+        let carol_sync_res = sync_market_channels_impl(None, None, Some(password.to_string()), &carol_state).await.unwrap();
+        assert!(carol_sync_res.imported_wot_lists >= 1 && carol_sync_res.errors.is_empty());
         {
             let mut carol_s = carol_state.service.lock().unwrap();
-            let carol_reg = carol_state
-                .get_or_load_wot_register(&mut carol_s, Some(password))
-                .unwrap();
-            let can_alice = canonicalize_did(&alice_did).unwrap();
-            assert!(
-                carol_reg.raw_list_store.contains_key(&can_alice),
-                "Carol must have Alice's raw list"
-            );
+            assert!(carol_state.get_or_load_wot_register(&mut carol_s, Some(password)).unwrap().raw_list_store.contains_key(&can_alice));
         }
+        assert_eq!(sync_market_channels_impl(None, None, Some(password.to_string()), &carol_state).await.unwrap().imported_wot_lists, 0);
+        assert_eq!(sync_market_channels_impl(None, None, Some(password.to_string()), &alice_state).await.unwrap().uploaded_to, 0);
+        assert_eq!(sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state).await.unwrap().imported_wot_lists, 1);
+        assert_eq!(sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state).await.unwrap().imported_wot_lists, 0);
 
-        // Carol second sync -> strict idempotency (0 new imports)
-        let carol_idempotent_sync =
-            sync_market_channels_impl(None, None, Some(password.to_string()), &carol_state)
-                .await
-                .unwrap();
-        assert_eq!(
-            carol_idempotent_sync.imported_wot_lists, 0,
-            "Carol second sync must be 0 imports"
-        );
-
-        // 7. Alice second sync -> no new upload needed
-        let alice_second_sync =
-            sync_market_channels_impl(None, None, Some(password.to_string()), &alice_state)
-                .await
-                .unwrap();
-        assert_eq!(
-            alice_second_sync.uploaded_to, 0,
-            "Alice second sync without changes must be no-op upload"
-        );
-
-        // Bob now syncs to pick up Carol's newly uploaded list
-        let bob_third_sync =
-            sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state)
-                .await
-                .unwrap();
-        assert_eq!(
-            bob_third_sync.imported_wot_lists, 1,
-            "Bob should import Carol's list"
-        );
-
-        // Bob fourth sync -> again fully idempotent
-        let bob_fourth_sync =
-            sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state)
-                .await
-                .unwrap();
-        assert_eq!(
-            bob_fourth_sync.imported_wot_lists, 0,
-            "Bob fourth sync must be 0 imports"
-        );
-
-        // 8. Outsider (David) cannot decrypt Alice's wot slot
-        {
-            let david_s = david_state.service.lock().unwrap();
-            let david_sk = david_s
-                .with_wallet_and_identity(|_w, id| id.signing_key.clone())
-                .unwrap();
-            let david_x_sk = human_money_core::crypto::ed25519_sk_to_x25519_sk(&david_sk);
-            let decrypted =
-                humoco_market::open_multi_class_slot_blob(&wot_slot_bytes, &david_x_sk).unwrap();
-            assert_eq!(
-                decrypted, None,
-                "Outsider cannot decrypt any subpackage in multi-class slot blob"
-            );
-        }
+        let david_s = david_state.service.lock().unwrap();
+        let david_sk = david_s.with_wallet_and_identity(|_w, id| id.signing_key.clone()).unwrap();
+        let david_x_sk = human_money_core::crypto::ed25519_sk_to_x25519_sk(&david_sk);
+        assert_eq!(humoco_market::open_multi_class_slot_blob(&wot_slot_bytes, &david_x_sk).unwrap(), None);
     }
 
     #[tokio::test]
@@ -2227,58 +1762,25 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_base_and_delta_card_bundle_and_compaction_on_new_reader() {
-        let base_dir = temp_test_dir("base_delta_compaction");
+        let base_dir = TempDirGuard(temp_test_dir("base_delta_compaction"));
         let password = "TestPassword123!";
+        let bob_state = create_test_state(setup_test_app(&base_dir.0.join("bob"), "Bob", BOB_PHRASE, password));
+        let r1_state = create_test_state(setup_test_app(&base_dir.0.join("r1"), "Reader1", READER1_PHRASE, password));
+        let r2_state = create_test_state(setup_test_app(&base_dir.0.join("r2"), "Reader2", READER2_PHRASE, password));
 
-        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
-        let r1_service = setup_test_app(&base_dir.join("r1"), "Reader1", READER1_PHRASE, password);
-        let r2_service = setup_test_app(&base_dir.join("r2"), "Reader2", READER2_PHRASE, password);
-
-        let bob_state = create_test_state(bob_service);
-        let r1_state = create_test_state(r1_service);
-        let r2_state = create_test_state(r2_service);
-
-        let r1_did = r1_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
-        let r2_did = r2_state
-            .service
-            .lock()
-            .unwrap()
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
-
-        let draft = prepare_sync_setup_impl(
-            None,
-            None,
-            None,
-            None,
-            Some(password.to_string()),
-            &bob_state,
-        )
-        .unwrap();
-        let server =
-            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
-        let finalize_status = finalize_sync_setup_impl(
-            server.base_url.clone(),
-            Some(password.to_string()),
-            &bob_state,
-        )
-        .await
-        .unwrap();
-
-        set_selected_upload_syncs_impl(
+        let r1_did = wallet_did(&r1_state);
+        let r2_did = wallet_did(&r2_state);
+        let (_draft, server, finalize_status) =
+            setup_finalized_server(&bob_state, password, None, None, None).await;
+        let selected = set_selected_upload_syncs_impl(
             vec![finalize_status.descriptor.clone()],
             Some(password.to_string()),
             &bob_state,
         )
         .await
         .unwrap();
+        assert_eq!(selected.len(), 1);
 
-        // Bob trusts Reader 1 initially and disables WoT share so we assert pure card upload counts cleanly
         {
             let mut s = bob_state.service.lock().unwrap();
             bob_state
@@ -2286,33 +1788,10 @@ pub(crate) mod tests {
                     prefs.wot_share_via_sync = false;
                 })
                 .unwrap();
-            bob_state
-                .save_contact(
-                    &mut s,
-                    FrontendContact {
-                        did: r1_did.clone(),
-                        profile: FrontendUserProfile {
-                            first_name: Some("Reader1".to_string()),
-                            ..Default::default()
-                        },
-                        tags: vec![],
-                        added_at: "2026-01-01T00:00:00Z".into(),
-                        notes: None,
-                        trust_level: Some(2),
-                        desired_hops: Some(3),
-                        has_peer_list: false,
-                        peer_list_updated_at: None,
-                        syncs: vec![],
-                    },
-                    Some(password),
-                )
-                .unwrap();
         }
-        sync_channel_members_impl(Some(password), &bob_state)
-            .await
-            .unwrap();
+        save_contact_for(&bob_state, password, make_contact(r1_did, "Reader1", 2, vec![]));
+        assert!(sync_channel_members_impl(Some(password), &bob_state).await.unwrap() >= 1);
 
-        // Populate Bob's CardStore with 18 rich cards (~8-10 KB compressed Base)
         let now_secs = sync_client::current_unix_timestamp();
         let valid_until = now_secs + 365 * 86_400;
         {
@@ -2322,196 +1801,76 @@ pub(crate) mod tests {
                 let env = build_signed_test_card_envelope(seed, now_secs, valid_until, 5, 1);
                 humoco_market::accept_envelope(&mut store, &env, now_secs, 2000, None, &|_| false);
             }
-            let bytes = serde_json::to_vec(&store).unwrap();
-            s.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, Some(password))
+            s.save_encrypted_data(MARKET_CARD_STORE_KEY, &serde_json::to_vec(&store).unwrap(), Some(password))
                 .unwrap();
         }
 
-        // 1. Cold upload creates Base card slot (no delta yet)
-        let first_up =
-            sync_market_channels_impl(None, Some(true), Some(password.to_string()), &bob_state)
-                .await
-                .unwrap();
+        let first_up = sync_market_channels_impl(None, Some(true), Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
         assert_eq!(first_up.uploaded_to, 1);
-
         let keys_after_base: Vec<String> = server.slots.lock().unwrap().keys().cloned().collect();
         assert_eq!(keys_after_base.len(), 1);
         let base_key = keys_after_base[0].clone();
         assert!(!base_key.contains("delta"));
         let base_bytes_before = server.slots.lock().unwrap().get(&base_key).unwrap().clone();
-        assert!(
-            base_bytes_before.len() > 4096,
-            "Base should be large enough for <25% delta"
-        );
+        assert!(base_bytes_before.len() > 4096);
 
-        // 2. Update 1 small card -> Delta upload ONLY (Base bytes untouched!)
         let updated_v = now_secs + 120;
         let updated_env = build_signed_test_card_envelope(20, updated_v, valid_until, 0, 1);
-        let updated_did = humoco_market::verify_sd_card(&updated_env.card_wire)
-            .unwrap()
-            .payload
-            .did;
+        let updated_did = humoco_market::verify_sd_card(&updated_env.card_wire).unwrap().payload.did;
         {
+            let mut store = load_card_store(&bob_state, password);
+            humoco_market::accept_envelope(&mut store, &updated_env, updated_v, 2000, None, &|_| false);
             let mut s = bob_state.service.lock().unwrap();
-            let raw = s
-                .load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password))
-                .unwrap();
-            let mut store: humoco_market::CardStore = serde_json::from_slice(&raw).unwrap();
-            humoco_market::accept_envelope(
-                &mut store,
-                &updated_env,
-                updated_v,
-                2000,
-                None,
-                &|_| false,
-            );
-            let bytes = serde_json::to_vec(&store).unwrap();
-            s.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, Some(password))
+            s.save_encrypted_data(MARKET_CARD_STORE_KEY, &serde_json::to_vec(&store).unwrap(), Some(password))
                 .unwrap();
         }
 
-        let delta_up =
-            sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state)
-                .await
-                .unwrap();
+        let delta_up = sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
         assert_eq!(delta_up.uploaded_to, 1);
         let keys_after_delta: Vec<String> = server.slots.lock().unwrap().keys().cloned().collect();
-        assert_eq!(
-            keys_after_delta.len(),
-            2,
-            "Server must hold Base + Delta slots"
-        );
+        assert_eq!(keys_after_delta.len(), 2);
         assert!(keys_after_delta.iter().any(|k| k.contains("-delta.card")));
-        assert_eq!(
-            server
-                .slots
-                .lock()
-                .unwrap()
-                .get(&base_key)
-                .unwrap()
-                .as_slice(),
-            base_bytes_before.as_slice(),
-            "Base slot must stay unchanged on Delta upload"
-        );
+        assert_eq!(server.slots.lock().unwrap().get(&base_key).unwrap().as_slice(), base_bytes_before.as_slice());
 
-        // 3. Reader 1 syncs and gets both Base and Delta (including updated_v), and subsequent background poll hits 20m cooldown
-        {
-            let mut s = r1_state.service.lock().unwrap();
-            r1_state
-                .mutate_security_policy(&mut s, Some(password), |policy| {
-                    policy.market_selected_syncs = vec![finalize_status.descriptor.clone()];
-                })
-                .unwrap();
-        }
-        let r1_res = sync_market_channels_impl(None, None, Some(password.to_string()), &r1_state)
-            .await
-            .unwrap();
-        assert_eq!(
-            r1_res.decrypted_slots, 2,
-            "Reader 1 must decrypt Base and Delta slots"
-        );
+        select_sync_target(&r1_state, password, finalize_status.descriptor.clone(), None);
+        let r1_res = sync_market_channels_impl(None, None, Some(password.to_string()), &r1_state).await.unwrap();
+        assert_eq!(r1_res.decrypted_slots, 2);
         assert_eq!(r1_res.imported_cards, 19);
-        {
-            let mut s = r1_state.service.lock().unwrap();
-            let raw = s
-                .load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password))
-                .unwrap();
-            let r1_store: humoco_market::CardStore = serde_json::from_slice(&raw).unwrap();
-            assert_eq!(r1_store.cards.len(), 18);
-            let imported = r1_store
-                .cards
-                .values()
-                .find(|c| c.card.payload.did == updated_did)
-                .unwrap();
-            assert_eq!(imported.card.payload.v, updated_v);
-        }
-
-        let r1_cooldown = sync_market_channels_with_options(
-            None,
-            None,
-            Some(true),
-            Some(password.to_string()),
-            &r1_state,
-        )
-        .await
-        .unwrap();
+        let r1_store = load_card_store(&r1_state, password);
+        assert_eq!(r1_store.cards.len(), 18);
         assert_eq!(
-            r1_cooldown.polled_syncs, 0,
-            "Background poll inside 20m cooldown must skip download polling"
+            r1_store.cards.values().find(|c| c.card.payload.did == updated_did).unwrap().card.payload.v,
+            updated_v
         );
 
-        // 4. Bob authorizes Reader 2 -> readers_hash changes -> Compaction (new Base + DELETE Delta)
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            bob_state
-                .save_contact(
-                    &mut s,
-                    FrontendContact {
-                        did: r2_did.clone(),
-                        profile: FrontendUserProfile {
-                            first_name: Some("Reader2".to_string()),
-                            ..Default::default()
-                        },
-                        tags: vec![],
-                        added_at: "2026-01-01T00:00:00Z".into(),
-                        notes: None,
-                        trust_level: Some(2),
-                        desired_hops: Some(3),
-                        has_peer_list: false,
-                        peer_list_updated_at: None,
-                        syncs: vec![],
-                    },
-                    Some(password),
-                )
-                .unwrap();
-        }
-        sync_channel_members_impl(Some(password), &bob_state)
+        let r1_cooldown = sync_market_channels_with_options(None, None, Some(true), Some(password.to_string()), &r1_state)
             .await
             .unwrap();
+        assert_eq!(r1_cooldown.polled_syncs, 0);
 
-        let compact_up =
-            sync_market_channels_impl(None, Some(true), Some(password.to_string()), &bob_state)
-                .await
-                .unwrap();
+        save_contact_for(&bob_state, password, make_contact(r2_did, "Reader2", 2, vec![]));
+        assert!(sync_channel_members_impl(Some(password), &bob_state).await.unwrap() >= 1);
+        let compact_up = sync_market_channels_impl(None, Some(true), Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
         assert_eq!(compact_up.uploaded_to, 1);
-        let keys_after_compact: Vec<String> =
-            server.slots.lock().unwrap().keys().cloned().collect();
-        assert_eq!(
-            keys_after_compact.len(),
-            1,
-            "Compaction must delete Delta slot after Base PUT (keys={:?}, errors={:?})",
-            keys_after_compact,
-            compact_up.errors
-        );
+        let keys_after_compact: Vec<String> = server.slots.lock().unwrap().keys().cloned().collect();
+        assert_eq!(keys_after_compact.len(), 1);
         assert!(!keys_after_compact[0].contains("delta"));
 
-        // Reader 2 decrypts consolidated Base and receives all 18 cards incl. updated_v
-        {
-            let mut s = r2_state.service.lock().unwrap();
-            r2_state
-                .mutate_security_policy(&mut s, Some(password), |policy| {
-                    policy.market_selected_syncs = vec![finalize_status.descriptor.clone()];
-                })
-                .unwrap();
-        }
-        let r2_res = sync_market_channels_impl(None, None, Some(password.to_string()), &r2_state)
-            .await
-            .unwrap();
+        select_sync_target(&r2_state, password, finalize_status.descriptor, None);
+        let r2_res = sync_market_channels_impl(None, None, Some(password.to_string()), &r2_state).await.unwrap();
         assert_eq!(r2_res.decrypted_slots, 1);
         assert_eq!(r2_res.imported_cards, 18);
-        {
-            let mut s = r2_state.service.lock().unwrap();
-            let raw = s
-                .load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password))
-                .unwrap();
-            let r2_store: humoco_market::CardStore = serde_json::from_slice(&raw).unwrap();
-            let imported = r2_store
-                .cards
-                .values()
-                .find(|c| c.card.payload.did == updated_did)
-                .unwrap();
-            assert_eq!(imported.card.payload.v, updated_v);
-        }
+        let r2_store = load_card_store(&r2_state, password);
+        assert_eq!(
+            r2_store.cards.values().find(|c| c.card.payload.did == updated_did).unwrap().card.payload.v,
+            updated_v
+        );
     }
 
     #[tokio::test]
@@ -2672,7 +2031,9 @@ pub(crate) mod tests {
         let draft =
             prepare_sync_setup_impl(None, None, None, None, Some(password.to_string()), &state)
                 .unwrap();
-        let _toml = get_rust_sync_config_impl(Some(password.to_string()), &state).unwrap();
+        let toml_cfg = get_rust_sync_config_impl(Some(password.to_string()), &state).unwrap();
+        assert!(toml_cfg.contains(&draft.admin_pubkey));
+        assert!(toml_cfg.contains(&draft.data_dir));
         let zip_bytes = base64::Engine::decode(
             &base64::engine::general_purpose::STANDARD,
             &draft.zip_base64,
@@ -2803,7 +2164,10 @@ pub(crate) mod tests {
                     } else {
                         "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string()
                     };
-                    let _ = stream.write_all(resp.as_bytes()).await;
+                    stream
+                        .write_all(resp.as_bytes())
+                        .await
+                        .expect("mock HTTP write must succeed");
                 });
             }
         });
@@ -2969,227 +2333,83 @@ pub(crate) mod tests {
         assert_eq!(synced.max_user_storage_mb, 50);
     }
 
-    #[tokio::test]
-    async fn test_reach_shrink_unpublish_trust_withdrawal_and_media_gc() {
+    async fn setup_reach_shrink_network(
+        base_dir: &std::path::Path,
+        password: &str,
+    ) -> (
+        AppState,
+        AppState,
+        AppState,
+        AppState,
+        MockSyncServer,
+        String,
+        String,
+    ) {
         use base64::Engine;
 
-        let base_dir = temp_test_dir("reach_shrink_tombstone_flow");
-        let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
+        let eve_state = create_test_state(setup_test_app(&base_dir.join("eve"), "Eve", READER1_PHRASE, password));
+        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
+        let carol_state = create_test_state(setup_test_app(&base_dir.join("carol"), "Carol", CHARLIE_PHRASE, password));
 
-        let alice_state = create_test_state(setup_test_app(
-            &base_dir.join("alice"),
-            "Alice",
-            ALICE_PHRASE,
-            password,
-        ));
-        let eve_state = create_test_state(setup_test_app(
-            &base_dir.join("eve"),
-            "Eve",
-            READER1_PHRASE,
-            password,
-        ));
-        let bob_state = create_test_state(setup_test_app(
-            &base_dir.join("bob"),
-            "Bob",
-            BOB_PHRASE,
-            password,
-        ));
-        let carol_state = create_test_state(setup_test_app(
-            &base_dir.join("carol"),
-            "Carol",
-            CHARLIE_PHRASE,
-            password,
-        ));
-
-        let get_did = |st: &AppState| -> String {
-            let s = st.service.lock().unwrap();
-            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-        };
-        let alice_did = get_did(&alice_state);
-        let eve_did = get_did(&eve_state);
-        let bob_did = get_did(&bob_state);
-        let carol_did = get_did(&carol_state);
+        let alice_did = wallet_did(&alice_state);
+        let eve_did = wallet_did(&eve_state);
+        let bob_did = wallet_did(&bob_state);
+        let carol_did = wallet_did(&carol_state);
         let can_alice = canonicalize_did(&alice_did).unwrap();
-
-        let draft = prepare_sync_setup_impl(
-            Some(FrontendMemberPolicyDto {
-                direct_min: 1,
-                hop2_enabled: true,
-                bridge_min: 1,
-                hop2_min: 1,
-            }),
-            Some(300),
-            None,
-            None,
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .unwrap();
-        let server =
-            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
-        let fin = finalize_sync_setup_impl(
-            server.base_url.clone(),
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-
-        for st in [&alice_state, &eve_state, &bob_state, &carol_state] {
-            let mut s = st.service.lock().unwrap();
-            st.mutate_security_policy(&mut s, Some(password), |policy| {
-                policy.market_selected_syncs = vec![fin.descriptor.clone()];
-            })
-            .unwrap();
-            st.mutate_ui_preferences(&mut s, Some(password), |prefs| {
-                prefs.wot_share_via_sync = true;
-            })
-            .unwrap();
-        }
-
-        let mk_contact = |did: String, name: &str, level: u8| FrontendContact {
-            did,
-            profile: FrontendUserProfile {
-                first_name: Some(name.to_string()),
-                ..Default::default()
-            },
-            tags: vec![],
-            added_at: "2026-01-01T00:00:00Z".to_string(),
-            notes: None,
-            trust_level: Some(level),
-            desired_hops: Some(3),
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![],
-        };
-
-        // Set "far" reach preset (max_hops=3) before signing initial lists
-        apply_reach_preset_impl("far".to_string(), Some(password.to_string()), &alice_state)
-            .unwrap();
-        apply_reach_preset_impl("far".to_string(), Some(password.to_string()), &bob_state).unwrap();
-        apply_reach_preset_impl("far".to_string(), Some(password.to_string()), &carol_state)
-            .unwrap();
-
-        // Bob trusts Carol (2) and Carol trusts Bob (2); Bob exports his initial package BEFORE
-        // Alice/Bob mutually lock at unreciprocated_hops=1, mirroring direct handshake flow.
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            bob_state
-                .save_contact(
-                    &mut s,
-                    mk_contact(carol_did.clone(), "Carol", 2),
-                    Some(password),
-                )
-                .unwrap();
-        }
-        {
-            let mut s = carol_state.service.lock().unwrap();
-            carol_state
-                .save_contact(
-                    &mut s,
-                    mk_contact(bob_did.clone(), "Bob", 2),
-                    Some(password),
-                )
-                .unwrap();
-        }
         let can_bob = canonicalize_did(&bob_did).unwrap();
+
+        let policy_dto = Some(FrontendMemberPolicyDto {
+            direct_min: 1,
+            hop2_enabled: true,
+            bridge_min: 1,
+            hop2_min: 1,
+        });
+        let (_draft, server, fin) =
+            setup_finalized_server(&alice_state, password, policy_dto, Some(300), None).await;
+        for st in [&alice_state, &eve_state, &bob_state, &carol_state] {
+            select_sync_target(st, password, fin.descriptor.clone(), Some(true));
+        }
+        for st in [&alice_state, &bob_state, &carol_state] {
+            apply_reach_preset_impl("far".to_string(), Some(password.to_string()), st).unwrap();
+        }
+
+        save_contact_for(&bob_state, password, make_contact(carol_did, "Carol", 2, vec![]));
+        save_contact_for(&carol_state, password, make_contact(bob_did.clone(), "Bob", 2, vec![]));
         let bob_init_pkg = {
             let mut bs = bob_state.service.lock().unwrap();
-            let mut bob_reg = bob_state
-                .get_or_load_wot_register(&mut bs, Some(password))
-                .unwrap();
-            bob_state
-                .ensure_wot_list_signed(&mut bs, &mut bob_reg)
-                .unwrap();
-            bob_reg
-                .prepare_sync_package(Some(&can_alice), None, true)
-                .unwrap()
-                .0
+            let mut reg = bob_state.get_or_load_wot_register(&mut bs, Some(password)).unwrap();
+            bob_state.ensure_wot_list_signed(&mut bs, &mut reg).unwrap();
+            reg.prepare_sync_package(Some(&can_alice), None, true).unwrap().0
         };
-
-        // Alice trusts Eve (Level 1) first, then imports Bob's package immediately before trusting Bob (Level 2),
-        // then exports her package so Bob sees Bob@3 before adding Alice (same handshake as test_04).
         let alice_init_pkg = {
+            save_contact_for(&alice_state, password, make_contact(eve_did, "Eve", 1, vec![]));
             let mut s = alice_state.service.lock().unwrap();
-            alice_state
-                .save_contact(
-                    &mut s,
-                    mk_contact(eve_did.clone(), "Eve", 1),
-                    Some(password),
-                )
+            let mut reg = alice_state.get_or_load_wot_register(&mut s, Some(password)).unwrap();
+            reg.import_sync_package(&bob_init_pkg, Some(&can_bob), sync_client::current_unix_timestamp())
                 .unwrap();
-
-            let mut alice_reg = alice_state
-                .get_or_load_wot_register(&mut s, Some(password))
-                .unwrap();
-            let now = sync_client::current_unix_timestamp();
-            alice_reg
-                .import_sync_package(&bob_init_pkg, Some(&can_bob), now)
-                .unwrap();
-            alice_state
-                .save_wot_register(&mut s, &alice_reg, Some(password))
-                .unwrap();
-
-            alice_state
-                .save_contact(
-                    &mut s,
-                    mk_contact(bob_did.clone(), "Bob", 2),
-                    Some(password),
-                )
-                .unwrap();
-
-            let mut reg_after = alice_state
-                .get_or_load_wot_register(&mut s, Some(password))
-                .unwrap();
-            alice_state
-                .ensure_wot_list_signed(&mut s, &mut reg_after)
-                .unwrap();
-            alice_state
-                .save_wot_register(&mut s, &reg_after, Some(password))
-                .unwrap();
-            reg_after
-                .prepare_sync_package(Some(&can_bob), None, true)
-                .unwrap()
-                .0
+            alice_state.save_wot_register(&mut s, &reg, Some(password)).unwrap();
+            drop(s);
+            save_contact_for(&alice_state, password, make_contact(bob_did, "Bob", 2, vec![]));
+            let mut s = alice_state.service.lock().unwrap();
+            let mut reg_after = alice_state.get_or_load_wot_register(&mut s, Some(password)).unwrap();
+            alice_state.ensure_wot_list_signed(&mut s, &mut reg_after).unwrap();
+            alice_state.save_wot_register(&mut s, &reg_after, Some(password)).unwrap();
+            reg_after.prepare_sync_package(Some(&can_bob), None, true).unwrap().0
         };
-        {
-            let mut s = eve_state.service.lock().unwrap();
-            eve_state
-                .save_contact(
-                    &mut s,
-                    mk_contact(alice_did.clone(), "Alice", 1),
-                    Some(password),
-                )
-                .unwrap();
-        }
+        save_contact_for(&eve_state, password, make_contact(alice_did.clone(), "Alice", 1, vec![]));
         {
             let mut s = bob_state.service.lock().unwrap();
-            let mut bob_reg = bob_state
-                .get_or_load_wot_register(&mut s, Some(password))
+            let mut reg = bob_state.get_or_load_wot_register(&mut s, Some(password)).unwrap();
+            reg.import_sync_package(&alice_init_pkg, Some(&can_alice), sync_client::current_unix_timestamp())
                 .unwrap();
-            let now = sync_client::current_unix_timestamp();
-            bob_reg
-                .import_sync_package(&alice_init_pkg, Some(&can_alice), now)
-                .unwrap();
-            bob_state
-                .save_wot_register(&mut s, &bob_reg, Some(password))
-                .unwrap();
-            bob_state
-                .save_contact(
-                    &mut s,
-                    mk_contact(alice_did.clone(), "Alice", 2),
-                    Some(password),
-                )
-                .unwrap();
+            bob_state.save_wot_register(&mut s, &reg, Some(password)).unwrap();
         }
+        save_contact_for(&bob_state, password, make_contact(alice_did.clone(), "Alice", 2, vec![]));
 
-        // Alice publishes profile + ad with WEBP media
         save_my_market_profile_impl(
             FrontendSaveMyMarketProfileRequest {
-                profile: FrontendUserProfile {
-                    first_name: Some("Alice".to_string()),
-                    ..Default::default()
-                },
+                profile: FrontendUserProfile { first_name: Some("Alice".into()), ..Default::default() },
                 visibility: CardFieldVisibility::default(),
                 skills: vec![],
                 max_hops: 3,
@@ -3201,7 +2421,6 @@ pub(crate) mod tests {
             &alice_state,
         )
         .unwrap();
-
         let mut webp_bytes = Vec::with_capacity(30);
         webp_bytes.extend_from_slice(b"RIFF");
         webp_bytes.extend_from_slice(&(22u32).to_le_bytes());
@@ -3234,15 +2453,9 @@ pub(crate) mod tests {
             &alice_state,
         )
         .unwrap();
-
-        // Bob also publishes a card so Bob forwards Hop-2 Alice card & WoT list to Carol
-        apply_reach_preset_impl("far".to_string(), Some(password.to_string()), &bob_state).unwrap();
         save_my_market_profile_impl(
             FrontendSaveMyMarketProfileRequest {
-                profile: FrontendUserProfile {
-                    first_name: Some("Bob".to_string()),
-                    ..Default::default()
-                },
+                profile: FrontendUserProfile { first_name: Some("Bob".into()), ..Default::default() },
                 visibility: CardFieldVisibility::default(),
                 skills: vec![],
                 max_hops: 3,
@@ -3255,225 +2468,100 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        // Sync round (a): Alice uploads -> Bob syncs & forwards -> Alice learns Bob's list & authorizes Carol -> Eve & Carol sync
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(true),
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-        assert!(
-            server
-                .slots
-                .lock()
-                .unwrap()
-                .keys()
-                .any(|k| k.ends_with(".media")),
-            "Published ad image blob must be uploaded to server"
-        );
+        (alice_state, eve_state, bob_state, carol_state, server, alice_did, can_alice)
+    }
 
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &bob_state,
-        )
-        .await
-        .unwrap();
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(true),
-            Some(password.to_string()),
-            &bob_state,
-        )
-        .await
-        .unwrap();
-        // Alice downloads Bob's WoT list so Carol is known at Hop 2 for WoT tombstones
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-        // Second sync for Alice to push member authorization for Carol if needed
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &eve_state,
-        )
-        .await
-        .unwrap();
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &carol_state,
-        )
-        .await
-        .unwrap();
+    #[tokio::test]
+    async fn test_reach_shrink_unpublish_trust_withdrawal_and_media_gc() {
+        let base_dir = TempDirGuard(temp_test_dir("reach_shrink_tombstone_flow"));
+        let password = "TestPassword123!";
+        let (alice_state, eve_state, bob_state, carol_state, server, alice_did, can_alice) =
+            setup_reach_shrink_network(&base_dir.0, password).await;
+
+        assert!(sync_market_ok(&alice_state, true, password).await.uploaded_to >= 1);
+        assert!(server.slots.lock().unwrap().keys().any(|k| k.ends_with(".media")));
+        let bob_r1 = sync_market_ok(&bob_state, false, password).await;
+        assert!(bob_r1.imported_cards >= 1);
+        assert!(sync_market_ok(&bob_state, true, password).await.uploaded_to >= 1);
+        assert!(sync_market_ok(&alice_state, false, password).await.imported_wot_lists >= 1);
+        assert_eq!(sync_market_ok(&alice_state, false, password).await.polled_syncs, 1);
+        let eve_r1 = sync_market_channels_impl(Some(true), Some(false), Some(password.to_string()), &eve_state)
+            .await
+            .unwrap();
+        assert_eq!(eve_r1.status, MarketSyncStatus::Completed);
+        assert!(eve_r1.imported_cards >= 1);
+        assert!(eve_r1.errors.iter().all(|e| e.contains("HTTP 403")));
+        assert!(sync_market_ok(&carol_state, false, password).await.imported_cards >= 1);
 
         let eve_view_far = get_market_view_impl(Some(password.to_string()), &eve_state).unwrap();
         assert!(eve_view_far.people.iter().any(|p| p.did == can_alice));
-        assert!(eve_view_far
-            .board
+        assert!(eve_view_far.board.iter().any(|b| b.ad.title == "Wildflower Honey"));
+        assert!(get_market_view_impl(Some(password.to_string()), &bob_state)
+            .unwrap()
+            .people
             .iter()
-            .any(|b| b.ad.title == "Wildflower Honey"));
-
-        let bob_view_far = get_market_view_impl(Some(password.to_string()), &bob_state).unwrap();
-        assert!(bob_view_far.people.iter().any(|p| p.did == can_alice));
-
-        let carol_view_far =
-            get_market_view_impl(Some(password.to_string()), &carol_state).unwrap();
-        assert!(
-            carol_view_far.people.iter().any(|p| p.did == can_alice),
-            "Hop-2 Carol must initially see Alice at preset 'far'"
-        );
+            .any(|p| p.did == can_alice));
+        assert!(get_market_view_impl(Some(password.to_string()), &carol_state)
+            .unwrap()
+            .people
+            .iter()
+            .any(|p| p.did == can_alice));
         {
             let mut cs = carol_state.service.lock().unwrap();
-            let carol_reg = carol_state
-                .get_or_load_wot_register(&mut cs, Some(password))
-                .unwrap();
-            let alice_list = carol_reg.raw_list_store.get(&can_alice).unwrap();
-            assert!(!alice_list.disclosures.is_empty());
+            let carol_reg = carol_state.get_or_load_wot_register(&mut cs, Some(password)).unwrap();
+            assert!(!carol_reg.raw_list_store.get(&can_alice).unwrap().disclosures.is_empty());
         }
 
-        // (b) Alice lowers reach to "near" (max_hops=1, share_min_level=2, own_list_max_hops=1)
-        apply_reach_preset_impl("near".to_string(), Some(password.to_string()), &alice_state)
+        // (b) Alice lowers reach to "near" -> Level-1 Eve & Hop-2 Carol receive tombstones.
+        apply_reach_preset_impl("near".to_string(), Some(password.to_string()), &alice_state).unwrap();
+        assert!(sync_market_ok(&alice_state, false, password).await.uploaded_to >= 1);
+        let eve_r2 = sync_market_channels_impl(Some(true), Some(false), Some(password.to_string()), &eve_state)
+            .await
             .unwrap();
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-
-        // Eve (Level 1 < share_min_level=2) receives Class-2 <jws>~ tombstone -> hides Alice
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &eve_state,
-        )
-        .await
-        .unwrap();
+        assert_eq!(eve_r2.status, MarketSyncStatus::Completed);
+        assert!(eve_r2.imported_cards >= 1);
+        assert!(eve_r2.errors.iter().all(|e| e.contains("HTTP 403")));
         let eve_view_near = get_market_view_impl(Some(password.to_string()), &eve_state).unwrap();
         assert!(!eve_view_near.people.iter().any(|p| p.did == can_alice));
         assert!(!eve_view_near.board.iter().any(|b| b.owner_did == can_alice));
 
-        // Bob syncs (gets Alice's shrunk max_hops=1 card & WoT), forwards <jws>~ on next upload, Carol downloads
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &bob_state,
-        )
-        .await
-        .unwrap();
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(true),
-            Some(password.to_string()),
-            &bob_state,
-        )
-        .await
-        .unwrap();
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &carol_state,
-        )
-        .await
-        .unwrap();
-
-        let carol_view_near =
-            get_market_view_impl(Some(password.to_string()), &carol_state).unwrap();
-        assert!(
-            !carol_view_near.people.iter().any(|p| p.did == can_alice),
-            "Hop-2 Carol must hide Alice after receiving shrunk <jws>~ card tombstone"
-        );
+        assert!(sync_market_ok(&bob_state, false, password).await.imported_cards >= 1);
+        assert!(sync_market_ok(&bob_state, true, password).await.uploaded_to >= 1);
+        assert!(sync_market_ok(&carol_state, false, password).await.imported_cards >= 1);
+        assert!(!get_market_view_impl(Some(password.to_string()), &carol_state)
+            .unwrap()
+            .people
+            .iter()
+            .any(|p| p.did == can_alice));
         {
             let mut cs = carol_state.service.lock().unwrap();
-            let carol_reg = carol_state
-                .get_or_load_wot_register(&mut cs, Some(password))
-                .unwrap();
-            let alice_list = carol_reg.raw_list_store.get(&can_alice).unwrap();
-            assert!(
-                alice_list.disclosures.is_empty(),
-                "Hop-2 Carol must receive empty <jws>~ WoT tombstone from Alice"
-            );
+            let carol_reg = carol_state.get_or_load_wot_register(&mut cs, Some(password)).unwrap();
+            assert!(carol_reg.raw_list_store.get(&can_alice).unwrap().disclosures.is_empty());
         }
 
-        // (c) Alice unpublishes her card -> orphaned media blob GC deletes .media slot & Bob hides Alice
-        set_card_published_impl(false, Some(password.to_string()), &alice_state)
-            .await
-            .unwrap();
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-        assert!(
-            !server
-                .slots
-                .lock()
-                .unwrap()
-                .keys()
-                .any(|k| k.ends_with(".media")),
-            "Orphaned media blob must be deleted from server when unpublished"
-        );
+        // (c) Unpublish deletes orphaned .media slot & hides Alice at Bob.
+        set_card_published_impl(false, Some(password.to_string()), &alice_state).await.unwrap();
+        assert!(sync_market_ok(&alice_state, false, password).await.uploaded_to >= 1);
+        assert!(!server.slots.lock().unwrap().keys().any(|k| k.ends_with(".media")));
+        assert!(sync_market_ok(&bob_state, false, password).await.imported_cards >= 1);
+        assert!(!get_market_view_impl(Some(password.to_string()), &bob_state)
+            .unwrap()
+            .people
+            .iter()
+            .any(|p| p.did == can_alice));
 
-        let _ = sync_market_channels_impl(
-            Some(true),
-            Some(false),
-            Some(password.to_string()),
-            &bob_state,
-        )
-        .await
-        .unwrap();
-        let bob_view_unpub = get_market_view_impl(Some(password.to_string()), &bob_state).unwrap();
-        assert!(!bob_view_unpub.people.iter().any(|p| p.did == can_alice));
-
-        // (d) Bob withdraws trust from Alice (level=0) -> immediate local CardStore & raw_list_store prune
-        {
-            let mut bs = bob_state.service.lock().unwrap();
-            bob_state
-                .save_contact(
-                    &mut bs,
-                    mk_contact(alice_did.clone(), "Alice", 0),
-                    Some(password),
-                )
-                .unwrap();
-            let store_bytes = bs
-                .load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password))
-                .unwrap();
-            let store: humoco_market::CardStore = serde_json::from_slice(&store_bytes).unwrap();
-            assert!(!store.cards.values().any(|sc| {
-                canonicalize_did(&sc.card.payload.did).ok().as_deref() == Some(can_alice.as_str())
-            }));
-            let bob_reg = bob_state
-                .get_or_load_wot_register(&mut bs, Some(password))
-                .unwrap();
-            assert!(!bob_reg.raw_list_store.contains_key(&can_alice));
-        }
+        // (d) Bob sets Alice trust=0 -> immediate local CardStore & raw_list_store prune.
+        save_contact_for(&bob_state, password, make_contact(alice_did, "Alice", 0, vec![]));
+        let store = load_card_store(&bob_state, password);
+        assert!(!store.cards.values().any(|sc| {
+            canonicalize_did(&sc.card.payload.did).ok().as_deref() == Some(can_alice.as_str())
+        }));
+        let mut bs = bob_state.service.lock().unwrap();
+        assert!(!bob_state
+            .get_or_load_wot_register(&mut bs, Some(password))
+            .unwrap()
+            .raw_list_store
+            .contains_key(&can_alice));
     }
 
     fn make_signed_card(
@@ -3511,45 +2599,48 @@ pub(crate) mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_k1_sync_aborts_on_logout_and_profile_switch_without_overwriting_profile_b() {
-        use crate::test_support::{
-            temp_test_dir, ALICE_PHRASE, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE,
-        };
-        use human_money_core::app_service::AppService;
-        use std::sync::Arc;
+    fn seed_carol_card_slot(
+        carol_did: &str,
+        carol_sk: &ed25519_dalek::SigningKey,
+        carol_vk: ed25519_dalek::VerifyingKey,
+        reader_vk: ed25519_dalek::VerifyingKey,
+        server: &MockSyncServer,
+        drop_pub: &str,
+    ) {
+        let carol_env = make_signed_card(carol_did, carol_sk, 2, 1);
+        let bundle =
+            humoco_market::sign_card_bundle(vec![carol_env], carol_did, carol_sk).unwrap();
+        let sealed =
+            humoco_market::seal_slot_blob(&bundle, &[reader_vk, carol_vk], 512 * 1024).unwrap();
+        let stealth_carol = humoco_market::derive_member_stealth_pubkey(carol_sk, drop_pub).unwrap();
+        server.members.lock().unwrap().push(stealth_carol.clone());
+        server
+            .slots
+            .lock()
+            .unwrap()
+            .insert(format!("{stealth_carol}.card"), sealed);
+    }
 
-        let base_dir = temp_test_dir("k1_cross_profile_sync");
-        let password = "TestPassword123!";
-        let wallet_root = base_dir.join("wallet_root");
-
-        // Create both Alice and Bob inside the same AppService wallet root.
-        let mut shared_svc = AppService::new(&wallet_root).unwrap();
-        shared_svc
-            .create_profile(
-                "Alice",
-                ALICE_PHRASE,
-                None,
-                Some("pc"),
-                password,
-                human_money_core::MnemonicLanguage::English,
-                "device-k1-test".into(),
-                true,
-            )
-            .unwrap();
-        shared_svc.logout();
-        shared_svc
-            .create_profile(
-                "Bob",
-                BOB_PHRASE,
-                None,
-                Some("pc"),
-                password,
-                human_money_core::MnemonicLanguage::English,
-                "device-k1-test".into(),
-                true,
-            )
-            .unwrap();
+    fn setup_k1_shared_two_profile_state(
+        wallet_root: &std::path::Path,
+        password: &str,
+    ) -> (std::sync::Arc<AppState>, String, String) {
+        let mut shared_svc = human_money_core::app_service::AppService::new(wallet_root).unwrap();
+        for (name, phrase) in [("Alice", ALICE_PHRASE), ("Bob", BOB_PHRASE)] {
+            shared_svc
+                .create_profile(
+                    name,
+                    phrase,
+                    None,
+                    Some("pc"),
+                    password,
+                    human_money_core::MnemonicLanguage::English,
+                    "device-k1-test".into(),
+                    true,
+                )
+                .unwrap();
+            shared_svc.logout();
+        }
         let profiles = shared_svc.list_profiles().unwrap();
         let alice_folder = profiles
             .iter()
@@ -3563,92 +2654,55 @@ pub(crate) mod tests {
             .unwrap()
             .folder_name
             .clone();
-        shared_svc.logout();
+        (std::sync::Arc::new(AppState::new(shared_svc)), alice_folder, bob_folder)
+    }
 
-        let state = Arc::new(AppState::new(shared_svc));
+    #[tokio::test]
+    async fn test_k1_sync_aborts_on_logout_and_profile_switch_without_overwriting_profile_b() {
+        use std::sync::Arc;
 
-        // External publisher Carol + baseline Reader1 card belonging solely to Bob
-        let carol_service =
-            setup_test_app(&base_dir.join("carol"), "Carol", CHARLIE_PHRASE, password);
-        let carol_state = create_test_state(carol_service);
+        let base_dir = TempDirGuard(temp_test_dir("k1_cross_profile_sync"));
+        let password = "TestPassword123!";
+        let (state, alice_folder, bob_folder) =
+            setup_k1_shared_two_profile_state(&base_dir.0.join("wallet_root"), password);
+
+        let carol_state = create_test_state(setup_test_app(&base_dir.0.join("carol"), "Carol", CHARLIE_PHRASE, password));
         let (carol_did, carol_sk, carol_vk) = {
             let s = carol_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|_, id| {
-                (id.user_id.clone(), id.signing_key.clone(), id.public_key)
-            })
-            .unwrap()
+            s.with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone(), id.public_key)).unwrap()
         };
-
-        let r1_service = setup_test_app(&base_dir.join("r1"), "Reader1", READER1_PHRASE, password);
-        let (r1_did, r1_sk) = r1_service
+        let r1_svc = setup_test_app(&base_dir.0.join("r1"), "Reader1", READER1_PHRASE, password);
+        let (r1_did, r1_sk) = r1_svc
             .with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone()))
             .unwrap();
         let r1_env = make_signed_card(&r1_did, &r1_sk, 1, 1);
 
-        // Prepare Carol's server and push Carol's card for Alice (Bob is NOT a member/reader)
-        let draft = prepare_sync_setup_impl(
-            Some(FrontendMemberPolicyDto {
-                direct_min: 1,
-                hop2_enabled: false,
-                bridge_min: 1,
-                hop2_min: 1,
-            }),
-            Some(300),
-            None,
-            None,
-            Some(password.to_string()),
-            &carol_state,
-        )
-        .unwrap();
-        let server =
-            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
-        let fin = finalize_sync_setup_impl(
-            server.base_url.clone(),
-            Some(password.to_string()),
-            &carol_state,
-        )
-        .await
-        .unwrap();
+        let policy_dto = Some(FrontendMemberPolicyDto {
+            direct_min: 1,
+            hop2_enabled: false,
+            bridge_min: 1,
+            hop2_min: 1,
+        });
+        let (_draft, server, fin) =
+            setup_finalized_server(&carol_state, password, policy_dto, Some(300), None).await;
 
-        // Log into Alice, record her credentials, trust Carol, configure polling from Carol's server
         let (alice_did, alice_vk) = {
             let mut s = state.service.lock().unwrap();
-            s.login(&alice_folder, password, false, "device-k1-test".into())
-                .unwrap();
+            s.login(&alice_folder, password, false, "device-k1-test".into()).unwrap();
             state.initialize_profile_session(&mut s, password).unwrap();
-            let (did, vk) = s
-                .with_wallet_and_identity(|_, id| (id.user_id.clone(), id.public_key))
-                .unwrap();
-            state
-                .mutate_security_policy(&mut s, Some(password), |p| {
-                    p.market_selected_syncs = vec![fin.descriptor.clone()];
-                })
-                .unwrap();
-            let c = FrontendContact {
-                did: carol_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Carol".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![fin.descriptor.clone()],
-            };
-            state.save_contact(&mut s, c, Some(password)).unwrap();
-            (did, vk)
+            s.with_wallet_and_identity(|_, id| (id.user_id.clone(), id.public_key)).unwrap()
         };
+        select_sync_target(&state, password, fin.descriptor.clone(), None);
+        save_contact_for(
+            &state,
+            password,
+            make_contact(carol_did.clone(), "Carol", 2, vec![fin.descriptor.clone()]),
+        );
 
-        // Initialize Bob's profile with pre-existing CardStore (Reader1) + contact "BobOnly"
         crate::commands::auth::logout_impl(&state);
         {
             let mut s = state.service.lock().unwrap();
-            s.login(&bob_folder, password, false, "device-k1-test".into())
-                .unwrap();
+            s.login(&bob_folder, password, false, "device-k1-test".into()).unwrap();
             state.initialize_profile_session(&mut s, password).unwrap();
             let mut bob_store = humoco_market::CardStore::default();
             let out = humoco_market::accept_envelope(
@@ -3660,268 +2714,91 @@ pub(crate) mod tests {
                 &|_| false,
             );
             assert!(matches!(out, humoco_market::AcceptOutcome::Accepted { .. }));
-            crate::state::save_encrypted_json(
-                &mut s,
-                MARKET_CARD_STORE_KEY,
-                &bob_store,
-                Some(password),
-            )
-            .unwrap();
-            let bob_contact = FrontendContact {
-                did: r1_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("BobOnly".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            state
-                .save_contact(&mut s, bob_contact, Some(password))
-                .unwrap();
+            crate::state::save_encrypted_json(&mut s, MARKET_CARD_STORE_KEY, &bob_store, Some(password)).unwrap();
         }
+        save_contact_for(&state, password, make_contact(r1_did.clone(), "BobOnly", 2, vec![]));
         crate::commands::auth::logout_impl(&state);
 
-        // Log back into Alice and prepare Carol's slot readable by Alice
         {
             let mut s = state.service.lock().unwrap();
-            s.login(&alice_folder, password, false, "device-k1-test".into())
-                .unwrap();
+            s.login(&alice_folder, password, false, "device-k1-test".into()).unwrap();
             state.initialize_profile_session(&mut s, password).unwrap();
         }
-        {
-            let mut cs = carol_state.service.lock().unwrap();
-            let c_contact = FrontendContact {
-                did: alice_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: Some("Alice".to_string()),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: "2026-01-01T00:00:00Z".to_string(),
-                notes: None,
-                trust_level: Some(2),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            };
-            carol_state
-                .save_contact(&mut cs, c_contact, Some(password))
-                .unwrap();
-        }
-        let carol_env = make_signed_card(&carol_did, &carol_sk, 2, 1);
-        let bundle =
-            humoco_market::sign_card_bundle(vec![carol_env], &carol_did, &carol_sk).unwrap();
-        let sealed =
-            humoco_market::seal_slot_blob(&bundle, &[alice_vk, carol_vk], 512 * 1024).unwrap();
-        let stealth_carol =
-            humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub)
-                .unwrap();
-        server.members.lock().unwrap().push(stealth_carol.clone());
-        server
-            .slots
-            .lock()
-            .unwrap()
-            .insert(format!("{}.card", stealth_carol), sealed);
+        save_contact_for(&carol_state, password, make_contact(alice_did, "Alice", 2, vec![]));
+        seed_carol_card_slot(&carol_did, &carol_sk, carol_vk, alice_vk, &server, &fin.descriptor.drop_pub);
 
-        // Pause Alice's poll at index.json -> switch to Bob mid-flight -> release!
         let (hit_rx, release_tx) = server.arm_pause_gate("index.json");
         let state_bg = Arc::clone(&state);
         let sync_handle = tokio::spawn(async move {
-            sync_market_channels_impl(
-                Some(true),
-                Some(false),
-                Some(password.to_string()),
-                &state_bg,
-            )
-            .await
+            sync_market_channels_impl(Some(true), Some(false), Some(password.to_string()), &state_bg).await
         });
 
         hit_rx.await.unwrap();
         crate::commands::auth::logout_impl(&state);
         {
             let mut s = state.service.lock().unwrap();
-            s.login(&bob_folder, password, false, "device-k1-test".into())
-                .unwrap();
+            s.login(&bob_folder, password, false, "device-k1-test".into()).unwrap();
             state.initialize_profile_session(&mut s, password).unwrap();
         }
-        let _ = release_tx.send(true);
+        release_tx.send(true).expect("pause gate receiver must remain active");
         let res = sync_handle.await.unwrap().unwrap();
         assert_eq!(res.imported_cards, 0);
 
-        // Verify Bob's stores are completely untouched (no CardStore overwrite, no sync state pollution)
-        {
-            let mut s = state.service.lock().unwrap();
-            let bob_store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-                &mut s,
-                MARKET_CARD_STORE_KEY,
-                Some(password),
-            )
-            .unwrap();
-            assert!(
-                bob_store.cards.contains_key(&r1_did),
-                "Bob's pre-existing Reader1 card must NOT be overwritten by Alice's sync"
-            );
-            assert!(
-                !bob_store.cards.contains_key(&carol_did),
-                "Alice's polled Carol card must NOT leak into Bob's wallet"
-            );
-            let bob_sync: StoredSyncState = crate::state::load_encrypted_json_or_default(
-                &mut s,
-                MARKET_SYNC_KEY,
-                Some(password),
-            )
-            .unwrap();
-            assert_eq!(
-                bob_sync.last_poll_at, None,
-                "Alice's StoredSyncState.last_poll_at must NOT be written into Bob's profile"
-            );
-            let bob_contacts = state.load_contacts(&mut s, Some(password)).unwrap();
-            assert!(bob_contacts.iter().any(|c| c.did == r1_did));
-        }
-
-        let _ = std::fs::remove_dir_all(&base_dir);
+        let bob_store = load_card_store(&state, password);
+        assert!(bob_store.cards.contains_key(&r1_did));
+        assert!(!bob_store.cards.contains_key(&carol_did));
+        let mut s = state.service.lock().unwrap();
+        let bob_sync: StoredSyncState =
+            crate::state::load_encrypted_json_or_default(&mut s, MARKET_SYNC_KEY, Some(password)).unwrap();
+        assert_eq!(bob_sync.last_poll_at, None);
+        assert!(state.load_contacts(&mut s, Some(password)).unwrap().iter().any(|c| c.did == r1_did));
     }
 
     #[tokio::test]
     async fn test_k1_sync_aborts_on_same_profile_logout_and_relogin() {
-        use crate::test_support::{temp_test_dir, ALICE_PHRASE, CHARLIE_PHRASE};
         use std::sync::Arc;
 
-        let base_dir = temp_test_dir("k1_same_profile_relogin");
+        let base_dir = TempDirGuard(temp_test_dir("k1_same_profile_relogin"));
         let password = "TestPassword123!";
-        let alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_svc = setup_test_app(&base_dir.0.join("alice"), "Alice", ALICE_PHRASE, password);
         let alice_folder = alice_svc.list_profiles().unwrap()[0].folder_name.clone();
         let state = Arc::new(AppState::new(alice_svc));
-
-        let carol_svc = setup_test_app(&base_dir.join("carol"), "Carol", CHARLIE_PHRASE, password);
-        let carol_state = create_test_state(carol_svc);
+        let carol_state = create_test_state(setup_test_app(&base_dir.0.join("carol"), "Carol", CHARLIE_PHRASE, password));
         let (carol_did, carol_sk, carol_vk) = {
             let s = carol_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|_, id| {
-                (id.user_id.clone(), id.signing_key.clone(), id.public_key)
-            })
-            .unwrap()
+            s.with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone(), id.public_key)).unwrap()
         };
 
-        let draft = prepare_sync_setup_impl(
-            None,
-            Some(300),
-            None,
-            None,
-            Some(password.to_string()),
-            &carol_state,
-        )
-        .unwrap();
-        let server =
-            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
-        let fin = finalize_sync_setup_impl(
-            server.base_url.clone(),
-            Some(password.to_string()),
-            &carol_state,
-        )
-        .await
-        .unwrap();
-
-        let alice_vk = {
-            let mut s = state.service.lock().unwrap();
-            state
-                .mutate_security_policy(&mut s, Some(password), |p| {
-                    p.market_selected_syncs = vec![fin.descriptor.clone()];
-                })
-                .unwrap();
-            state
-                .save_contact(
-                    &mut s,
-                    FrontendContact {
-                        did: carol_did.clone(),
-                        profile: FrontendUserProfile {
-                            first_name: Some("Carol".to_string()),
-                            ..Default::default()
-                        },
-                        tags: vec![],
-                        added_at: "2026-01-01T00:00:00Z".to_string(),
-                        notes: None,
-                        trust_level: Some(2),
-                        desired_hops: Some(3),
-                        has_peer_list: false,
-                        peer_list_updated_at: None,
-                        syncs: vec![fin.descriptor.clone()],
-                    },
-                    Some(password),
-                )
-                .unwrap();
-            s.with_wallet_and_identity(|_, id| id.public_key).unwrap()
-        };
-
-        let carol_env = make_signed_card(&carol_did, &carol_sk, 2, 1);
-        let bundle =
-            humoco_market::sign_card_bundle(vec![carol_env], &carol_did, &carol_sk).unwrap();
-        let sealed =
-            humoco_market::seal_slot_blob(&bundle, &[alice_vk, carol_vk], 512 * 1024).unwrap();
-        let stealth_carol =
-            humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub)
-                .unwrap();
-        server.members.lock().unwrap().push(stealth_carol.clone());
-        server
-            .slots
-            .lock()
-            .unwrap()
-            .insert(format!("{}.card", stealth_carol), sealed);
+        let (_draft, server, fin) =
+            setup_finalized_server(&carol_state, password, None, Some(300), None).await;
+        select_sync_target(&state, password, fin.descriptor.clone(), None);
+        save_contact_for(&state, password, make_contact(carol_did.clone(), "Carol", 2, vec![fin.descriptor.clone()]));
+        let alice_vk = state.service.lock().unwrap().with_wallet_and_identity(|_, id| id.public_key).unwrap();
+        seed_carol_card_slot(&carol_did, &carol_sk, carol_vk, alice_vk, &server, &fin.descriptor.drop_pub);
 
         let (hit_rx, release_tx) = server.arm_pause_gate("index.json");
         let state_bg = Arc::clone(&state);
         let sync_handle = tokio::spawn(async move {
-            sync_market_channels_impl(
-                Some(true),
-                Some(false),
-                Some(password.to_string()),
-                &state_bg,
-            )
-            .await
+            sync_market_channels_impl(Some(true), Some(false), Some(password.to_string()), &state_bg).await
         });
 
         hit_rx.await.unwrap();
         crate::commands::auth::logout_impl(&state);
         {
             let mut s = state.service.lock().unwrap();
-            s.login(&alice_folder, password, false, "device-drops-test".into())
-                .unwrap();
+            s.login(&alice_folder, password, false, "device-drops-test".into()).unwrap();
             state.initialize_profile_session(&mut s, password).unwrap();
         }
-        let _ = release_tx.send(true);
+        release_tx.send(true).expect("pause gate receiver must remain active");
         let res = sync_handle.await.unwrap().unwrap();
         assert_eq!(res.imported_cards, 0);
 
-        {
-            let mut s = state.service.lock().unwrap();
-            let store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-                &mut s,
-                MARKET_CARD_STORE_KEY,
-                Some(password),
-            )
-            .unwrap();
-            assert!(
-                !store.cards.contains_key(&carol_did),
-                "Same-profile logout + re-login must bump session_generation and discard old poll"
-            );
-            let sync_st: StoredSyncState = crate::state::load_encrypted_json_or_default(
-                &mut s,
-                MARKET_SYNC_KEY,
-                Some(password),
-            )
-            .unwrap();
-            assert_eq!(sync_st.last_poll_at, None);
-        }
-
-        let _ = std::fs::remove_dir_all(&base_dir);
+        let store = load_card_store(&state, password);
+        assert!(!store.cards.contains_key(&carol_did));
+        let mut s = state.service.lock().unwrap();
+        let sync_st: StoredSyncState =
+            crate::state::load_encrypted_json_or_default(&mut s, MARKET_SYNC_KEY, Some(password)).unwrap();
+        assert_eq!(sync_st.last_poll_at, None);
     }
 
     #[tokio::test]
@@ -3930,26 +2807,25 @@ pub(crate) mod tests {
             delete_foreign_contact_card_impl, import_contact_card_impl,
         };
         use crate::test_support::{
-            temp_test_dir, ALICE_PHRASE, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE,
+            temp_test_dir, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE,
         };
         use std::sync::Arc;
 
-        let base_dir = temp_test_dir("h1_market_poll_concurrency");
+        let base_dir = TempDirGuard(temp_test_dir("h1_market_poll_concurrency"));
         let password = "TestPassword123!";
         let bob_state = Arc::new(create_test_state(setup_test_app(
-            &base_dir.join("bob"),
+            &base_dir.0.join("bob"),
             "Bob",
             BOB_PHRASE,
             password,
         )));
         let carol_state = create_test_state(setup_test_app(
-            &base_dir.join("carol"),
+            &base_dir.0.join("carol"),
             "Carol",
             CHARLIE_PHRASE,
             password,
         ));
-        let dave_svc = setup_test_app(&base_dir.join("dave"), "Dave", READER1_PHRASE, password);
-        let _alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let dave_svc = setup_test_app(&base_dir.0.join("dave"), "Dave", READER1_PHRASE, password);
 
         let (carol_did, carol_sk, carol_vk) = {
             let s = carol_state.service.lock().unwrap();
@@ -3962,54 +2838,16 @@ pub(crate) mod tests {
             .with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone()))
             .unwrap();
 
-        let draft = prepare_sync_setup_impl(
-            None,
-            Some(300),
-            None,
-            None,
-            Some(password.to_string()),
-            &carol_state,
-        )
-        .unwrap();
-        let server =
-            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
-        let fin = finalize_sync_setup_impl(
-            server.base_url.clone(),
-            Some(password.to_string()),
-            &carol_state,
-        )
-        .await
-        .unwrap();
-
+        let (_draft, server, fin) =
+            setup_finalized_server(&carol_state, password, None, Some(300), None).await;
+        select_sync_target(&bob_state, password, fin.descriptor.clone(), None);
+        save_contact_for(
+            &bob_state,
+            password,
+            make_contact(carol_did.clone(), "Carol", 2, vec![fin.descriptor.clone()]),
+        );
         let bob_vk = {
             let mut s = bob_state.service.lock().unwrap();
-            bob_state
-                .mutate_security_policy(&mut s, Some(password), |p| {
-                    p.market_selected_syncs = vec![fin.descriptor.clone()];
-                })
-                .unwrap();
-            bob_state
-                .save_contact(
-                    &mut s,
-                    FrontendContact {
-                        did: carol_did.clone(),
-                        profile: FrontendUserProfile {
-                            first_name: Some("Carol".to_string()),
-                            ..Default::default()
-                        },
-                        tags: vec![],
-                        added_at: "2026-01-01T00:00:00Z".to_string(),
-                        notes: None,
-                        trust_level: Some(2),
-                        desired_hops: Some(3),
-                        has_peer_list: false,
-                        peer_list_updated_at: None,
-                        syncs: vec![fin.descriptor.clone()],
-                    },
-                    Some(password),
-                )
-                .unwrap();
-            // Pre-seed Carol v=1 locally before poll begins (simulates Bob already having Carol's card)
             let mut initial_store = humoco_market::CardStore::default();
             let carol_env = make_signed_card(&carol_did, &carol_sk, 1, 1);
             let out = humoco_market::accept_envelope(
@@ -4021,17 +2859,11 @@ pub(crate) mod tests {
                 &|_| false,
             );
             assert!(matches!(out, humoco_market::AcceptOutcome::Accepted { .. }));
-            crate::state::save_encrypted_json(
-                &mut s,
-                MARKET_CARD_STORE_KEY,
-                &initial_store,
-                Some(password),
-            )
-            .unwrap();
+            crate::state::save_encrypted_json(&mut s, MARKET_CARD_STORE_KEY, &initial_store, Some(password))
+                .unwrap();
             s.with_wallet_and_identity(|_, id| id.public_key).unwrap()
         };
 
-        // Put Carol's v=1 card onto the server so the poll downloads it
         let carol_env_srv = make_signed_card(&carol_did, &carol_sk, 1, 1);
         let srv_bundle =
             humoco_market::sign_card_bundle(vec![carol_env_srv], &carol_did, &carol_sk).unwrap();
@@ -4056,42 +2888,35 @@ pub(crate) mod tests {
 
         hit_rx.await.unwrap();
 
-        // Concurrently during poll .await: QR-import Dave AND delete Carol
         let dave_env = make_signed_card(&dave_did, &dave_sk, 1, 1);
-        let dave_json = serde_json::to_string(&dave_env).unwrap();
-        import_contact_card_impl(dave_json, Some(password.to_string()), &bob_state).unwrap();
+        import_contact_card_impl(
+            serde_json::to_string(&dave_env).unwrap(),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .unwrap();
         delete_foreign_contact_card_impl(carol_did.clone(), Some(password.to_string()), &bob_state)
             .unwrap();
 
-        let _ = release_tx.send(true);
-        let _ = poll_handle.await.unwrap().unwrap();
+        release_tx
+            .send(true)
+            .expect("pause gate receiver must remain active");
+        let poll_res = poll_handle.await.unwrap().unwrap();
+        assert_eq!(poll_res.status, MarketSyncStatus::Completed);
+        assert_eq!(poll_res.imported_cards, 0);
 
-        let mut s = bob_state.service.lock().unwrap();
-        let final_store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-            &mut s,
-            MARKET_CARD_STORE_KEY,
-            Some(password),
-        )
-        .unwrap();
-        assert!(
-            final_store.cards.contains_key(&dave_did),
-            "Concurrently QR-imported card for Dave must survive slow sync poll"
-        );
-        assert!(
-            !final_store.cards.contains_key(&carol_did),
-            "Deleted card for Carol (v=1) must NOT be resurrected by concurrent sync poll"
-        );
+        let final_store = load_card_store(&bob_state, password);
+        assert!(final_store.cards.contains_key(&dave_did));
+        assert!(!final_store.cards.contains_key(&carol_did));
         assert_eq!(final_store.deleted_card_versions.get(&carol_did), Some(&1));
-
-        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[tokio::test]
     async fn f4_sync_market_channels_reports_tagged_wifi_skip_status() {
-        let dir = temp_test_dir("f4_market_sync_status");
+        let dir = TempDirGuard(temp_test_dir("f4_market_sync_status"));
         let password = "pw-f4";
         let state = create_test_state(setup_test_app(
-            &dir.join("alice"),
+            &dir.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             password,
@@ -4111,21 +2936,19 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         assert_eq!(res.status, MarketSyncStatus::SkippedWifiOnly);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
     async fn s09_f1_probe_pin_mismatch_foreign_slot_and_public_sync_pin() {
-        let dir = temp_test_dir("s09_f1_pins");
+        let dir = TempDirGuard(temp_test_dir("s09_f1_pins"));
         let pw = "StrongPassword123!";
         let alice_state = create_test_state(setup_test_app(
-            &dir.join("alice"),
+            &dir.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             pw,
         ));
-        let bob_svc = setup_test_app(&dir.join("bob"), "Bob", BOB_PHRASE, pw);
+        let bob_svc = setup_test_app(&dir.0.join("bob"), "Bob", BOB_PHRASE, pw);
         let (bob_did, bob_sk) = bob_svc
             .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.signing_key.clone()))
             .unwrap();
@@ -4256,8 +3079,6 @@ pub(crate) mod tests {
         .await
         .unwrap_err();
         assert!(pin_err.message.contains("pin mismatch"));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -4266,11 +3087,12 @@ pub(crate) mod tests {
         use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let dir = temp_test_dir("s09_f2_admin_checks");
+        let dir = TempDirGuard(temp_test_dir("s09_f2_admin_checks"));
         let pw = "StrongPassword123!";
-        let state = create_test_state(setup_test_app(&dir, "Alice", ALICE_PHRASE, pw));
-        let _draft =
+        let state = create_test_state(setup_test_app(&dir.0, "Alice", ALICE_PHRASE, pw));
+        let draft =
             prepare_sync_setup_impl(None, None, None, None, Some(pw.to_string()), &state).unwrap();
+        assert_eq!(draft.admin_pubkey.len(), 64);
 
         let rev_err =
             revoke_own_sync_server_impl(Some(0), None, None, Some(pw.to_string()), &state)
@@ -4311,7 +3133,10 @@ pub(crate) mod tests {
                     body.len(),
                     body
                 );
-                let _ = stream.write_all(resp.as_bytes()).await;
+                stream
+                    .write_all(resp.as_bytes())
+                    .await
+                    .expect("mock HTTP write must succeed");
             }
         });
 
@@ -4332,8 +3157,7 @@ pub(crate) mod tests {
             .unwrap_err();
         assert!(fin_err.message.contains("mismatch"));
 
-        let _ = srv.await;
-        let _ = std::fs::remove_dir_all(&dir);
+        srv.await.expect("mock server task must exit cleanly");
     }
 
     #[tokio::test]
@@ -4342,11 +3166,11 @@ pub(crate) mod tests {
             ConflictRole, ProofOfDoubleSpend, ProofStoreEntry,
         };
 
-        let dir = temp_test_dir("s09_f6_f8_offender_t0");
+        let dir = TempDirGuard(temp_test_dir("s09_f6_f8_offender_t0"));
         let pw = "StrongPassword123!";
-        let wallet_dir = dir.join("alice");
+        let wallet_dir = dir.0.join("alice");
         let alice_state = create_test_state(setup_test_app(&wallet_dir, "Alice", ALICE_PHRASE, pw));
-        let bob_did = setup_test_app(&dir.join("bob"), "Bob", BOB_PHRASE, pw)
+        let bob_did = setup_test_app(&dir.0.join("bob"), "Bob", BOB_PHRASE, pw)
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
         let alice_did = alice_state
@@ -4463,18 +3287,22 @@ pub(crate) mod tests {
         reloaded_state
             .session_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        assert!(reloaded_state.get_cached_security_policy().is_err());
-
-        let _ = std::fs::remove_dir_all(&dir);
+        let stale_err = reloaded_state
+            .get_cached_security_policy()
+            .expect_err("stale session_generation must reject cached SecurityPolicy");
+        assert!(
+            stale_err.to_string().contains("SecurityPolicy not loaded"),
+            "unexpected error: {stale_err}"
+        );
     }
 
     #[test]
     fn s02_x1_sync_bundle_import_clamps_forwarded_hops_and_rejects_tampered_writers() {
-        let base_dir = temp_test_dir("s02_x1_writer_binding");
+        let base_dir = TempDirGuard(temp_test_dir("s02_x1_writer_binding"));
         let password = "TestPassword123!";
-        let alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
-        let bob_svc = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
-        let carol_svc = setup_test_app(&base_dir.join("carol"), "Carol", CHARLIE_PHRASE, password);
+        let alice_svc = setup_test_app(&base_dir.0.join("alice"), "Alice", ALICE_PHRASE, password);
+        let bob_svc = setup_test_app(&base_dir.0.join("bob"), "Bob", BOB_PHRASE, password);
+        let carol_svc = setup_test_app(&base_dir.0.join("carol"), "Carol", CHARLIE_PHRASE, password);
 
         let (alice_did, alice_sk, alice_vk) = alice_svc
             .with_wallet_and_identity(|_, id| {
@@ -4586,9 +3414,15 @@ pub(crate) mod tests {
         let tampered_payload = serde_json::to_vec(&tampered_spoof_did).unwrap();
         let tampered_sealed =
             humoco_market::seal_slot_payload(&tampered_payload, &[alice_vk], 512 * 1024).unwrap();
+        let tamper_err = humoco_market::open_slot_blob(&tampered_sealed, &alice_x_sk)
+            .expect_err("open_slot_blob must reject CardBundle with spoofed writer_did");
         assert!(
-            humoco_market::open_slot_blob(&tampered_sealed, &alice_x_sk).is_err(),
-            "open_slot_blob must reject CardBundle with spoofed writer_did"
+            matches!(
+                &tamper_err,
+                humoco_market::MarketError::Crypto(msg)
+                    if msg.contains("CardBundle writer signature verification failed")
+            ),
+            "unexpected error: {tamper_err:?}"
         );
         let mut store_tampered = humoco_market::CardStore::default();
         let (tampered_cnt, _) = super::card_sync::import_decrypted_card_bundle(
@@ -4604,7 +3438,165 @@ pub(crate) mod tests {
         );
         assert_eq!(tampered_cnt, 0);
         assert!(store_tampered.cards.is_empty());
+    }
 
-        let _ = std::fs::remove_dir_all(&base_dir);
+    fn seed_overview_status_fixtures(
+        state: &AppState,
+        bob_did: &str,
+        admin_pubkey: &str,
+        pw: &str,
+    ) {
+        let mut s = state.service.lock().unwrap();
+        let mut admin_rec = super::admin::load_stored_sync_admin_opt(&mut s, Some(pw))
+            .unwrap()
+            .unwrap();
+        admin_rec.descriptor.write_url = "https://own.example/sync.php".to_string();
+        admin_rec.descriptor.read_url = "https://own.example/d-own".to_string();
+        let mut batch = crate::state::EncryptedBatchCommit::new();
+        batch.sync_admin(admin_rec);
+        batch.sync_state(StoredSyncState {
+            last_upload_at: Some(1_700_000_100),
+            last_poll_at: Some(1_700_000_250),
+            ..Default::default()
+        });
+        batch.commit(state, &mut s, Some(pw)).unwrap();
+
+        let mk_sel = |w: &str, r: &str, pub_byte: u8, status: &str, fails: u32| {
+            FrontendSyncDescriptor {
+                write_url: w.to_string(),
+                read_url: r.to_string(),
+                drop_pub: if pub_byte == 0 {
+                    String::new()
+                } else {
+                    crate::test_support::test_ed25519_pub_hex(pub_byte)
+                },
+                status: status.to_string(),
+                fail_count: fails,
+                ..Default::default()
+            }
+        };
+        let overlap_pending = mk_sel("https://pending-a.example/sync.php", "https://pending-a.example/d", 0x45, "pending_auth", 0);
+        let distinct_pending = mk_sel("https://pending-b.example/sync.php", "https://pending-b.example/d", 0x46, "pending_auth", 0);
+        let empty_pending = FrontendSyncDescriptor { status: "pending_auth".to_string(), ..Default::default() };
+
+        state
+            .mutate_security_policy(&mut s, Some(pw), |p| {
+                p.market_selected_syncs = vec![
+                    FrontendSyncDescriptor {
+                        write_url: "https://own.example/sync.php".to_string(),
+                        read_url: "https://own.example/d-own".to_string(),
+                        drop_pub: admin_pubkey.to_string(),
+                        status: "active".to_string(),
+                        ..Default::default()
+                    },
+                    mk_sel("https://friend1.example/sync.php", "https://friend1.example/d", 0x41, "active", 0),
+                    mk_sel("https://friend2.example/sync.php", "https://friend2.example/d", 0x47, "active", 0),
+                    mk_sel("https://friend3.example/sync.php", "https://friend3.example/d", 0x48, "active", 0),
+                    mk_sel("https://empty-read.example/sync.php", "", 0x42, "active", 0),
+                    mk_sel("https://empty-pub.example/sync.php", "https://empty-pub.example/d", 0, "active", 0),
+                    mk_sel("https://failing.example/sync.php", "https://failing.example/d", 0x43, "active", 1),
+                    mk_sel("https://unreach.example/sync.php", "https://unreach.example/d", 0x44, "unreachable", 0),
+                    overlap_pending.clone(),
+                    empty_pending.clone(),
+                ];
+                let mk_pub = |w: &str, enabled: bool, ch: Vec<&str>, status: &str, seed: u8| {
+                    crate::settings::StoredPublicSync {
+                        write_url: w.into(),
+                        read_url: format!("{w}-d"),
+                        drop_pub: crate::test_support::test_ed25519_pub_hex(seed),
+                        access_pubkey: crate::test_support::test_ed25519_pub_hex(seed + 0x10),
+                        enabled,
+                        authorized_channels: ch.into_iter().map(str::to_string).collect(),
+                        status: status.into(),
+                        ..Default::default()
+                    }
+                };
+                p.public_syncs = vec![
+                    mk_pub("https://pub1.example/sync.php", true, vec!["card"], "active", 0x51),
+                    mk_pub("https://pub-disabled.example/sync.php", false, vec!["card"], "active", 0x52),
+                    mk_pub("https://pub-pending.example/sync.php", true, vec![], "active", 0x53),
+                    mk_pub("https://pub-revoked-empty.example/sync.php", true, vec![], "revoked", 0x54),
+                ];
+            })
+            .unwrap();
+
+        state
+            .save_contact(
+                &mut s,
+                make_contact(bob_did.to_string(), "Bob", 2, vec![overlap_pending, distinct_pending]),
+                Some(pw),
+            )
+            .unwrap();
+        let mut ab: crate::models::FrontendAddressBook = crate::state::load_encrypted_json_or_default(
+            &mut s,
+            crate::state::CONTACTS_DATA_NAME,
+            Some(pw),
+        )
+        .unwrap();
+        ab.contacts
+            .values_mut()
+            .next()
+            .unwrap()
+            .syncs
+            .push(empty_pending);
+        let mut ab_batch = crate::state::EncryptedBatchCommit::new();
+        ab_batch.contacts(ab);
+        ab_batch.commit(state, &mut s, Some(pw)).unwrap();
+    }
+
+    #[test]
+    fn test_sync_error_tracker_and_overview_status_counts() {
+        let base_dir = TempDirGuard(temp_test_dir("sync_error_and_overview"));
+        let pw = "TestPassword123!";
+        let state = create_test_state(setup_test_app(&base_dir.0.join("alice"), "Alice", ALICE_PHRASE, pw));
+        let bob_did = setup_test_app(&base_dir.0.join("bob"), "Bob", BOB_PHRASE, pw)
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let mut tracker = SyncErrorTracker::default();
+        tracker.push("first err".to_string());
+        tracker.record_retry_after(None);
+        tracker.record_retry_after(Some(30));
+        tracker.record_retry_after(Some(120));
+        tracker.record_retry_after(Some(60));
+        tracker.record_sync_error(
+            &state,
+            "https://rate-limited.example/sync.php",
+            &crate::sync_client::SyncClientError::RateLimited {
+                status: 429,
+                retry_after_secs: 240,
+                context: String::new(),
+                snippet: String::new(),
+            },
+            "second err".to_string(),
+        );
+        assert_eq!(tracker.errors, vec!["first err", "second err"]);
+        assert_eq!(tracker.max_retry_after_secs, Some(240));
+        assert!(state.is_origin_cooling_down("https://rate-limited.example/sync.php", std::time::Instant::now()));
+
+        let draft = prepare_sync_setup_impl(None, None, None, None, Some(pw.to_string()), &state).unwrap();
+        let pending_overview = get_sync_overview_status_impl(Some(pw.to_string()), &state).unwrap();
+        assert!(!pending_overview.has_own_sync);
+        assert_eq!(pending_overview.pending_count, 1);
+        assert_eq!(pending_overview.connected_count, 0);
+
+        seed_overview_status_fixtures(&state, &bob_did, &draft.admin_pubkey, pw);
+
+        let overview = get_sync_overview_status_impl(Some(pw.to_string()), &state).unwrap();
+        assert!(overview.has_own_sync);
+        assert_eq!(overview.friend_syncs, 3);
+        assert_eq!(overview.public_syncs, 1);
+        assert_eq!(overview.connected_count, 5);
+        assert_eq!(overview.pending_count, 1);
+        assert_eq!(overview.pending_auth_count, 2);
+        assert_eq!(overview.failing_count, 2);
+        assert_eq!(overview.last_sync_at, Some(1_700_000_250));
+
+        // With an unlocked active session and empty RAM caches, None password still reads live store.
+        state.service.lock().unwrap().unlock_session(pw, 600).unwrap();
+        *state.profile_caches.lock().unwrap() = None;
+        let active_no_pw = get_sync_overview_status_impl(None, &state).unwrap();
+        assert_eq!(active_no_pw.friend_syncs, 3);
+        assert_eq!(active_no_pw.connected_count, 5);
     }
 }

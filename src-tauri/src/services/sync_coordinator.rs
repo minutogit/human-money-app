@@ -472,6 +472,13 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
 mod tests {
     use super::*;
 
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn h10_schedule_resets_per_session_debounces_wakes_and_respects_offline_cooldown() {
         let t0 = Instant::now();
@@ -610,13 +617,18 @@ mod tests {
     #[tokio::test]
     async fn s08_f9_wake_request_strict_and_locked_session_stops_l2_probe() {
         // 1. SyncWakeRequest rejects unknown JSON fields
-        assert!(serde_json::from_str::<SyncWakeRequest>(r#"{"post":true,"unknown":1}"#).is_err());
+        let parse_err = serde_json::from_str::<SyncWakeRequest>(r#"{"post":true,"unknown":1}"#)
+            .expect_err("SyncWakeRequest must reject unknown JSON fields");
+        assert!(
+            parse_err.to_string().contains("unknown field"),
+            "unexpected error: {parse_err}"
+        );
 
         // 2. Locking session immediately blocks refresh_lock_servers_for_coordinator even with cached policy
-        let dir = crate::test_support::temp_test_dir("coord_lock");
+        let dir = TempDirGuard(crate::test_support::temp_test_dir("coord_lock"));
         let pw = "TestPass123!";
         let mut svc = crate::test_support::setup_test_app(
-            &dir,
+            &dir.0,
             "Alice",
             crate::test_support::ALICE_PHRASE,
             pw,
@@ -624,10 +636,12 @@ mod tests {
         svc.unlock_session(pw, 600).unwrap();
         let state = crate::test_support::create_test_state(svc);
         // Warm caches in active session
-        let _ = state.get_or_load_security_policy_locked(Some(pw)).unwrap();
-        let _ = state
+        let policy = state.get_or_load_security_policy_locked(Some(pw)).unwrap();
+        assert!(policy.market_selected_syncs.is_empty());
+        let lifecycle = state
             .get_or_load_internal_lifecycle_locked(Some(pw))
             .unwrap();
+        assert!(!lifecycle.pending_restore_l2_reconciliation);
         let gen_id = state.current_session_generation();
         assert!(is_session_active_for_generation(&state, gen_id));
 
@@ -636,10 +650,17 @@ mod tests {
         let snap1 = state.sync_control_snapshot();
         assert!(snap1.is_online && !snap1.is_wifi);
 
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = state.sync_control.lock().unwrap();
+        let panic_payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let guard = state.sync_control.lock().unwrap();
+            assert!(guard.is_online && !guard.is_wifi);
             panic!("simulate mutex poison");
-        }));
+        }))
+        .expect_err("closure must panic to poison mutex");
+        assert_eq!(
+            panic_payload.downcast_ref::<&str>(),
+            Some(&"simulate mutex poison")
+        );
+        assert!(state.sync_control.is_poisoned());
         state.update_network_status(false, false, true);
         let snap2 = state.sync_control_snapshot();
         assert!(!snap2.is_online);
@@ -655,10 +676,10 @@ mod tests {
 
     #[test]
     fn s08_q3_per_origin_cooldown_isolates_throttled_origin_from_honest_origins() {
-        let dir = crate::test_support::temp_test_dir("coord_origin_cd");
+        let dir = TempDirGuard(crate::test_support::temp_test_dir("coord_origin_cd"));
         let pw = "TestPass123!";
         let svc = crate::test_support::setup_test_app(
-            &dir,
+            &dir.0,
             "Alice",
             crate::test_support::ALICE_PHRASE,
             pw,
@@ -705,5 +726,125 @@ mod tests {
 
         state.clear_sync_cooldown();
         assert!(!state.is_origin_cooling_down("https://evil-peer.example.org/sync.php", now));
+    }
+
+    #[test]
+    fn test_coordinator_schedule_all_wake_reset_and_earliest_due_edges() {
+        let t0 = Instant::now();
+        let mut sched = CoordinatorSchedule {
+            active_generation: 99,
+            sync_backup_no_targets: true,
+            sync_backup_consecutive_failures: 7,
+            last_sync_backup_success_at: Some(t0),
+            next_sync_backup_forced: true,
+            sync_backup_deferred_for_wifi: true,
+            post_deferred_for_wifi: true,
+            next_sync_members_at: Some(t0),
+            next_market_force_upload: true,
+            market_deferred_for_wifi: true,
+            lock_refresh_done: true,
+            ..Default::default()
+        };
+
+        sched.reset_for_session(2, t0);
+        assert_eq!(sched.active_generation, 2);
+        assert_eq!(sched.next_seal_at, Some(t0 + SEAL_INITIAL_DELAY));
+        assert_eq!(
+            sched.next_local_backup_at,
+            Some(t0 + LOCAL_BACKUP_INITIAL_DELAY)
+        );
+        assert_eq!(
+            sched.next_sync_backup_at,
+            Some(t0 + SYNC_BACKUP_INITIAL_DELAY)
+        );
+        assert_eq!(sched.next_post_at, Some(t0 + POST_INITIAL_DELAY));
+        assert_eq!(sched.next_market_at, Some(t0 + MARKET_INITIAL_DELAY));
+        assert!(!sched.next_sync_backup_forced);
+        assert!(!sched.sync_backup_deferred_for_wifi);
+        assert_eq!(sched.last_sync_backup_success_at, None);
+        assert_eq!(sched.sync_backup_consecutive_failures, 0);
+        assert!(!sched.sync_backup_no_targets);
+        assert!(!sched.post_deferred_for_wifi);
+        assert_eq!(sched.next_sync_members_at, None);
+        assert!(!sched.next_market_force_upload);
+        assert!(!sched.market_deferred_for_wifi);
+        assert!(!sched.lock_refresh_done);
+
+        // Offline even with Wi-Fi must NOT promote deferred jobs.
+        sched.sync_backup_deferred_for_wifi = true;
+        sched.post_deferred_for_wifi = true;
+        sched.market_deferred_for_wifi = true;
+        sched.promote_wifi_deferred(false, true, t0 + Duration::from_secs(5));
+        assert!(sched.sync_backup_deferred_for_wifi);
+        assert!(sched.post_deferred_for_wifi);
+        assert!(sched.market_deferred_for_wifi);
+
+        // Individual wake flags & min-preservation invariants.
+        let t1 = t0 + Duration::from_secs(20);
+        sched.clear();
+        sched.apply_wake(
+            SyncWakeRequest {
+                seal: true,
+                post: true,
+                market: true,
+                ..Default::default()
+            },
+            t1,
+        );
+        assert_eq!(sched.next_seal_at, Some(t1));
+        assert_eq!(sched.next_post_at, Some(t1));
+        assert_eq!(sched.next_market_at, Some(t1));
+        assert!(!sched.next_market_force_upload);
+
+        sched.next_market_at = None;
+        sched.apply_wake(
+            SyncWakeRequest {
+                market_force_upload: true,
+                local_backup: true,
+                sync_backup_force: true,
+                ..Default::default()
+            },
+            t1,
+        );
+        assert!(sched.next_market_force_upload);
+        assert_eq!(sched.next_market_at, Some(t1 + MARKET_UPLOAD_DEBOUNCE));
+        assert_eq!(
+            sched.next_local_backup_at,
+            Some(t1 + LOCAL_BACKUP_DEBOUNCE)
+        );
+        assert!(sched.next_sync_backup_forced);
+        assert_eq!(
+            sched.next_sync_backup_at,
+            Some(t1 + SYNC_BACKUP_DEBOUNCE)
+        );
+
+        // Existing earlier deadline is preserved on forced/debounced wakes.
+        let earlier = t1 + Duration::from_millis(500);
+        sched.next_local_backup_at = Some(earlier);
+        sched.next_sync_backup_at = Some(earlier);
+        sched.next_market_at = Some(earlier);
+        sched.apply_wake(
+            SyncWakeRequest {
+                local_backup: true,
+                sync_backup_force: true,
+                market_force_upload: true,
+                ..Default::default()
+            },
+            t1,
+        );
+        assert_eq!(sched.next_local_backup_at, Some(earlier));
+        assert_eq!(sched.next_sync_backup_at, Some(earlier));
+        assert_eq!(sched.next_market_at, Some(earlier));
+
+        // earliest_due checks offline seal fallback and each online network deadline.
+        sched.clear();
+        sched.next_seal_at = Some(t1 + Duration::from_secs(40));
+        sched.next_sync_backup_at = Some(t1 + Duration::from_secs(3));
+        assert_eq!(sched.earliest_due(false), Some(t1 + Duration::from_secs(40)));
+        assert_eq!(sched.earliest_due(true), Some(t1 + Duration::from_secs(3)));
+        sched.next_market_at = Some(t1 + Duration::from_secs(2));
+        assert_eq!(sched.earliest_due(true), Some(t1 + Duration::from_secs(2)));
+        sched.next_sync_members_at = Some(t1 + Duration::from_secs(1));
+        assert_eq!(sched.earliest_due(true), Some(t1 + Duration::from_secs(1)));
     }
 }

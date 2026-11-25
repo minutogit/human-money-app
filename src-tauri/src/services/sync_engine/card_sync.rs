@@ -1897,9 +1897,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_probe_contact_syncs_corrupt_contacts_fails_without_overwrite() {
-        let base_dir = temp_test_dir("card_sync_corrupt_contacts");
+        let base_dir = TempDirGuard(temp_test_dir("card_sync_corrupt_contacts"));
         let password = "TestPassword123!";
-        let service = setup_test_app(&base_dir, "Alice", ALICE_PHRASE, password);
+        let service = setup_test_app(&base_dir.0, "Alice", ALICE_PHRASE, password);
         let state = create_test_state(service);
 
         {
@@ -1914,10 +1914,13 @@ mod tests {
         }
         state.set_cached_contacts(None);
 
-        let res = probe_contact_syncs_impl(false, Some(password.to_string()), &state).await;
+        let err = probe_contact_syncs_impl(false, Some(password.to_string()), &state)
+            .await
+            .expect_err("Corrupt address book must abort probe_contact_syncs_impl with Err");
         assert!(
-            res.is_err(),
-            "Corrupt address book must abort probe_contact_syncs_impl with Err"
+            err.message.contains("Failed to parse") && err.message.contains(CONTACTS_DATA_NAME),
+            "unexpected error: {}",
+            err.message
         );
 
         let stored_raw = {
@@ -1927,8 +1930,6 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(stored_raw, b"{corrupt-contacts");
-
-        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[tokio::test]
@@ -1937,22 +1938,22 @@ mod tests {
         use crate::test_support::{MockSyncServer, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE};
         use std::sync::Arc;
 
-        let base_dir = temp_test_dir("h1_probe_concurrency");
+        let base_dir = TempDirGuard(temp_test_dir("h1_probe_concurrency"));
         let password = "TestPassword123!";
         let alice_state = Arc::new(create_test_state(setup_test_app(
-            &base_dir.join("alice"),
+            &base_dir.0.join("alice"),
             "Alice",
             ALICE_PHRASE,
             password,
         )));
 
-        let bob_did = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password)
+        let bob_did = setup_test_app(&base_dir.0.join("bob"), "Bob", BOB_PHRASE, password)
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
-        let del_did = setup_test_app(&base_dir.join("del"), "Del", CHARLIE_PHRASE, password)
+        let del_did = setup_test_app(&base_dir.0.join("del"), "Del", CHARLIE_PHRASE, password)
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
-        let added_did = setup_test_app(&base_dir.join("add"), "Add", READER1_PHRASE, password)
+        let added_did = setup_test_app(&base_dir.0.join("add"), "Add", READER1_PHRASE, password)
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
 
@@ -2056,8 +2057,13 @@ mod tests {
                 .unwrap();
         }
 
-        let _ = release_tx.send(true);
-        let _ = probe_handle.await.unwrap().unwrap();
+        release_tx
+            .send(true)
+            .expect("pause gate receiver must remain active");
+        let probed = probe_handle.await.unwrap().unwrap();
+        assert_eq!(probed.len(), 1);
+        assert_eq!(probed[0].drop_pub, admin_pub);
+        assert_ne!(probed[0].status, "unverified");
 
         let mut s = alice_state.service.lock().unwrap();
         let contacts = alice_state.load_contacts(&mut s, Some(password)).unwrap();
@@ -2072,8 +2078,6 @@ mod tests {
         let bob_c = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_ne!(bob_c.syncs[0].status, "unverified");
         assert!(bob_c.syncs[0].last_probed_at.is_some());
-
-        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[tokio::test]
@@ -2084,10 +2088,12 @@ mod tests {
         use std::sync::Arc;
         use std::time::Duration;
 
-        let base_dir = crate::test_support::temp_test_dir("s10_x3_selected_syncs_lock_order");
+        let base_dir = TempDirGuard(crate::test_support::temp_test_dir(
+            "s10_x3_selected_syncs_lock_order",
+        ));
         let password = "StrongPw-S10-X3!";
         let alice_svc = crate::test_support::setup_test_app(
-            &base_dir.join("alice"),
+            &base_dir.0.join("alice"),
             "Alice",
             crate::test_support::ALICE_PHRASE,
             password,
@@ -2171,8 +2177,6 @@ mod tests {
         let drops = own_prof.last_card.unwrap().payload.drops;
         assert_eq!(drops.len(), 1);
         assert_eq!(drops[0].write_url, "https://sync-a.example.org/sync.php");
-
-        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[tokio::test]
@@ -2180,15 +2184,15 @@ mod tests {
         use crate::models::{FrontendContact, FrontendUserProfile};
         use crate::test_support::{MockSyncServer, ALICE_PHRASE, BOB_PHRASE};
 
-        let base_dir = temp_test_dir("revoked_own_sync_friend_activation");
+        let base_dir = TempDirGuard(temp_test_dir("revoked_own_sync_friend_activation"));
         let password = "TestPassword123!";
         let bob_state = create_test_state(setup_test_app(
-            &base_dir.join("bob"),
+            &base_dir.0.join("bob"),
             "Bob",
             BOB_PHRASE,
             password,
         ));
-        let alice_did = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password)
+        let alice_did = setup_test_app(&base_dir.0.join("alice"), "Alice", ALICE_PHRASE, password)
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
 
@@ -2299,7 +2303,127 @@ mod tests {
         );
         assert_eq!(policy.market_selected_syncs[0].drop_pub, server_admin_pub);
         assert_eq!(policy.market_selected_syncs[0].status, "active");
+    }
 
-        let _ = std::fs::remove_dir_all(&base_dir);
+    #[test]
+    fn test_contact_display_label_skip_probe_and_apply_fields_invariants() {
+        use crate::models::{FrontendContact, FrontendUserProfile};
+
+        let mk_contact = |first: Option<&str>, last: Option<&str>, org: Option<&str>| {
+            FrontendContact {
+                did: "did:key:z6MkFallbackDid".to_string(),
+                profile: FrontendUserProfile {
+                    first_name: first.map(str::to_string),
+                    last_name: last.map(str::to_string),
+                    organization: org.map(str::to_string),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: String::new(),
+                notes: None,
+                trust_level: None,
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![],
+            }
+        };
+        assert_eq!(contact_display_label(&mk_contact(Some(" Alice "), Some(" Doe "), Some("Org"))), "Alice Doe");
+        assert_eq!(contact_display_label(&mk_contact(Some(" Alice "), None, Some("Org"))), "Alice");
+        assert_eq!(contact_display_label(&mk_contact(Some("  "), Some(" Doe "), Some("Org"))), "Doe");
+        assert_eq!(contact_display_label(&mk_contact(None, None, Some("Bakery"))), "Bakery");
+        assert_eq!(contact_display_label(&mk_contact(None, None, None)), "did:key:z6MkFallbackDid");
+
+        let now = 10_000u64;
+        let base_ep = FrontendSyncDescriptor {
+            write_url: "https://s.example/sync.php".to_string(),
+            read_url: "https://s.example/d".to_string(),
+            slot_id: Some("slot-target".to_string()),
+            drop_pub: "aa".repeat(32),
+            status: "active".to_string(),
+            last_probed_at: Some(now - 59),
+            ..Default::default()
+        };
+        type SkipCase<'a> = (&'a str, bool, bool, &'a str, u32, Option<u64>, bool, &'a str, &'a str);
+        let skip_cases: &[SkipCase<'_>] = &[
+            ("healthy_active", true, false, "active", 0, Some(now - 59), true, "https://r", "aa"),
+            ("healthy_forced", true, true, "active", 0, Some(now - 59), false, "https://r", "aa"),
+            ("healthy_unverified", true, false, "unverified", 0, Some(now - 59), false, "https://r", "aa"),
+            ("healthy_no_read", true, false, "active", 0, Some(now - 59), false, "", "aa"),
+            ("healthy_no_pub", true, false, "active", 0, Some(now - 59), false, "https://r", ""),
+            ("no_ts", false, false, "active", 0, None, false, "https://r", "aa"),
+            ("future_ts", false, false, "active", 0, Some(now + 1), false, "https://r", "aa"),
+            ("exact_now", false, false, "active", 0, Some(now), true, "https://r", "aa"),
+            ("unverified_recent", false, false, "unverified", 0, Some(now), false, "https://r", "aa"),
+            ("pending_f3_59", false, false, "pending_auth", 3, Some(now - 59), true, "https://r", "aa"),
+            ("pending_f3_60", false, false, "pending_auth", 3, Some(now - 60), false, "https://r", "aa"),
+            ("pending_f4_299", false, false, "pending_auth", 4, Some(now - 299), true, "https://r", "aa"),
+            ("pending_f4_300", false, false, "pending_auth", 4, Some(now - 300), false, "https://r", "aa"),
+            ("unreach_f1_119", false, false, "unreachable", 1, Some(now - 119), true, "https://r", "aa"),
+            ("unreach_f1_120", false, false, "unreachable", 1, Some(now - 120), false, "https://r", "aa"),
+            ("unreach_f4_899", false, false, "unreachable", 4, Some(now - 899), true, "https://r", "aa"),
+            ("unreach_f4_900", false, false, "unreachable", 4, Some(now - 900), false, "https://r", "aa"),
+            ("revoked_3599", false, false, "revoked", 0, Some(now - 3599), true, "https://r", "aa"),
+            ("revoked_3600", false, false, "revoked", 0, Some(now - 3600), false, "https://r", "aa"),
+            ("active_59", false, false, "active", 0, Some(now - 59), true, "https://r", "aa"),
+            ("active_60", false, false, "active", 0, Some(now - 60), false, "https://r", "aa"),
+        ];
+        for (name, has_healthy, force, status, fails, last_ts, expected, read, pubk) in skip_cases {
+            let mut ep = base_ep.clone();
+            ep.status = (*status).to_string();
+            ep.fail_count = *fails;
+            ep.last_probed_at = *last_ts;
+            ep.read_url = (*read).to_string();
+            ep.drop_pub = (*pubk).to_string();
+            assert_eq!(should_skip_endpoint_probe(&ep, *has_healthy, *force, now), *expected, "case {name}");
+        }
+
+        let probed = FrontendSyncDescriptor {
+            write_url: "https://s.example/new.php".to_string(),
+            read_url: "https://s.example/d-new".to_string(),
+            slot_id: Some("foreign-slot".to_string()),
+            drop_pub: "BB".repeat(32),
+            last_seen_at: Some(200),
+            last_error_at: Some(150),
+            fail_count: 2,
+            status: "deprecating".to_string(),
+            last_probed_at: Some(201),
+            sunset_at: Some(999),
+            revocation_reason: Some("Moving".to_string()),
+            replacement: Some(crate::models::FrontendSyncReplacementTarget {
+                write_url: "https://next.example/sync.php".to_string(),
+                read_url: "https://next.example/d".to_string(),
+                drop_pub: "cc".repeat(32),
+            }),
+        };
+
+        let mut target_empty_pub = base_ep.clone();
+        target_empty_pub.drop_pub = "  ".to_string();
+        apply_probe_result_fields(&mut target_empty_pub, &probed);
+        assert_eq!(target_empty_pub.slot_id.as_deref(), Some("slot-target"));
+        assert_eq!(target_empty_pub.drop_pub, "BB".repeat(32));
+        assert_eq!(target_empty_pub.write_url, "https://s.example/new.php");
+        assert_eq!(target_empty_pub.read_url, "https://s.example/d-new");
+        assert_eq!(target_empty_pub.last_seen_at, Some(200));
+        assert_eq!(target_empty_pub.last_error_at, Some(150));
+        assert_eq!(target_empty_pub.fail_count, 2);
+        assert_eq!(target_empty_pub.status, "deprecating");
+        assert_eq!(target_empty_pub.last_probed_at, Some(201));
+        assert_eq!(target_empty_pub.sunset_at, Some(999));
+        assert_eq!(target_empty_pub.revocation_reason.as_deref(), Some("Moving"));
+        assert_eq!(
+            target_empty_pub.replacement.as_ref().map(|r| r.write_url.as_str()),
+            Some("https://next.example/sync.php")
+        );
+
+        let mut target_same_case = base_ep.clone();
+        target_same_case.drop_pub = format!(" {} ", "bb".repeat(32));
+        apply_probe_result_fields(&mut target_same_case, &probed);
+        assert_eq!(target_same_case.drop_pub, "BB".repeat(32));
+
+        let mut target_pinned = base_ep;
+        apply_probe_result_fields(&mut target_pinned, &probed);
+        assert_eq!(target_pinned.drop_pub, "aa".repeat(32));
+        assert_eq!(target_pinned.slot_id.as_deref(), Some("slot-target"));
     }
 }

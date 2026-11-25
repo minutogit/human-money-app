@@ -1377,3 +1377,120 @@ pub async fn revoke_own_sync_server_impl(
 
     get_sync_admin_status_impl(pw.map(str::to_string), state).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_admin_policy_quota_dto_and_hash_invariants() {
+        let card_policy = default_policy_for_channel("card");
+        assert!(card_policy.hop2_enabled);
+        assert_eq!(card_policy.direct_min, 2);
+        assert_eq!(card_policy.bridge_min, 2);
+        assert_eq!(card_policy.hop2_min, 2);
+
+        let backup_policy = default_policy_for_channel("backup");
+        assert!(!backup_policy.hop2_enabled);
+
+        assert!(validate_admin_quotas(10, 1, 10).is_ok());
+        assert!(validate_admin_quotas(10_485_760, 100_000, 10).is_ok());
+        assert_eq!(
+            validate_admin_quotas(100, 0, 10).unwrap_err().message,
+            "max_members must be between 1 and 100000"
+        );
+        assert_eq!(
+            validate_admin_quotas(100, 100_001, 10).unwrap_err().message,
+            "max_members must be between 1 and 100000"
+        );
+        assert_eq!(
+            validate_admin_quotas(100, 10, 9).unwrap_err().message,
+            "max_user_storage_mb must be at least 10 MB"
+        );
+        assert_eq!(
+            validate_admin_quotas(9, 10, 10).unwrap_err().message,
+            "max_total_storage_mb must be between max_user_storage_mb and 10485760 MB"
+        );
+        assert_eq!(
+            validate_admin_quotas(10_485_761, 10, 10)
+                .unwrap_err()
+                .message,
+            "max_total_storage_mb must be between max_user_storage_mb and 10485760 MB"
+        );
+
+        let admin = StoredSyncAdmin {
+            descriptor: humoco_market::DropDescriptor {
+                write_url: "https://sync.example/sync.php".to_string(),
+                read_url: "https://sync.example/d".to_string(),
+                slot_id: None,
+                drop_pub: "aa".repeat(32),
+            },
+            sync_index: 0,
+            data_dir: "d".to_string(),
+            max_members: 25,
+            max_total_storage_mb: 256,
+            max_user_storage_mb: 12,
+            policies: BTreeMap::from([(
+                "card".to_string(),
+                humoco_market::MemberPolicy {
+                    direct_min: 1,
+                    hop2_enabled: true,
+                    bridge_min: 2,
+                    hop2_min: 3,
+                },
+            )]),
+            allow: vec!["did:key:z6MkAllow".to_string()],
+            last_members_hash: BTreeMap::new(),
+            revocation: None,
+        };
+        let stats = humoco_market::DropMembersStats {
+            member_dids: vec!["did:key:z6MkM".to_string()],
+            direct_count: 1,
+            hop2_count: 0,
+            total_count: 7,
+        };
+        let remote = SyncServerAdminStatus {
+            used_bytes: 2 * 1024 * 1024,
+            max_bytes: 64 * 1024 * 1024,
+            soft_limit_bytes: 50 * 1024 * 1024,
+            soft_warning: true,
+            slot_count: 3,
+            channel_counts: BTreeMap::new(),
+            admin_pubkey: "aa".repeat(32),
+            max_members: 42,
+            max_user_bytes: 16 * 1024 * 1024,
+        };
+
+        let dto_remote = build_admin_status_dto(admin.clone(), stats.clone(), Some(remote));
+        assert_eq!(dto_remote.used_bytes, Some(2_097_152));
+        assert_eq!(dto_remote.max_bytes, Some(67_108_864));
+        assert!(dto_remote.soft_warning);
+        assert_eq!(dto_remote.max_members, 42);
+        assert_eq!(dto_remote.max_total_storage_mb, 64);
+        assert_eq!(dto_remote.max_user_storage_mb, 16);
+        assert_eq!(dto_remote.total_member_count, 7);
+        assert_eq!(dto_remote.card_policy.direct_min, 1);
+        assert_eq!(dto_remote.allow, vec!["did:key:z6MkAllow".to_string()]);
+
+        let dto_local = build_admin_status_dto(admin, stats, None);
+        assert_eq!(dto_local.used_bytes, None);
+        assert_eq!(dto_local.max_bytes, Some(256 * 1024 * 1024));
+        assert!(!dto_local.soft_warning);
+        assert_eq!(dto_local.max_members, 25);
+        assert_eq!(dto_local.max_total_storage_mb, 256);
+        assert_eq!(dto_local.max_user_storage_mb, 12);
+
+        assert_eq!(
+            compute_channel_members_hash(&[]),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            compute_channel_members_hash(&["aa".to_string(), "bb".to_string()]),
+            "329d670e59ead1543a2d36865895972560bc434204c5f4a0c8219005dd312719"
+        );
+        assert_ne!(
+            compute_channel_members_hash(&["aa".to_string(), "bb".to_string()]),
+            compute_channel_members_hash(&["bb".to_string(), "aa".to_string()])
+        );
+    }
+}
