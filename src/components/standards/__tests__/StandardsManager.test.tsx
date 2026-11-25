@@ -1,8 +1,9 @@
-/* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { StandardsManager } from '../StandardsManager';
 import { standardsService } from '../../../services/standardsService';
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
 import * as clipboardUtils from '../../../utils/clipboard';
 import { VoucherStandardInfo, VoucherStandardDefinition } from '../../../types';
 
@@ -41,16 +42,9 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
     writeFile: vi.fn(),
 }));
 
-vi.mock('react-i18next', () => {
-    const fs = require('fs');
-    const path = require('path');
-    const enPath = path.resolve(process.cwd(), 'src/locales/en.json');
-    let enTranslations: Record<string, string> = {};
-    try {
-        enTranslations = JSON.parse(fs.readFileSync(enPath, 'utf-8'));
-    } catch {
-        enTranslations = {};
-    }
+vi.mock('react-i18next', async () => {
+    const enMod = await import('../../../locales/en.json');
+    const enTranslations = enMod.default as Record<string, string>;
 
     const customTranslations: Record<string, string> = {
         'standards.detailsButton': 'Details',
@@ -70,10 +64,17 @@ vi.mock('react-i18next', () => {
         'standards.unlimitedValidity': 'Unlimited',
     };
 
-    const stableT = (key: string, options?: any) => {
-        let val = customTranslations[key] || enTranslations[key] || key;
-        if (options && typeof options === 'object') {
-            for (const [k, v] of Object.entries(options)) {
+    const stableT = (key: string, optionsOrDefault?: string | Record<string, unknown>) => {
+        let val = customTranslations[key] || enTranslations[key];
+        if (!val && typeof optionsOrDefault === 'string') {
+            val = optionsOrDefault;
+        }
+        val = val || key;
+        if (optionsOrDefault && typeof optionsOrDefault === 'object') {
+            if (!customTranslations[key] && !enTranslations[key] && typeof optionsOrDefault.defaultValue === 'string') {
+                val = optionsOrDefault.defaultValue;
+            }
+            for (const [k, v] of Object.entries(optionsOrDefault)) {
                 val = val.replace(new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, 'g'), String(v));
             }
         }
@@ -202,6 +203,7 @@ en = "Backed by personal labor guarantee."
 
     beforeEach(() => {
         vi.clearAllMocks();
+        mockSessionValue = null;
         vi.mocked(standardsService.getStandards).mockResolvedValue(mockStandards);
         vi.mocked(standardsService.parseStandard).mockResolvedValue(mockParsedDefinition);
     });
@@ -331,33 +333,35 @@ en = "Backed by personal labor guarantee."
 
     it('handles fallback gracefully when parseStandard fails, keeping raw TOML accessible', async () => {
         const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        vi.mocked(standardsService.parseStandard).mockRejectedValue(new Error('Corrupt TOML'));
+        try {
+            vi.mocked(standardsService.parseStandard).mockRejectedValue(new Error('Corrupt TOML'));
 
-        render(<StandardsManager />);
+            render(<StandardsManager />);
 
-        await waitFor(() => {
-            expect(screen.getByText('Minuto Standard')).toBeInTheDocument();
-        });
+            await waitFor(() => {
+                expect(screen.getByText('Minuto Standard')).toBeInTheDocument();
+            });
 
-        // Click Details
-        fireEvent.click(screen.getByText('Details'));
+            // Click Details
+            fireEvent.click(screen.getByText('Details'));
 
-        // Modal opens with fallback values (displayName & id)
-        const modal = screen.getByRole('dialog');
-        const inModal = within(modal);
+            // Modal opens with fallback values (displayName & id)
+            const modal = screen.getByRole('dialog');
+            const inModal = within(modal);
 
-        await waitFor(() => {
-            expect(inModal.getByText('Standard Details')).toBeInTheDocument();
-        });
+            await waitFor(() => {
+                expect(inModal.getByText('Standard Details')).toBeInTheDocument();
+            });
 
-        expect(inModal.getByText(/Minuto Standard/)).toBeInTheDocument();
-        expect(inModal.getByText(/UUID: minuto-standard-uuid-1234/)).toBeInTheDocument();
+            expect(inModal.getByText(/Minuto Standard/)).toBeInTheDocument();
+            expect(inModal.getByText(/UUID: minuto-standard-uuid-1234/)).toBeInTheDocument();
 
-        // Raw TOML is still expandable and functions properly
-        fireEvent.click(inModal.getByText('Show Raw TOML'));
-        expect(inModal.getByText(/\[immutable\.identity\]/)).toBeInTheDocument();
-
-        consoleWarnSpy.mockRestore();
+            // Raw TOML is still expandable and functions properly
+            fireEvent.click(inModal.getByText('Show Raw TOML'));
+            expect(inModal.getByText(/\[immutable\.identity\]/)).toBeInTheDocument();
+        } finally {
+            consoleWarnSpy.mockRestore();
+        }
     });
 
     it('protects standard deletion with requireFullAccess and forwards walletPassword', async () => {
@@ -389,7 +393,66 @@ en = "Backed by personal labor guarantee."
                 'master-pw'
             );
         });
+    });
 
-        mockSessionValue = null;
+    it('exports standard to chosen path via ExportStandardModal', async () => {
+        const exportedBytes = [1, 2, 3, 4];
+        vi.mocked(standardsService.exportStandard).mockResolvedValue(exportedBytes);
+        vi.mocked(save).mockResolvedValue('/tmp/minuto-standard.standard');
+        vi.mocked(writeFile).mockResolvedValue(undefined);
+
+        render(<StandardsManager />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Minuto Standard')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: /Export \(\.standard\)/i }));
+        const modal = screen.getByRole('dialog');
+        fireEvent.click(within(modal).getByRole('button', { name: /Export \(\.standard\)/i }));
+
+        await waitFor(() => {
+            expect(standardsService.exportStandard).toHaveBeenCalledWith(
+                'minuto-standard-uuid-1234',
+                { type: 'Cleartext' },
+                null,
+            );
+            expect(writeFile).toHaveBeenCalledWith(
+                '/tmp/minuto-standard.standard',
+                new Uint8Array(exportedBytes),
+            );
+            expect(screen.getByText(/exported|exportiert/i)).toBeInTheDocument();
+        });
+    });
+
+    it('keeps standard intact on delete cancel and surfaces in-use error when deletion fails', async () => {
+        vi.mocked(standardsService.deleteStandard).mockRejectedValueOnce(
+            new Error('Standard is still in use by 2 vouchers'),
+        );
+
+        render(<StandardsManager />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Minuto Standard')).toBeInTheDocument();
+        });
+
+        // Cancel delete modal
+        fireEvent.click(screen.getByTitle('Delete'));
+        const cancelModal = screen.getByRole('dialog');
+        fireEvent.click(within(cancelModal).getByRole('button', { name: /Cancel/i }));
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(standardsService.deleteStandard).not.toHaveBeenCalled();
+
+        // Confirm delete fails with in-use error
+        fireEvent.click(screen.getByTitle('Delete'));
+        const confirmModal = screen.getByRole('dialog');
+        fireEvent.click(within(confirmModal).getByRole('button', { name: 'Delete' }));
+
+        await waitFor(() => {
+            expect(
+                screen.getByText(/still in use by active vouchers|nicht gelöscht werden/i),
+            ).toBeInTheDocument();
+        });
+        expect(screen.getByText('Minuto Standard')).toBeInTheDocument();
     });
 });

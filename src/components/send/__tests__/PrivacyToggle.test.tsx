@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { PrivacyToggle } from '../PrivacyToggle';
 import { usePrivacyDetection } from '../../../hooks/usePrivacyDetection';
@@ -122,5 +122,54 @@ describe('PrivacyToggle & usePrivacyDetection', () => {
 
     expect(screen.queryByTestId('privacy-forced-badge')).not.toBeInTheDocument();
     expect(screen.getAllByText(/Privacy Conflict/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('allows interactive switching between Public and Stealth in flexible mode and highlights privacyError when unset', () => {
+    const onPrivacyChange = vi.fn();
+    const { container, rerender } = render(
+      <PrivacyToggle
+        privacyMode={null}
+        onPrivacyChange={onPrivacyChange}
+        privacyRules={{ mode: 'flexible', forced: false }}
+        privacyError={true}
+      />
+    );
+
+    const root = container.querySelector('#privacyMode');
+    expect(root?.className).toContain('border-rose-500');
+    expect(screen.queryByTestId('privacy-forced-badge')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Public|Öffentlich/i }));
+    expect(onPrivacyChange).toHaveBeenCalledWith('public');
+
+    fireEvent.click(screen.getByRole('button', { name: /Stealth|Verborgen/i }));
+    expect(onPrivacyChange).toHaveBeenCalledWith('stealth');
+
+    rerender(
+      <PrivacyToggle
+        privacyMode="stealth"
+        onPrivacyChange={onPrivacyChange}
+        privacyRules={{ mode: 'flexible', forced: false }}
+        privacyError={false}
+      />
+    );
+    expect(container.querySelector('#privacyMode')?.className).not.toContain('border-rose-500');
+  });
+
+  it('forces Stealth when mixing a flexible standard with a stealth standard', () => {
+    render(
+      <DetectionHarness
+        selectedIds={['v-flex', 'v-stealth']}
+        vouchers={[makeVoucher('v-flex', 'std-flex'), makeVoucher('v-stealth', 'std-stealth')]}
+        standards={{
+          'std-flex': makeStandard('std-flex', 'flexible'),
+          'std-stealth': makeStandard('std-stealth', 'stealth'),
+        }}
+      />
+    );
+
+    const badge = screen.getByTestId('privacy-forced-badge');
+    expect(badge).toHaveTextContent(/Stealth/i);
+    expect(badge.className).toContain('purple');
   });
 });

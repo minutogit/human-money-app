@@ -36,12 +36,19 @@ describe('BugReportView Component', () => {
   });
 
   it('renders loading state initially and then shows logs', async () => {
-    (invoke as Mock).mockResolvedValue(mockLogs);
+    let resolveLogs!: (val: string) => void;
+    (invoke as Mock).mockImplementationOnce(
+      () => new Promise<string>((resolve) => {
+        resolveLogs = resolve;
+      }),
+    );
 
     render(<BugReportView onBack={mockOnBack} />);
 
     // Verify loading indicator is displayed first
     expect(screen.getByText(/Loading Logs.../i)).toBeInTheDocument();
+
+    resolveLogs(mockLogs);
 
     // Verify logs and elements are rendered after fetching
     await waitFor(() => {
@@ -116,5 +123,20 @@ describe('BugReportView Component', () => {
     fireEvent.click(backButton);
 
     expect(mockOnBack).toHaveBeenCalled();
+  });
+
+  it('handles empty logs fallback and surfaces openUrl failure without crashing', async () => {
+    (invoke as Mock).mockResolvedValue('');
+    vi.mocked(openUrl).mockRejectedValueOnce(new Error('browser launch failed'));
+
+    render(<BugReportView onBack={mockOnBack} />);
+
+    expect(await screen.findByText(/No logs recorded\./i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Copy Logs/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Open GitHub Issue/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/browser launch failed/i)).toBeInTheDocument();
+    });
   });
 });

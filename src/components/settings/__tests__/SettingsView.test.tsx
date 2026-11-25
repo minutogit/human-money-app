@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi, Mock, MockInstance } from 'vitest';
@@ -14,7 +13,7 @@ const { mockChangeLanguage, mockNavigate } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
 }));
 
-let mockAppState: any = { view: 'settings' };
+let mockAppState: { view: string; initialSection?: string } = { view: 'settings' };
 
 vi.mock('../../../context/NavigationContext', () => ({
   useNavigation: () => ({
@@ -39,19 +38,12 @@ vi.mock('../../../context/NavigationContext', () => ({
   }),
 }));
 
-vi.mock('react-i18next', () => {
-  const fs = require('fs');
-  const path = require('path');
-  const enPath = path.resolve(process.cwd(), 'src/locales/en.json');
-  let enTranslations = {};
-  try {
-    enTranslations = JSON.parse(fs.readFileSync(enPath, 'utf-8'));
-  } catch (err) {
-    console.error(err);
-  }
+vi.mock('react-i18next', async () => {
+  const enMod = await import('../../../locales/en.json');
+  const enTranslations = enMod.default as Record<string, string>;
 
-  const stableT = (key: string, options?: any) => {
-    let val = (enTranslations as Record<string, string>)[key] || key;
+  const stableT = (key: string, options?: Record<string, unknown>) => {
+    let val = enTranslations[key] || key;
     if (options && typeof options === 'object') {
       for (const [k, v] of Object.entries(options)) {
         val = val.replace(new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, 'g'), String(v));
@@ -140,7 +132,9 @@ vi.mock('../../../services/backupService', () => ({
   },
 }));
 
-const mockProtectAction = vi.fn((callback: any) => callback('test-password'));
+const mockProtectAction = vi.fn((callback: (pwd: string | null) => Promise<unknown>) =>
+  callback('test-password'),
+);
 const mockLockSession = vi.fn().mockResolvedValue(undefined);
 const mockRefreshSessionStatus = vi.fn().mockResolvedValue(undefined);
 
@@ -245,20 +239,24 @@ describe('SettingsView Component', () => {
       securityPolicy: { ...currentConfig.securityPolicy },
       lifecycle: { ...currentConfig.lifecycle },
     }));
-    (settingsService.patchUiPreferences as Mock).mockImplementation(async (patch: any) => {
-      currentConfig = {
-        ...currentConfig,
-        uiPreferences: { ...currentConfig.uiPreferences, ...patch },
-      };
-      return currentConfig.uiPreferences;
-    });
-    (settingsService.patchSecurityPolicy as Mock).mockImplementation(async (patch: any) => {
-      currentConfig = {
-        ...currentConfig,
-        securityPolicy: { ...currentConfig.securityPolicy, ...patch },
-      };
-      return currentConfig.securityPolicy;
-    });
+    (settingsService.patchUiPreferences as Mock).mockImplementation(
+      async (patch: Partial<AppConfigDto['uiPreferences']>) => {
+        currentConfig = {
+          ...currentConfig,
+          uiPreferences: { ...currentConfig.uiPreferences, ...patch },
+        };
+        return currentConfig.uiPreferences;
+      },
+    );
+    (settingsService.patchSecurityPolicy as Mock).mockImplementation(
+      async (patch: Partial<AppConfigDto['securityPolicy']>) => {
+        currentConfig = {
+          ...currentConfig,
+          securityPolicy: { ...currentConfig.securityPolicy, ...patch },
+        };
+        return currentConfig.securityPolicy;
+      },
+    );
     (authService.getLocalInstanceId as Mock).mockResolvedValue('test-device-id-1234');
     (authService.listProfiles as Mock).mockResolvedValue([
       { folderName: 'alice-folder', profileName: 'Alice', isEncrypted: true },
@@ -267,9 +265,21 @@ describe('SettingsView Component', () => {
     (profileService.getUserId as Mock).mockResolvedValue('did:key:z6MkuTestUserId');
   });
 
-  it('renders loading state initially', () => {
+  it('renders loading state initially', async () => {
+    let resolveConfig!: (cfg: AppConfigDto) => void;
+    (settingsService.getConfig as Mock).mockImplementationOnce(
+      () => new Promise<AppConfigDto>((resolve) => {
+        resolveConfig = resolve;
+      }),
+    );
+
     renderSettingsView();
     expect(screen.getByText(/Configuring Environment\.\.\./i)).toBeInTheDocument();
+
+    resolveConfig(createMockConfig());
+    await waitFor(() => {
+      expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
+    });
   });
 
   it('renders 4 tabs and starts on Profile tab', async () => {
@@ -425,26 +435,28 @@ describe('SettingsView Component', () => {
   it('renders language selector card on Profile tab and allows changing language', async () => {
     const user = userEvent.setup();
     const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
-    renderSettingsView();
+    try {
+      renderSettingsView();
 
-    await screen.findByText('Profile');
+      await screen.findByText('Profile');
 
-    // Verify Language Card elements are present on Profile tab
-    expect(screen.getByText('Language')).toBeInTheDocument();
-    
-    // Find dropdown toggle button and click it to open
-    const dropdownToggle = screen.getByRole('button', { name: /🇺🇸\s*English/i });
-    expect(dropdownToggle).toBeInTheDocument();
-    await user.click(dropdownToggle);
+      // Verify Language Card elements are present on Profile tab
+      expect(screen.getByText('Language')).toBeInTheDocument();
+      
+      // Find dropdown toggle button and click it to open
+      const dropdownToggle = screen.getByRole('button', { name: /🇺🇸\s*English/i });
+      expect(dropdownToggle).toBeInTheDocument();
+      await user.click(dropdownToggle);
 
-    // Click German language button
-    const germanBtn = screen.getByRole('button', { name: /🇩🇪\s*Deutsch/i });
-    await user.click(germanBtn);
+      // Click German language button
+      const germanBtn = screen.getByRole('button', { name: /🇩🇪\s*Deutsch/i });
+      await user.click(germanBtn);
 
-    expect(mockChangeLanguage).toHaveBeenCalledWith('de');
-    expect(setItemSpy).toHaveBeenCalledWith('app_language', 'de');
-    
-    setItemSpy.mockRestore();
+      expect(mockChangeLanguage).toHaveBeenCalledWith('de');
+      expect(setItemSpy).toHaveBeenCalledWith('app_language', 'de');
+    } finally {
+      setItemSpy.mockRestore();
+    }
   });
 
   it('opens confirmation modal and purges profile in Gefahrenzone', async () => {

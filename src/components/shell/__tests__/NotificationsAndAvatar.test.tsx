@@ -73,7 +73,7 @@ describe('UserAvatar, NotificationBell and EventToastStack', () => {
         const img = container.querySelector('img');
         expect(img).not.toBeNull();
 
-        fireEvent.error(img!);
+        fireEvent.error(img as HTMLImageElement);
         expect(container.querySelector('img')).toBeNull();
         expect(container.querySelector('svg')).not.toBeNull();
 
@@ -232,5 +232,66 @@ describe('UserAvatar, NotificationBell and EventToastStack', () => {
             showTransientSyncToast({ message: 'Alles aktuell – keine neuen Einträge.' });
         });
         expect(screen.getByText('Alles aktuell – keine neuen Einträge.')).toBeInTheDocument();
+    });
+
+    it('NotificationBell hides badge when no unread notices exist and closes popover on Escape', async () => {
+        const nowSecs = Math.floor(Date.now() / 1000);
+        vi.mocked(marketService.getAppNotices).mockResolvedValue({
+            lastSyncAt: nowSecs - 60,
+            notices: [],
+        });
+
+        render(<NotificationBell />);
+
+        await waitFor(() => {
+            expect(marketService.getAppNotices).toHaveBeenCalledTimes(1);
+        });
+        expect(screen.queryByTestId('notification-bell-badge')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByTestId('notification-bell-button'));
+        expect(await screen.findByTestId('notification-bell-popover')).toBeInTheDocument();
+        expect(screen.getByText('Keine neuen Ereignisse vorhanden.')).toBeInTheDocument();
+
+        fireEvent.keyDown(document, { key: 'Escape' });
+        await waitFor(() => {
+            expect(screen.queryByTestId('notification-bell-popover')).not.toBeInTheDocument();
+        });
+    });
+
+    it('NotificationBell routes inquiry notice click to marketplace without extra markAppNoticesRead when already read', async () => {
+        const nowSecs = Math.floor(Date.now() / 1000);
+        vi.mocked(marketService.getAppNotices).mockResolvedValue({
+            lastSyncAt: nowSecs - 30,
+            notices: [
+                {
+                    id: 'n-inq-read',
+                    kind: 'inquiry',
+                    createdAt: nowSecs - 10,
+                    read: true,
+                    importedPayments: 0,
+                    importedReceipts: 0,
+                    importedSignatures: 0,
+                    newSignRequests: 0,
+                    newWotHandshakes: 0,
+                    newInquiries: 1,
+                    newInquiryMessages: 0,
+                    importedCards: 0,
+                    newAds: 0,
+                    counterpartyName: 'Berta',
+                },
+            ],
+        });
+
+        render(<NotificationBell />);
+
+        fireEvent.click(screen.getByTestId('notification-bell-button'));
+        expect(await screen.findByText('Neue Marktplatz-Anfrage')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByText('Neue Marktplatz-Anfrage'));
+        expect(marketService.markAppNoticesRead).not.toHaveBeenCalled();
+        expect(mockNavigate).toHaveBeenCalledWith({
+            view: 'marketplace',
+            initialTab: 'mine',
+        });
     });
 });

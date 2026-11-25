@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { HelpCenterView } from '../HelpCenterView';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import enJson from '../../../locales/en.json';
 
 const en = enJson as Record<string, string>;
@@ -20,6 +21,10 @@ vi.mock('../../../context/NavigationContext', () => ({
 vi.mock('../../../context/SessionContext', () => ({
     useSession: () => ({
         isAuthenticated: mockIsAuthenticated,
+    }),
+    useOptionalSession: () => ({
+        isAuthenticated: mockIsAuthenticated,
+        hasCachedSession: false,
     }),
 }));
 
@@ -98,5 +103,42 @@ describe('HelpCenterView Component', () => {
 
         expect(screen.getAllByText(en['helpCenter.title']).length).toBeGreaterThanOrEqual(1);
         expect(screen.getAllByText(en['helpCenter.subtitle']).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('shows expert topics via disclosure in Simple mode and as category tab in Expert mode', () => {
+        const { unmount } = render(
+            <UiModeProvider initialMode="simple">
+                <HelpCenterView />
+            </UiModeProvider>
+        );
+
+        expect(screen.queryByRole('button', { name: en['helpCenter.groupExpert'] })).not.toBeInTheDocument();
+        expect(screen.queryByTestId('help-center-expert-topics')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByTestId('help-center-expert-topics-toggle'));
+        expect(screen.getByTestId('help-center-expert-topics')).toBeInTheDocument();
+        unmount();
+
+        render(
+            <UiModeProvider initialMode="expert">
+                <HelpCenterView />
+            </UiModeProvider>
+        );
+        const expertPill = screen.getByRole('button', { name: en['helpCenter.groupExpert'] });
+        expect(expertPill).toBeInTheDocument();
+        fireEvent.click(expertPill);
+        expect(screen.queryByTestId('help-center-expert-topics-toggle')).not.toBeInTheDocument();
+    });
+
+    it('displays empty-results message for unmatched search query and restores topics on clear', () => {
+        render(<HelpCenterView />);
+
+        const searchInput = screen.getByPlaceholderText(en['helpCenter.searchPlaceholder']);
+        fireEvent.change(searchInput, { target: { value: 'zzzz-unmatched-query-999' } });
+
+        expect(screen.getByText(en['helpCenter.noResults'])).toBeInTheDocument();
+
+        fireEvent.click(screen.getByLabelText(en['helpCenter.clearSearch']));
+        expect(screen.queryByText(en['helpCenter.noResults'])).not.toBeInTheDocument();
+        expect(screen.getByTestId('help-group-heading-firstSteps')).toBeInTheDocument();
     });
 });

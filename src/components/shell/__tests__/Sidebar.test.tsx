@@ -196,7 +196,7 @@ describe('Sidebar Component', () => {
         expect(mockNavigate).toHaveBeenCalledWith({ view: 'settings' });
 
         const logoutBtn = screen.getByTestId('sidebar-logout-button');
-        vi.mocked(profileService.logout).mockResolvedValue(undefined as never);
+        vi.mocked(profileService.logout).mockResolvedValue(undefined);
         fireEvent.click(logoutBtn);
         expect(mockNotifyLogout).toHaveBeenCalled();
         expect(mockNavigate).toHaveBeenCalledWith({ view: 'needs_login' });
@@ -204,30 +204,50 @@ describe('Sidebar Component', () => {
 
     it('unlocks locked profile click when sessionTimeoutSeconds !== 0, and opens editor when timeout is 0', () => {
         const openSpy = vi.spyOn(syncEvents, 'openOwnProfileEditor').mockImplementation(() => {});
+        try {
+            mockSessionState = {
+                ...mockSessionState,
+                isAuthenticated: true,
+                hasCachedSession: false,
+                sessionTimeoutSeconds: 300,
+            };
+            const { rerender } = render(<Sidebar openClaimsCount={0} />);
+            fireEvent.click(screen.getByTestId('sidebar-profile-button'));
+            expect(mockProtectAction).toHaveBeenCalledTimes(1);
+            expect(openSpy).not.toHaveBeenCalled();
 
-        mockSessionState = {
-            ...mockSessionState,
-            isAuthenticated: true,
-            hasCachedSession: false,
-            sessionTimeoutSeconds: 300,
-        };
-        const { rerender } = render(<Sidebar openClaimsCount={0} />);
-        fireEvent.click(screen.getByTestId('sidebar-profile-button'));
-        expect(mockProtectAction).toHaveBeenCalledTimes(1);
-        expect(openSpy).not.toHaveBeenCalled();
+            mockProtectAction.mockClear();
+            mockSessionState = {
+                ...mockSessionState,
+                isAuthenticated: true,
+                hasCachedSession: false,
+                sessionTimeoutSeconds: 0,
+            };
+            rerender(<Sidebar openClaimsCount={0} />);
+            fireEvent.click(screen.getByTestId('sidebar-profile-button'));
+            expect(openSpy).toHaveBeenCalledTimes(1);
+            expect(mockProtectAction).not.toHaveBeenCalled();
+        } finally {
+            openSpy.mockRestore();
+        }
+    });
 
-        mockProtectAction.mockClear();
-        mockSessionState = {
-            ...mockSessionState,
-            isAuthenticated: true,
-            hasCachedSession: false,
-            sessionTimeoutSeconds: 0,
-        };
-        rerender(<Sidebar openClaimsCount={0} />);
-        fireEvent.click(screen.getByTestId('sidebar-profile-button'));
-        expect(openSpy).toHaveBeenCalledTimes(1);
-        expect(mockProtectAction).not.toHaveBeenCalled();
+    it('restores persisted Mehr open state in expert mode and routes support and bug items', () => {
+        localStorage.setItem('humoco_sidebar_more_open', 'true');
+        render(
+            <UiModeProvider initialMode="expert">
+                <Sidebar openClaimsCount={0} />
+            </UiModeProvider>
+        );
 
-        openSpy.mockRestore();
+        expect(screen.getByTestId('sidebar-more-content')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByTestId('sidebar-more-item-support'));
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'support' });
+        expect(mockSetSidebarOpen).toHaveBeenCalledWith(false);
+
+        fireEvent.click(screen.getByTestId('sidebar-more-item-bug'));
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'bug_report' });
+        expect(mockSetSidebarOpen).toHaveBeenCalledTimes(2);
     });
 });
