@@ -545,10 +545,22 @@ mod tests {
 
     #[test]
     fn s11_f1_f3_patch_deny_unknown_fields_and_validation() {
+        let ui_unknown_err =
+            serde_json::from_str::<UiPreferencesPatch>(r#"{"autoBackupEnabled":true}"#)
+                .unwrap_err()
+                .to_string();
         assert!(
-            serde_json::from_str::<UiPreferencesPatch>(r#"{"autoBackupEnabled":true}"#).is_err()
+            ui_unknown_err.contains("unknown field"),
+            "expected deny_unknown_fields error, got: {ui_unknown_err}"
         );
-        assert!(serde_json::from_str::<SecurityPolicyPatch>(r#"{"uiMode":"expert"}"#).is_err());
+        let pol_unknown_err =
+            serde_json::from_str::<SecurityPolicyPatch>(r#"{"uiMode":"expert"}"#)
+                .unwrap_err()
+                .to_string();
+        assert!(
+            pol_unknown_err.contains("unknown field"),
+            "expected deny_unknown_fields error, got: {pol_unknown_err}"
+        );
 
         let mut prefs = UiPreferences::default();
         let clamp_low: UiPreferencesPatch =
@@ -564,22 +576,25 @@ mod tests {
             last_used_directory: Some(Some("/tmp/bad\ndir".to_string())),
             ..Default::default()
         };
-        assert!(bad_dir_patch.validate().is_err());
+        assert_eq!(
+            bad_dir_patch.validate().unwrap_err(),
+            "Invalid last_used_directory value: contains control characters"
+        );
 
-        for bad_folder in [
-            "relative/path",
-            "../escape",
-            "/tmp/../escape",
-            "/tmp/bad\0folder",
+        for (bad_folder, expected_substr) in [
+            ("relative/path", "must be absolute"),
+            ("../escape", "must be absolute"),
+            ("/tmp/../escape", "parent directory traversal forbidden"),
+            ("/tmp/bad\0folder", "contains control characters"),
         ] {
             let p = SecurityPolicyPatch {
                 backup_sync_folder: Some(Some(bad_folder.to_string())),
                 ..Default::default()
             };
+            let err = p.validate().unwrap_err();
             assert!(
-                p.validate().is_err(),
-                "expected invalid backup_sync_folder: {}",
-                bad_folder
+                err.contains(expected_substr),
+                "expected '{expected_substr}' for '{bad_folder}', got: {err}"
             );
         }
 
@@ -587,6 +602,150 @@ mod tests {
             backup_sync_folder: Some(Some("/tmp/valid-backups".to_string())),
             ..Default::default()
         };
-        assert!(valid_folder.validate().is_ok());
+        assert_eq!(valid_folder.validate(), Ok(()));
+    }
+
+    #[test]
+    fn test_lock_admin_trust_lifecycle_dto_and_patch_validation_apply_branches() {
+        let mut policy = SecurityPolicy {
+            lock_trust_by_admin_pub: BTreeMap::from([
+                ("aabb".to_string(), false),
+                ("ccdd".to_string(), true),
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(policy.session_timeout_seconds, 600);
+        assert_eq!(policy.privacy_default, "ask");
+        assert!(policy.auto_backup_enabled);
+        assert!(policy.sync_backup_enabled);
+
+        assert!(!is_lock_admin_trusted(&policy, ""));
+        assert!(!is_lock_admin_trusted(&policy, "   "));
+        assert!(!is_lock_admin_trusted(&policy, "  AABB "));
+        assert!(is_lock_admin_trusted(&policy, "CCDD"));
+        assert!(is_lock_admin_trusted(&policy, "eeff"));
+
+        let alert = WalletSyncAlert {
+            kind: "fork_detected".to_string(),
+            mirror_write_url: "https://sync.example.org/sync.php".to_string(),
+            remote_epoch: Some(2),
+            remote_tx_nonce: Some(9),
+            local_epoch: 1,
+            local_tx_nonce: 4,
+            detected_at: "2026-11-25T10:00:00Z".to_string(),
+            has_signed_ack_proof: true,
+        };
+        let lifecycle = InternalLifecycleState {
+            pending_restore_l2_reconciliation: true,
+            backup_dirty: true,
+            last_backup_at: Some("2026-11-25T09:00:00Z".to_string()),
+            last_sync_backup_at: Some("2026-11-25T09:30:00Z".to_string()),
+            l2_probe_cache: BTreeMap::new(),
+            wallet_sync_alert: Some(alert.clone()),
+        };
+        let dto = FrontendLifecycleStateDto::from(lifecycle);
+        assert!(dto.pending_restore_l2_reconciliation);
+        assert!(dto.backup_dirty);
+        assert_eq!(dto.last_backup_at.as_deref(), Some("2026-11-25T09:00:00Z"));
+        assert_eq!(
+            dto.last_sync_backup_at.as_deref(),
+            Some("2026-11-25T09:30:00Z")
+        );
+        assert_eq!(dto.wallet_sync_alert, Some(alert));
+
+        let mut prefs = UiPreferences::default();
+        assert_eq!(prefs.share_min_level, 1);
+        assert_eq!(prefs.balance_view_mode, "spendable");
+
+        let valid_dir_patch = UiPreferencesPatch {
+            ui_mode: Some("unexpected".to_string()),
+            last_used_directory: Some(Some("  /tmp/ok  ".to_string())),
+            balance_view_mode: Some("NET".to_string()),
+            market_show_unknown: Some(false),
+            market_send_card_on_payment: Some(true),
+            market_sync_enabled: Some(false),
+            market_poll_wifi_only: Some(true),
+            wot_share_via_sync: Some(false),
+            post_accept_from_contacts: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(valid_dir_patch.validate(), Ok(()));
+        valid_dir_patch.apply_to(&mut prefs);
+        assert_eq!(prefs.ui_mode, "simple");
+        assert_eq!(prefs.last_used_directory.as_deref(), Some("/tmp/ok"));
+        assert_eq!(prefs.balance_view_mode, "net");
+        assert!(!prefs.market_show_unknown);
+        assert!(prefs.market_send_card_on_payment);
+        assert!(!prefs.market_sync_enabled);
+        assert!(prefs.market_poll_wifi_only);
+        assert!(!prefs.wot_share_via_sync);
+        assert!(!prefs.post_accept_from_contacts);
+
+        let blank_dir_patch = UiPreferencesPatch {
+            last_used_directory: Some(Some("   ".to_string())),
+            balance_view_mode: Some("other".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(blank_dir_patch.validate(), Ok(()));
+        blank_dir_patch.apply_to(&mut prefs);
+        assert_eq!(prefs.last_used_directory, None);
+        assert_eq!(prefs.balance_view_mode, "spendable");
+
+        for privacy in ["ask", "stealth", "public"] {
+            let p = SecurityPolicyPatch {
+                privacy_default: Some(format!(" {privacy} ")),
+                ..Default::default()
+            };
+            assert_eq!(p.validate(), Ok(()));
+            p.apply_to(&mut policy);
+            assert_eq!(policy.privacy_default, privacy);
+        }
+        assert_eq!(
+            SecurityPolicyPatch {
+                privacy_default: Some("invalid".to_string()),
+                ..Default::default()
+            }
+            .validate()
+            .unwrap_err(),
+            "Invalid privacy_default value: invalid"
+        );
+        assert_eq!(
+            SecurityPolicyPatch {
+                backup_protection_mode: Some(Some("bogus".to_string())),
+                ..Default::default()
+            }
+            .validate()
+            .unwrap_err(),
+            "Invalid backup_protection_mode value: bogus"
+        );
+
+        let apply_pol = SecurityPolicyPatch {
+            dev_mode_unlocked: Some(true),
+            auto_backup_enabled: Some(false),
+            sync_backup_enabled: Some(false),
+            backup_sync_folder: Some(Some("  /var/backups  ".to_string())),
+            backup_protection_mode: Some(Some(" mnemonic_only ".to_string())),
+            ..Default::default()
+        };
+        assert_eq!(apply_pol.validate(), Ok(()));
+        apply_pol.apply_to(&mut policy);
+        assert!(policy.dev_mode_unlocked);
+        assert!(!policy.auto_backup_enabled);
+        assert!(!policy.sync_backup_enabled);
+        assert_eq!(policy.backup_sync_folder.as_deref(), Some("/var/backups"));
+        assert_eq!(
+            policy.backup_protection_mode.as_deref(),
+            Some("mnemonic_only")
+        );
+
+        let blank_pol = SecurityPolicyPatch {
+            backup_sync_folder: Some(Some("   ".to_string())),
+            backup_protection_mode: Some(Some("   ".to_string())),
+            ..Default::default()
+        };
+        assert_eq!(blank_pol.validate(), Ok(()));
+        blank_pol.apply_to(&mut policy);
+        assert_eq!(policy.backup_sync_folder, None);
+        assert_eq!(policy.backup_protection_mode, None);
     }
 }

@@ -2,18 +2,27 @@
 use crate::models::{FrontendContact, FrontendSyncDescriptor, FrontendUserProfile};
 use chrono::Utc;
 
+struct TempDirGuard(std::path::PathBuf);
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn test_save_contact_authoritative_syncs_deletion() {
-    let temp_dir = std::env::temp_dir().join(format!("humoco_state_test_{}", uuid::Uuid::new_v4()));
+    let temp_dir = TempDirGuard(
+        std::env::temp_dir().join(format!("humoco_state_test_{}", uuid::Uuid::new_v4())),
+    );
     let password = "test-password-123";
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Test Alice",
         crate::test_support::ALICE_PHRASE,
         password,
     );
     let bob_service = crate::test_support::setup_test_app(
-        &temp_dir.join("bob"),
+        &temp_dir.0.join("bob"),
         "Test Bob",
         crate::test_support::BOB_PHRASE,
         password,
@@ -138,11 +147,12 @@ fn test_save_contact_authoritative_syncs_deletion() {
 
 #[test]
 fn test_save_contact_allows_clearing_last_tag() {
-    let temp_dir =
-        std::env::temp_dir().join(format!("humoco_tag_clear_test_{}", uuid::Uuid::new_v4()));
+    let temp_dir = TempDirGuard(
+        std::env::temp_dir().join(format!("humoco_tag_clear_test_{}", uuid::Uuid::new_v4())),
+    );
     let password = "test-password-123";
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Test Alice",
         crate::test_support::ALICE_PHRASE,
         password,
@@ -197,19 +207,22 @@ fn test_save_contact_allows_clearing_last_tag() {
     );
 }
 
-#[test]
-fn test_record_contact_sync_health_batch() {
-    let temp_dir =
-        std::env::temp_dir().join(format!("humoco_health_test_{}", uuid::Uuid::new_v4()));
-    let password = "test-password-123";
+fn setup_alice_bob_contact_with_sync(
+    label: &str,
+    url: &str,
+    drop_pub_seed: u8,
+    status: &str,
+    password: &str,
+) -> (TempDirGuard, super::AppState, String) {
+    let temp_dir = TempDirGuard(crate::test_support::temp_test_dir(label));
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Test Alice",
         crate::test_support::ALICE_PHRASE,
         password,
     );
     let bob_service = crate::test_support::setup_test_app(
-        &temp_dir.join("bob"),
+        &temp_dir.0.join("bob"),
         "Test Bob",
         crate::test_support::BOB_PHRASE,
         password,
@@ -219,193 +232,181 @@ fn test_record_contact_sync_health_batch() {
         .unwrap();
 
     let state = crate::test_support::create_test_state(alice_service);
+    {
+        let mut service = state.service.lock().unwrap();
+        let sync_desc = FrontendSyncDescriptor {
+            read_url: url.to_string(),
+            write_url: url.to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(drop_pub_seed),
+            status: status.to_string(),
+            ..Default::default()
+        };
+        let contact = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                id: Some(bob_did.clone()),
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![sync_desc],
+        };
+        state
+            .save_contact(&mut service, contact, Some(password))
+            .unwrap();
+    }
+    (temp_dir, state, bob_did)
+}
+
+#[test]
+fn test_record_contact_sync_health_batch_preserves_status_and_marks_unreachable() {
+    let password = "test-password-123";
+    let url = "https://sync-endpoint.org/sync.php";
+    let (_temp_dir, state, bob_did) =
+        setup_alice_bob_contact_with_sync("health_batch_status", url, 0x03, "unverified", password);
     let mut service = state.service.lock().unwrap();
 
-    let sync_desc = FrontendSyncDescriptor {
-        read_url: "https://sync-endpoint.org/sync.php".to_string(),
-        write_url: "https://sync-endpoint.org/sync.php".to_string(),
-        drop_pub: crate::test_support::test_ed25519_pub_hex(0x03),
-        slot_id: None,
-        last_seen_at: None,
-        last_error_at: None,
-        fail_count: 0,
-        status: "unverified".to_string(),
-        last_probed_at: None,
-        ..Default::default()
-    };
-
-    let contact = FrontendContact {
-        did: bob_did.clone(),
-        profile: FrontendUserProfile {
-            id: Some(bob_did.clone()),
-            first_name: Some("Bob".to_string()),
-            ..Default::default()
-        },
-        tags: vec![],
-        added_at: Utc::now().to_rfc3339(),
-        notes: None,
-        trust_level: Some(2),
-        desired_hops: Some(2),
-        has_peer_list: false,
-        peer_list_updated_at: None,
-        syncs: vec![sync_desc],
-    };
-    state
-        .save_contact(&mut service, contact, Some(password))
-        .unwrap();
-
     // 1. Success update preserves "unverified" (does NOT overwrite with "active")
-    let updated = state.record_contact_sync_health_batch(
+    assert!(state.record_contact_sync_health_batch(
         &mut service,
-        &[("https://sync-endpoint.org/sync.php".to_string(), true)],
+        &[(url.to_string(), true)],
         1000,
         Some(password),
-    );
-    assert!(updated);
+    ));
     let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
     let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
     assert_eq!(bob.syncs[0].last_seen_at, Some(1000));
     assert_eq!(bob.syncs[0].fail_count, 0);
-    assert_eq!(
-        bob.syncs[0].status, "unverified",
-        "unverified status must not be overwritten with active on static read success"
-    );
+    assert_eq!(bob.syncs[0].status, "unverified");
 
-    // 1b. Test that "pending_auth" is also preserved on read success
+    // 2. "pending_auth" stays preserved across read success and up to 2 failures, flipping on 3rd
     let mut bob_pending = bob.clone();
     bob_pending.syncs[0].status = "pending_auth".to_string();
     state
         .save_contact(&mut service, bob_pending, Some(password))
         .unwrap();
-    let updated_pending = state.record_contact_sync_health_batch(
+    assert!(state.record_contact_sync_health_batch(
         &mut service,
-        &[("https://sync-endpoint.org/sync.php".to_string(), true)],
+        &[(url.to_string(), true)],
         1050,
         Some(password),
-    );
-    assert!(updated_pending);
-    let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
-    let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
+    ));
     assert_eq!(
-        bob.syncs[0].status, "pending_auth",
-        "pending_auth status must not be overwritten with active on static read success"
+        state.load_contacts(&mut service, Some(password)).unwrap()[0].syncs[0].status,
+        "pending_auth"
     );
 
-    // 2. Transient failure on pending_auth increments fail_count without immediately flipping to unreachable
-    let updated2 = state.record_contact_sync_health_batch(
-        &mut service,
-        &[("https://sync-endpoint.org/sync.php".to_string(), false)],
-        1100,
-        Some(password),
-    );
-    assert!(updated2);
-    let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
-    let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
-    assert_eq!(bob.syncs[0].last_error_at, Some(1100));
-    assert_eq!(bob.syncs[0].fail_count, 1);
-    assert_eq!(bob.syncs[0].status, "pending_auth");
+    for (ts, expected_fails, expected_status) in [
+        (1100, 1, "pending_auth"),
+        (1200, 2, "pending_auth"),
+        (1250, 3, "unreachable"),
+    ] {
+        assert!(state.record_contact_sync_health_batch(
+            &mut service,
+            &[(url.to_string(), false)],
+            ts,
+            Some(password),
+        ));
+        let bob = state
+            .load_contacts(&mut service, Some(password))
+            .unwrap()
+            .into_iter()
+            .find(|c| c.did == bob_did)
+            .unwrap();
+        assert_eq!(bob.syncs[0].last_error_at, Some(ts));
+        assert_eq!(bob.syncs[0].fail_count, expected_fails);
+        assert_eq!(bob.syncs[0].status, expected_status);
+    }
+}
 
-    // 3. Second failure still keeps pending_auth; third consecutive failure transitions to unreachable
-    let updated3 = state.record_contact_sync_health_batch(
-        &mut service,
-        &[("https://sync-endpoint.org/sync.php".to_string(), false)],
-        1200,
-        Some(password),
+#[test]
+fn test_record_contact_sync_health_batch_recovery_respects_market_selected_syncs() {
+    let password = "test-password-123";
+    let url = "https://sync-endpoint.org/sync.php";
+    let (_temp_dir, state, bob_did) = setup_alice_bob_contact_with_sync(
+        "health_batch_recovery",
+        url,
+        0x03,
+        "unreachable",
+        password,
     );
-    assert!(updated3);
-    let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
-    let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
-    assert_eq!(bob.syncs[0].last_error_at, Some(1200));
-    assert_eq!(bob.syncs[0].fail_count, 2);
-    assert_eq!(bob.syncs[0].status, "pending_auth");
+    let mut service = state.service.lock().unwrap();
 
-    let updated3b = state.record_contact_sync_health_batch(
+    // 1. Without market_selected_syncs, recovery transitions "unreachable" -> "unverified"
+    assert!(state.record_contact_sync_health_batch(
         &mut service,
-        &[("https://sync-endpoint.org/sync.php".to_string(), false)],
-        1250,
-        Some(password),
-    );
-    assert!(updated3b);
-    let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
-    let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
-    assert_eq!(bob.syncs[0].last_error_at, Some(1250));
-    assert_eq!(bob.syncs[0].fail_count, 3);
-    assert_eq!(bob.syncs[0].status, "unreachable");
-
-    // 4. Recovery success resets fail_count; since not in market_selected_syncs, transitions to "unverified"
-    let updated4 = state.record_contact_sync_health_batch(
-        &mut service,
-        &[("https://sync-endpoint.org/sync.php".to_string(), true)],
+        &[(url.to_string(), true)],
         1300,
         Some(password),
-    );
-    assert!(updated4);
-    let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
-    let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
+    ));
+    let bob = state
+        .load_contacts(&mut service, Some(password))
+        .unwrap()
+        .into_iter()
+        .find(|c| c.did == bob_did)
+        .unwrap();
     assert_eq!(bob.syncs[0].last_seen_at, Some(1300));
     assert_eq!(bob.syncs[0].fail_count, 0);
-    assert_eq!(
-        bob.syncs[0].status, "unverified",
-        "unreachable contact sync transitions to unverified on read success when not in market_selected_syncs"
-    );
+    assert_eq!(bob.syncs[0].status, "unverified");
 
-    // 5. If sync is in market_selected_syncs, unreachable transitions to "active" on recovery
+    // 2. When listed in market_selected_syncs, failure -> "unreachable" and recovery -> "active"
     state
         .mutate_security_policy(&mut service, Some(password), |policy| {
             policy.market_selected_syncs = vec![FrontendSyncDescriptor {
-                read_url: "https://sync-endpoint.org/sync.php".to_string(),
-                write_url: "https://sync-endpoint.org/sync.php".to_string(),
+                read_url: url.to_string(),
+                write_url: url.to_string(),
                 drop_pub: crate::test_support::test_ed25519_pub_hex(0x03),
-                slot_id: None,
-                last_seen_at: None,
-                last_error_at: None,
-                fail_count: 0,
                 status: "active".to_string(),
-                last_probed_at: None,
                 ..Default::default()
             }];
         })
         .unwrap();
 
-    // Mark contact as unreachable again
-    let _ = state.record_contact_sync_health_batch(
-        &mut service,
-        &[("https://sync-endpoint.org/sync.php".to_string(), false)],
-        1400,
-        Some(password),
-    );
-    let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+    for ts in [1400, 1410, 1420] {
+        assert!(state.record_contact_sync_health_batch(
+            &mut service,
+            &[(url.to_string(), false)],
+            ts,
+            Some(password),
+        ));
+    }
     assert_eq!(
-        contacts.iter().find(|c| c.did == bob_did).unwrap().syncs[0].status,
+        state.load_contacts(&mut service, Some(password)).unwrap()[0].syncs[0].status,
         "unreachable"
     );
 
-    // Now recover: should transition to "active" because it's in market_selected_syncs
-    let _ = state.record_contact_sync_health_batch(
+    assert!(state.record_contact_sync_health_batch(
         &mut service,
-        &[("https://sync-endpoint.org/sync.php".to_string(), true)],
+        &[(url.to_string(), true)],
         1500,
         Some(password),
-    );
-    let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+    ));
     assert_eq!(
-        contacts.iter().find(|c| c.did == bob_did).unwrap().syncs[0].status,
+        state.load_contacts(&mut service, Some(password)).unwrap()[0].syncs[0].status,
         "active"
     );
 }
 
 #[test]
 fn test_prune_orphaned_market_selected_syncs() {
-    let temp_dir = std::env::temp_dir().join(format!("humoco_prune_test_{}", uuid::Uuid::new_v4()));
+    let temp_dir = TempDirGuard(
+        std::env::temp_dir().join(format!("humoco_prune_test_{}", uuid::Uuid::new_v4())),
+    );
     let password = "test-password-123";
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Test Alice",
         crate::test_support::ALICE_PHRASE,
         password,
     );
     let bob_service = crate::test_support::setup_test_app(
-        &temp_dir.join("bob"),
+        &temp_dir.0.join("bob"),
         "Test Bob",
         crate::test_support::BOB_PHRASE,
         password,
@@ -673,7 +674,13 @@ fn test_apply_revocation_notice_to_address_book_grace_and_inplace_replace() {
     let bob = &ab.contacts["did:key:zBob"];
     assert_eq!(bob.syncs.len(), 2);
     assert_eq!(bob.syncs[0].status, "deprecating");
-    assert!(bob.syncs[0].replacement.is_some());
+    assert_eq!(
+        bob.syncs[0]
+            .replacement
+            .as_ref()
+            .map(|r| r.write_url.as_str()),
+        Some("https://new.example.org/sync.php")
+    );
 
     // After effective_at (now = 2500 >= 2000):
     // Bob's expired entry is replaced in-place with new server (slot_id = None)
@@ -701,16 +708,18 @@ fn test_apply_revocation_notice_to_address_book_grace_and_inplace_replace() {
 
 #[test]
 fn test_record_contact_sync_health_preserves_deprecating_and_revoked() {
-    let temp_dir = std::env::temp_dir().join(format!("humoco_health_rev_{}", uuid::Uuid::new_v4()));
+    let temp_dir = TempDirGuard(
+        std::env::temp_dir().join(format!("humoco_health_rev_{}", uuid::Uuid::new_v4())),
+    );
     let password = "test-password-123";
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Test Alice",
         crate::test_support::ALICE_PHRASE,
         password,
     );
     let bob_service = crate::test_support::setup_test_app(
-        &temp_dir.join("bob"),
+        &temp_dir.0.join("bob"),
         "Test Bob",
         crate::test_support::BOB_PHRASE,
         password,
@@ -817,19 +826,17 @@ fn test_record_contact_sync_health_preserves_deprecating_and_revoked() {
         .load_security_policy(&mut service, Some(password))
         .unwrap();
     assert_eq!(policy_3.market_selected_syncs[0].status, "revoked");
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn test_save_and_delete_own_subaccounts_and_reject_self_profile_and_self_trust() {
-    let temp_dir = std::env::temp_dir().join(format!(
+    let temp_dir = TempDirGuard(std::env::temp_dir().join(format!(
         "humoco_subaccount_contact_test_{}",
         uuid::Uuid::new_v4()
-    ));
+    )));
     let password = "test-password-123";
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Test Alice",
         crate::test_support::ALICE_PHRASE,
         password,
@@ -960,19 +967,18 @@ fn test_save_and_delete_own_subaccounts_and_reject_self_profile_and_self_trust()
     let remaining = state.load_contacts(&mut service, Some(password)).unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].did, laden_uid);
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn test_encrypted_json_helpers_reject_corrupt_and_locked_state() {
     use human_money_core::app_service::AppFacadeError;
 
-    let temp_dir =
-        std::env::temp_dir().join(format!("humoco_json_hardening_{}", uuid::Uuid::new_v4()));
+    let temp_dir = TempDirGuard(
+        std::env::temp_dir().join(format!("humoco_json_hardening_{}", uuid::Uuid::new_v4())),
+    );
     let password = "test-password-123";
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Test Alice",
         crate::test_support::ALICE_PHRASE,
         password,
@@ -1057,9 +1063,6 @@ fn test_encrypted_json_helpers_reject_corrupt_and_locked_state() {
         state.load_history_from_disk(&mut service, Some(password)),
         Err(AppFacadeError::Json(_))
     ));
-
-    drop(service);
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -1083,7 +1086,10 @@ fn test_generic_revocation_helpers_for_descriptor_and_public_sync() {
     assert_eq!(desc.status, "deprecating");
     assert_eq!(desc.sunset_at, Some(2000));
     assert_eq!(desc.revocation_reason.as_deref(), Some("Umzug"));
-    assert!(desc.replacement.is_some());
+    assert_eq!(
+        desc.replacement.as_ref().map(|r| r.write_url.as_str()),
+        Some("https://new.example.org/sync.php")
+    );
     assert!(super::clear_revocation(&mut desc, "active", 1600));
     assert_eq!(desc.status, "active");
     assert!(desc.sunset_at.is_none());
@@ -1098,7 +1104,10 @@ fn test_generic_revocation_helpers_for_descriptor_and_public_sync() {
     assert_eq!(desc.status, "deprecating");
     assert_eq!(desc.sunset_at, Some(2000));
     assert_eq!(desc.revocation_reason.as_deref(), Some("Umzug"));
-    assert!(desc.replacement.is_some());
+    assert_eq!(
+        desc.replacement.as_ref().map(|r| r.read_url.as_str()),
+        Some("https://new.example.org/d")
+    );
 
     // 3. An already-"revoked" endpoint stays permanently sticky regardless of timestamp
     let mut pub_sync = crate::settings::StoredPublicSync::default();
@@ -1110,16 +1119,20 @@ fn test_generic_revocation_helpers_for_descriptor_and_public_sync() {
     assert_eq!(pub_sync.status, "revoked");
     assert_eq!(pub_sync.sunset_at, Some(2000));
     assert_eq!(pub_sync.revocation_reason.as_deref(), Some("Umzug"));
-    assert!(pub_sync.replacement.is_some());
+    assert_eq!(
+        pub_sync.replacement.as_ref().map(|r| r.drop_pub.as_str()),
+        Some("bb".repeat(32).as_str())
+    );
 }
 
 #[test]
 fn test_split_config_stores_isolation_and_owner_checked_mutator() {
-    let temp_dir =
-        std::env::temp_dir().join(format!("humoco_split_cfg_test_{}", uuid::Uuid::new_v4()));
+    let temp_dir = TempDirGuard(
+        std::env::temp_dir().join(format!("humoco_split_cfg_test_{}", uuid::Uuid::new_v4())),
+    );
     let pw = "split-cfg-pw-2026";
     let alice_svc = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Alice",
         crate::test_support::ALICE_PHRASE,
         pw,
@@ -1208,8 +1221,6 @@ fn test_split_config_stores_isolation_and_owner_checked_mutator() {
         })
         .unwrap();
     assert!(locked.is_none());
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -1235,26 +1246,26 @@ fn test_canonicalize_did_rejects_malformed_prefixes_and_checksums() {
         format!("{}\n{}", &root_did[..12], &root_did[12..]),
     ];
     for invalid in &broken_variants {
+        let err = super::canonicalize_did(invalid).unwrap_err();
         assert!(
-            super::canonicalize_did(invalid).is_err(),
-            "canonicalize_did must reject malformed input '{}'",
-            invalid
+            matches!(err, humoco_wot::WotError::InvalidDid(_)),
+            "canonicalize_did must return InvalidDid for '{invalid}', got: {err:?}"
         );
     }
 }
 
-#[test]
-fn test_external_sibling_prefixes_keep_separate_syncs_mirror_trust_and_delete_cleanly() {
-    use crate::models::{FrontendContact, FrontendSyncDescriptor, FrontendUserProfile};
-    use chrono::Utc;
+struct BobSiblingFixture {
+    _dir: TempDirGuard,
+    state: super::AppState,
+    bob_laden: String,
+    bob_privat: String,
+    bob_can: String,
+}
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "humoco_ext_sibling_prefix_{}",
-        uuid::Uuid::new_v4()
-    ));
-    let password = "test-password-123";
+fn setup_bob_sibling_prefixes_fixture(label: &str, password: &str) -> BobSiblingFixture {
+    let temp_dir = TempDirGuard(crate::test_support::temp_test_dir(label));
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Test Alice",
         crate::test_support::ALICE_PHRASE,
         password,
@@ -1269,7 +1280,6 @@ fn test_external_sibling_prefixes_keep_separate_syncs_mirror_trust_and_delete_cl
     let bob_privat = human_money_core::crypto::create_user_id(&bob_vk, Some("privat")).unwrap();
     let bob_can = super::canonicalize_did(&bob_laden).unwrap();
 
-    // Populate CardStore with two distinct prefix cards for Bob
     let now = Utc::now().timestamp().max(0) as u64;
     let mut card_store = humoco_market::CardStore::default();
     for (did, url) in [
@@ -1321,15 +1331,34 @@ fn test_external_sibling_prefixes_keep_separate_syncs_mirror_trust_and_delete_cl
         Some(password),
     )
     .unwrap();
+    drop(service);
 
-    let mk_sync = |url: &str| FrontendSyncDescriptor {
+    BobSiblingFixture {
+        _dir: temp_dir,
+        state,
+        bob_laden,
+        bob_privat,
+        bob_can,
+    }
+}
+
+fn mk_sibling_sync(url: &str) -> FrontendSyncDescriptor {
+    FrontendSyncDescriptor {
         write_url: url.to_string(),
-        read_url: format!("{}/read", url),
+        read_url: format!("{url}/read"),
         drop_pub: crate::test_support::test_ed25519_pub_hex(0x0b),
         status: "active".to_string(),
         ..Default::default()
-    };
-    let mk_ext = |did: &str, name: &str, sync_url: &str, trust_level: Option<u8>| FrontendContact {
+    }
+}
+
+fn mk_sibling_contact(
+    did: &str,
+    name: &str,
+    sync_url: &str,
+    trust_level: Option<u8>,
+) -> FrontendContact {
+    FrontendContact {
         did: did.to_string(),
         profile: FrontendUserProfile {
             id: Some(did.to_string()),
@@ -1343,81 +1372,57 @@ fn test_external_sibling_prefixes_keep_separate_syncs_mirror_trust_and_delete_cl
         desired_hops: Some(2),
         has_peer_list: false,
         peer_list_updated_at: None,
-        syncs: vec![mk_sync(sync_url)],
-    };
+        syncs: vec![mk_sibling_sync(sync_url)],
+    }
+}
 
-    // 1. Save both external prefixes with distinct sync endpoints
-    state
+#[test]
+fn test_external_sibling_prefixes_keep_separate_syncs_and_mirror_trust() {
+    let password = "test-password-123";
+    let fx = setup_bob_sibling_prefixes_fixture("ext_sib_mirror", password);
+    let mut service = fx.state.service.lock().unwrap();
+
+    fx.state
         .save_contact(
             &mut service,
-            mk_ext(
-                &bob_laden,
-                "Bob Laden",
-                "https://sync-laden.example.com",
-                Some(2),
-            ),
+            mk_sibling_contact(&fx.bob_laden, "Bob Laden", "https://sync-laden.example.com", Some(2)),
             Some(password),
         )
         .unwrap();
-    state
+    fx.state
         .save_contact(
             &mut service,
-            mk_ext(
-                &bob_privat,
-                "Bob Privat",
-                "https://sync-privat.example.com",
-                None,
-            ),
+            mk_sibling_contact(&fx.bob_privat, "Bob Privat", "https://sync-privat.example.com", None),
             Some(password),
         )
         .unwrap();
 
-    let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+    let contacts = fx.state.load_contacts(&mut service, Some(password)).unwrap();
     assert_eq!(contacts.len(), 2);
+    assert_eq!(contacts.iter().find(|c| c.did == fx.bob_laden).unwrap().trust_level, Some(2));
+    assert_eq!(contacts.iter().find(|c| c.did == fx.bob_privat).unwrap().trust_level, Some(2));
     assert_eq!(
-        contacts
-            .iter()
-            .find(|c| c.did == bob_laden)
-            .unwrap()
-            .trust_level,
-        Some(2)
-    );
-    assert_eq!(
-        contacts
-            .iter()
-            .find(|c| c.did == bob_privat)
-            .unwrap()
-            .trust_level,
-        Some(2)
-    );
-    assert_eq!(
-        state
+        fx.state
             .get_or_load_wot_register(&mut service, Some(password))
             .unwrap()
             .own_contacts
-            .get(&bob_can)
+            .get(&fx.bob_can)
             .map(|e| e.level),
         Some(2)
     );
     assert_eq!(
-        contacts.iter().find(|c| c.did == bob_laden).unwrap().syncs[0].write_url,
+        contacts.iter().find(|c| c.did == fx.bob_laden).unwrap().syncs[0].write_url,
         "https://sync-laden.example.com"
     );
     assert_eq!(
-        contacts.iter().find(|c| c.did == bob_privat).unwrap().syncs[0].write_url,
+        contacts.iter().find(|c| c.did == fx.bob_privat).unwrap().syncs[0].write_url,
         "https://sync-privat.example.com"
     );
 
-    // 2. Updating trust on one prefix atomically mirrors trust_level to sibling on disk & cache
-    state
+    fx.state
         .save_contact(
             &mut service,
-            mk_ext(
-                &bob_laden,
-                "Bob Laden",
-                "https://sync-laden.example.com",
-                Some(3),
-            ),
+            mk_sibling_contact(&fx.bob_laden, "Bob Laden", "https://sync-laden.example.com", Some(3)),
             Some(password),
         )
         .unwrap();
@@ -1427,57 +1432,56 @@ fn test_external_sibling_prefixes_keep_separate_syncs_mirror_trust_and_delete_cl
         Some(password),
     )
     .unwrap();
-    assert_eq!(
-        disk_book.contacts.get(&bob_laden).unwrap().trust_level,
-        Some(3)
-    );
-    assert_eq!(
-        disk_book.contacts.get(&bob_privat).unwrap().trust_level,
-        Some(3)
-    );
+    assert_eq!(disk_book.contacts.get(&fx.bob_laden).unwrap().trust_level, Some(3));
+    assert_eq!(disk_book.contacts.get(&fx.bob_privat).unwrap().trust_level, Some(3));
 
-    // 3. update_contact_from_card for bob_privat never mutates bob_laden syncs
-    let updated = state
+    assert!(fx
+        .state
         .update_contact_from_card(
             &mut service,
-            &bob_privat,
-            &[mk_sync("https://sync-privat-2.example.com")],
+            &fx.bob_privat,
+            &[mk_sibling_sync("https://sync-privat-2.example.com")],
             None,
             Some(password),
         )
-        .unwrap();
-    assert!(updated);
-    let after_card = state.load_contacts(&mut service, Some(password)).unwrap();
-    assert_eq!(
-        after_card
-            .iter()
-            .find(|c| c.did == bob_laden)
-            .unwrap()
-            .syncs
-            .len(),
-        1
-    );
-    assert_eq!(
-        after_card
-            .iter()
-            .find(|c| c.did == bob_privat)
-            .unwrap()
-            .syncs
-            .len(),
-        2
-    );
+        .unwrap());
+    let after_card = fx.state.load_contacts(&mut service, Some(password)).unwrap();
+    assert_eq!(after_card.iter().find(|c| c.did == fx.bob_laden).unwrap().syncs.len(), 1);
+    assert_eq!(after_card.iter().find(|c| c.did == fx.bob_privat).unwrap().syncs.len(), 2);
+}
 
-    // 4. Deleting bob_laden keeps bob_privat, root WoT trust, and remaining CardStore intact
-    state
-        .delete_contact(&mut service, &bob_laden, Some(password))
+#[test]
+fn test_external_sibling_prefixes_delete_preserves_then_prunes_root_trust_and_cards() {
+    let password = "test-password-123";
+    let fx = setup_bob_sibling_prefixes_fixture("ext_sib_delete", password);
+    let mut service = fx.state.service.lock().unwrap();
+
+    fx.state
+        .save_contact(
+            &mut service,
+            mk_sibling_contact(&fx.bob_laden, "Bob Laden", "https://sync-laden.example.com", Some(3)),
+            Some(password),
+        )
         .unwrap();
-    let remaining = state.load_contacts(&mut service, Some(password)).unwrap();
+    fx.state
+        .save_contact(
+            &mut service,
+            mk_sibling_contact(&fx.bob_privat, "Bob Privat", "https://sync-privat.example.com", None),
+            Some(password),
+        )
+        .unwrap();
+
+    fx.state
+        .delete_contact(&mut service, &fx.bob_laden, Some(password))
+        .unwrap();
+    let remaining = fx.state.load_contacts(&mut service, Some(password)).unwrap();
     assert_eq!(remaining.len(), 1);
-    assert_eq!(remaining[0].did, bob_privat);
-    let reg_mid = state
+    assert_eq!(remaining[0].did, fx.bob_privat);
+    let reg_mid = fx
+        .state
         .get_or_load_wot_register(&mut service, Some(password))
         .unwrap();
-    assert_eq!(reg_mid.own_contacts.get(&bob_can).map(|e| e.level), Some(3));
+    assert_eq!(reg_mid.own_contacts.get(&fx.bob_can).map(|e| e.level), Some(3));
     let store_mid: humoco_market::CardStore = super::load_encrypted_json_or_default(
         &mut service,
         super::MARKET_CARD_STORE_KEY,
@@ -1486,14 +1490,14 @@ fn test_external_sibling_prefixes_keep_separate_syncs_mirror_trust_and_delete_cl
     .unwrap();
     assert_eq!(store_mid.cards.len(), 2);
 
-    // 5. Deleting last sibling removes root WoT trust AND prunes ALL prefix cards of Bob's key
-    state
-        .delete_contact(&mut service, &bob_privat, Some(password))
+    fx.state
+        .delete_contact(&mut service, &fx.bob_privat, Some(password))
         .unwrap();
-    let reg_end = state
+    let reg_end = fx
+        .state
         .get_or_load_wot_register(&mut service, Some(password))
         .unwrap();
-    assert!(!reg_end.own_contacts.contains_key(&bob_can));
+    assert!(!reg_end.own_contacts.contains_key(&fx.bob_can));
     let store_end: humoco_market::CardStore = super::load_encrypted_json_or_default(
         &mut service,
         super::MARKET_CARD_STORE_KEY,
@@ -1501,8 +1505,6 @@ fn test_external_sibling_prefixes_keep_separate_syncs_mirror_trust_and_delete_cl
     )
     .unwrap();
     assert!(store_end.cards.is_empty());
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -1510,13 +1512,13 @@ fn test_known_lock_heads_sidecar_persists_without_advancing_seal_nonce() {
     use ed25519_dalek::{Signer, SigningKey};
     use human_money_core::models::layer2_api::{LockReceipt, LockReceiptKind};
 
-    let temp_dir = std::env::temp_dir().join(format!(
+    let temp_dir = TempDirGuard(std::env::temp_dir().join(format!(
         "humoco_known_lock_heads_test_{}",
         uuid::Uuid::new_v4()
-    ));
+    )));
     let password = "test-password-123";
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Test Alice",
         crate::test_support::ALICE_PHRASE,
         password,
@@ -1560,9 +1562,13 @@ fn test_known_lock_heads_sidecar_persists_without_advancing_seal_nonce() {
     assert!(service
         .load_local_sidecar_data(super::KNOWN_LOCK_HEADS_KEY, Some(password))
         .is_ok());
-    assert!(service
+    let main_err = service
         .load_encrypted_data(super::KNOWN_LOCK_HEADS_KEY, Some(password))
-        .is_err());
+        .unwrap_err();
+    assert!(matches!(
+        main_err,
+        super::AppFacadeError::Storage(human_money_core::StorageError::NotFound)
+    ));
 
     // Corrupt JSON inside the sidecar must fail closed rather than silently returning empty map.
     service
@@ -1572,20 +1578,27 @@ fn test_known_lock_heads_sidecar_persists_without_advancing_seal_nonce() {
             Some(password),
         )
         .unwrap();
-    assert!(
+    let load_corrupt_err =
         super::load_known_head_receipts_for_anchor(&mut service, &anchor_id, Some(password))
-            .is_err(),
-        "Corrupt known-lock-heads sidecar must fail closed"
-    );
+            .unwrap_err();
+    assert_eq!(load_corrupt_err.code, "error.internal.unknown");
     assert!(
-        super::record_known_head_receipts(
-            &mut service,
-            &anchor_id,
-            std::slice::from_ref(&receipt),
-            Some(password),
-        )
-        .is_err(),
-        "Recording against corrupt known-lock-heads sidecar must also fail closed"
+        load_corrupt_err.message.contains("key must be a string"),
+        "unexpected corrupt sidecar load error: {}",
+        load_corrupt_err.message
+    );
+    let record_corrupt_err = super::record_known_head_receipts(
+        &mut service,
+        &anchor_id,
+        std::slice::from_ref(&receipt),
+        Some(password),
+    )
+    .unwrap_err();
+    assert_eq!(record_corrupt_err.code, "error.internal.unknown");
+    assert!(
+        record_corrupt_err.message.contains("key must be a string"),
+        "unexpected corrupt sidecar record error: {}",
+        record_corrupt_err.message
     );
 
     let seal_after = service.get_current_seal().unwrap();
@@ -1593,18 +1606,17 @@ fn test_known_lock_heads_sidecar_persists_without_advancing_seal_nonce() {
         serde_json::to_value(&seal_after).unwrap(),
         serde_json::to_value(&seal_before).unwrap()
     );
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn test_profile_session_lock_cross_instance_raii_and_validation() {
-    let temp_dir =
-        std::env::temp_dir().join(format!("humoco_session_lock_test_{}", uuid::Uuid::new_v4()));
-    let lock_dir = temp_dir.join("session_locks");
+    let temp_dir = TempDirGuard(
+        std::env::temp_dir().join(format!("humoco_session_lock_test_{}", uuid::Uuid::new_v4())),
+    );
+    let lock_dir = temp_dir.0.join("session_locks");
 
-    let s1 = super::AppService::new(&temp_dir.join("w1")).unwrap();
-    let s2 = super::AppService::new(&temp_dir.join("w2")).unwrap();
+    let s1 = super::AppService::new(&temp_dir.0.join("w1")).unwrap();
+    let s2 = super::AppService::new(&temp_dir.0.join("w2")).unwrap();
     let state1 = super::AppState::new(s1).with_session_lock_dir(lock_dir.clone());
     let state2 = super::AppState::new(s2).with_session_lock_dir(lock_dir.clone());
 
@@ -1645,32 +1657,40 @@ fn test_profile_session_lock_cross_instance_raii_and_validation() {
     state1.release_profile_lock_if_matching("profile_a");
     // K2: flock-backed .lock file stays on disk and is never unlinked while Instance 2 can acquire cleanly.
     assert!(lock_dir.join("profile_a.lock").exists());
-    assert!(state2.acquire_profile_lock("profile_a").is_ok());
+    assert!(matches!(
+        state2.acquire_profile_lock("profile_a").unwrap(),
+        super::PendingProfileLock::Acquired(_)
+    ));
 
-    // 6. Path traversal / invalid folder names are rejected
-    assert!(state1.acquire_profile_lock("../escape").is_err());
-    assert!(state1.acquire_profile_lock("a/b").is_err());
-    assert!(state1.acquire_profile_lock("").is_err());
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
+    // 6. Path traversal / invalid folder names are rejected with exact message
+    for invalid_name in ["../escape", "a/b", "a\\b", "..", ""] {
+        let name_err = state1
+            .acquire_profile_lock(invalid_name)
+            .err()
+            .expect("invalid folder name must be rejected");
+        assert_eq!(
+            name_err.message, "Invalid profile folder name",
+            "unexpected error for '{invalid_name}'"
+        );
+    }
 }
 
 #[test]
 fn h1_save_contact_preserve_manual_card_keeps_card_on_trust_reset() {
     use humoco_market::CardStore;
 
-    let dir_alice = crate::test_support::temp_test_dir("h1_card_alice");
-    let dir_bob = crate::test_support::temp_test_dir("h1_card_bob");
+    let dir_alice = TempDirGuard(crate::test_support::temp_test_dir("h1_card_alice"));
+    let dir_bob = TempDirGuard(crate::test_support::temp_test_dir("h1_card_bob"));
     let pw = "StrongPw-H1-Card!";
 
     let alice_state = super::AppState::new(crate::test_support::setup_test_app(
-        &dir_alice,
+        &dir_alice.0,
         "Alice",
         crate::test_support::ALICE_PHRASE,
         pw,
     ));
     let bob_state = super::AppState::new(crate::test_support::setup_test_app(
-        &dir_bob,
+        &dir_bob.0,
         "Bob",
         crate::test_support::BOB_PHRASE,
         pw,
@@ -1763,47 +1783,33 @@ fn h1_save_contact_preserve_manual_card_keeps_card_on_trust_reset() {
             "H1: preserve_manual_card=true must keep manually imported card in CardStore"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir_alice);
-    let _ = std::fs::remove_dir_all(&dir_bob);
 }
 
-#[test]
-fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
-    use ed25519_dalek::{Signer, SigningKey};
-    use human_money_core::models::layer2_api::{LockReceipt, LockReceiptKind};
-
-    // 1. UTF-8 safe truncate_did (multi-byte char boundaries at byte 8 and len - 4)
-    let utf8_did = "äöüäöüäöüäöüäöüäö";
-    assert_eq!(super::truncate_did(utf8_did), "äöüäöüäö…öüäö");
-
-    // 2. Bucket binding on record_known_head_receipts & load_known_head_receipts_for_anchor
-    let dir = crate::test_support::temp_test_dir("s03_state_hardening");
-    let pw = "StrongPw-S03-State!";
+fn setup_s03_alice_and_bob(label: &str, pw: &str) -> (TempDirGuard, super::AppState, super::AppState, String) {
+    let dir = TempDirGuard(crate::test_support::temp_test_dir(label));
     let alice_svc = crate::test_support::setup_test_app(
-        &dir.join("alice"),
+        &dir.0.join("alice"),
         "Alice",
         crate::test_support::ALICE_PHRASE,
         pw,
     );
     let bob_svc = crate::test_support::setup_test_app(
-        &dir.join("bob"),
+        &dir.0.join("bob"),
         "Bob",
         crate::test_support::BOB_PHRASE,
         pw,
     );
-    let bob_did = bob_svc
-        .with_wallet(|w| w.get_user_id().to_string())
-        .unwrap();
-
+    let bob_did = bob_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
     let state = crate::test_support::create_test_state(alice_svc);
     let bob_state = crate::test_support::create_test_state(bob_svc);
+    (dir, state, bob_state, bob_did)
+}
 
-    // Publish own market profile for Alice (so we can verify card version bump on delete)
+fn publish_market_profile(state: &super::AppState, name: &str, pw: &str) {
     crate::services::market_service::save_my_market_profile_impl(
         crate::models::FrontendSaveMyMarketProfileRequest {
             profile: crate::models::FrontendUserProfile {
-                first_name: Some("Alice".to_string()),
+                first_name: Some(name.to_string()),
                 ..Default::default()
             },
             visibility: Default::default(),
@@ -1814,48 +1820,21 @@ fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
             published: Some(true),
         },
         Some(pw.to_string()),
-        &state,
+        state,
     )
     .unwrap();
+}
 
-    // Publish Bob's market profile and construct a CardEnvelope claiming hops = 2
-    crate::services::market_service::save_my_market_profile_impl(
-        crate::models::FrontendSaveMyMarketProfileRequest {
-            profile: crate::models::FrontendUserProfile {
-                first_name: Some("Bob".to_string()),
-                ..Default::default()
-            },
-            visibility: Default::default(),
-            skills: vec![],
-            max_hops: 2,
-            validity_years: 2,
-            allow_inquiries: true,
-            published: Some(true),
-        },
-        Some(pw.to_string()),
-        &bob_state,
-    )
-    .unwrap();
-    let bob_card = {
-        let mut bs = bob_state.service.lock().unwrap();
-        super::load_encrypted_json_opt::<crate::models::StoredOwnMarketProfile>(
-            &mut bs,
-            super::MARKET_OWN_PROFILE_KEY,
-            Some(pw),
-        )
-        .unwrap()
-        .unwrap()
-        .last_card
-        .unwrap()
-    };
-    let bob_wire =
-        humoco_market::render_wire(&bob_card, 2, humoco_market::WireFilter::Full).unwrap();
-    let bob_env_json = serde_json::to_string(&humoco_market::CardEnvelope {
-        card_wire: bob_wire,
-        hops: 2,
-    })
-    .unwrap();
+#[test]
+fn s03_truncate_did_handles_multibyte_utf8_and_known_heads_enforce_bucket_binding() {
+    use ed25519_dalek::{Signer, SigningKey};
+    use human_money_core::models::layer2_api::{LockReceipt, LockReceiptKind};
 
+    let utf8_did = "äöüäöüäöüäöüäöüäö";
+    assert_eq!(super::truncate_did(utf8_did), "äöüäöüäö…öüäö");
+
+    let pw = "StrongPw-S03-State!";
+    let (_dir, state, _bob_state, _bob_did) = setup_s03_alice_and_bob("s03_bucket", pw);
     let mut service = state.service.lock().unwrap();
 
     let lock_sk = SigningKey::from_bytes(&[0x33u8; 32]);
@@ -1893,7 +1872,6 @@ fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
         "Receipt bound to anchor_b bucket must NOT be recorded under anchor_a"
     );
 
-    // Persisted wrong-bucket receipt inside sidecar must fail closed on load
     let mut tampered_heads = super::KnownLockHeadsState::default();
     tampered_heads.heads.insert(
         format!(
@@ -1903,27 +1881,44 @@ fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
         ),
         wrong_receipt,
     );
-    super::save_local_sidecar_json(
-        &mut service,
-        super::KNOWN_LOCK_HEADS_KEY,
-        &tampered_heads,
-        Some(pw),
-    )
-    .unwrap();
+    super::save_local_sidecar_json(&mut service, super::KNOWN_LOCK_HEADS_KEY, &tampered_heads, Some(pw))
+        .unwrap();
+    let load_err =
+        super::load_known_head_receipts_for_anchor(&mut service, &anchor_a, Some(pw)).unwrap_err();
     assert!(
-        super::load_known_head_receipts_for_anchor(&mut service, &anchor_a, Some(pw)).is_err(),
-        "Persisted wrong-bucket receipt must fail closed on load"
+        load_err.message.contains("Corrupt anti-rollback head receipt entry"),
+        "unexpected wrong-bucket error: {}",
+        load_err.message
     );
-    // Clean sidecar back to default
-    super::save_local_sidecar_json(
-        &mut service,
-        super::KNOWN_LOCK_HEADS_KEY,
-        &super::KnownLockHeadsState::default(),
-        Some(pw),
-    )
+}
+
+#[test]
+fn s03_piggybacked_contact_card_clamps_direct_sender_hops_to_one() {
+    let pw = "StrongPw-S03-Card!";
+    let (_dir, state, bob_state, bob_did) = setup_s03_alice_and_bob("s03_hops", pw);
+    publish_market_profile(&bob_state, "Bob", pw);
+
+    let bob_card = {
+        let mut bs = bob_state.service.lock().unwrap();
+        super::load_encrypted_json_opt::<crate::models::StoredOwnMarketProfile>(
+            &mut bs,
+            super::MARKET_OWN_PROFILE_KEY,
+            Some(pw),
+        )
+        .unwrap()
+        .unwrap()
+        .last_card
+        .unwrap()
+    };
+    let bob_wire =
+        humoco_market::render_wire(&bob_card, 2, humoco_market::WireFilter::Full).unwrap();
+    let bob_env_json = serde_json::to_string(&humoco_market::CardEnvelope {
+        card_wire: bob_wire,
+        hops: 2,
+    })
     .unwrap();
 
-    // 3. try_import_piggybacked_contact_card clamps hops to 1 when bundle_sender_id matches author
+    let mut service = state.service.lock().unwrap();
     state.try_import_piggybacked_contact_card(
         &mut service,
         Some(&bob_env_json),
@@ -1934,16 +1929,19 @@ fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
         super::load_encrypted_json_opt(&mut service, super::MARKET_CARD_STORE_KEY, Some(pw))
             .unwrap()
             .unwrap();
-    assert_eq!(
-        card_store.cards.get(&bob_did).map(|c| c.hops),
-        Some(1),
-        "Direct bundle_sender_id matching card author must clamp stored hops to 1"
-    );
+    assert_eq!(card_store.cards.get(&bob_did).map(|c| c.hops), Some(1));
+}
 
-    // 4. delete_contact_with_options fails atomically without deleting address book when wot_register is corrupt
-    let bob_contact = crate::models::FrontendContact {
+#[test]
+fn s03_delete_contact_is_atomic_on_corrupt_wot_and_bumps_own_card_version() {
+    let pw = "StrongPw-S03-Delete!";
+    let (_dir, state, _bob_state, bob_did) = setup_s03_alice_and_bob("s03_del", pw);
+    publish_market_profile(&state, "Alice", pw);
+
+    let mut service = state.service.lock().unwrap();
+    let bob_contact = FrontendContact {
         did: bob_did.clone(),
-        profile: crate::models::FrontendUserProfile {
+        profile: FrontendUserProfile {
             first_name: Some("Bob".to_string()),
             ..Default::default()
         },
@@ -1956,11 +1954,8 @@ fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
         peer_list_updated_at: None,
         syncs: vec![],
     };
-    state
-        .save_contact(&mut service, bob_contact, Some(pw))
-        .unwrap();
+    state.save_contact(&mut service, bob_contact, Some(pw)).unwrap();
 
-    // Snapshot valid WoT state & card version before corruption test
     let valid_wot = state.load_wot_register(&mut service, Some(pw)).unwrap();
     let card_v_before = super::load_encrypted_json_opt::<crate::models::StoredOwnMarketProfile>(
         &mut service,
@@ -1974,7 +1969,6 @@ fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
     .payload
     .v;
 
-    // Corrupt WOT_DATA_NAME on disk and drop cached wot so reload fails
     service
         .save_encrypted_data(super::WOT_DATA_NAME, b"{corrupt-wot-json", Some(pw))
         .unwrap();
@@ -1982,24 +1976,16 @@ fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
 
     let del_res = state.delete_contact(&mut service, &bob_did, Some(pw));
     assert!(
-        del_res.is_err(),
-        "delete_contact must propagate WoT load/save error instead of silently leaving trusted"
+        matches!(del_res, Err(super::AppFacadeError::Json(_))),
+        "delete_contact must propagate AppFacadeError::Json, got: {del_res:?}"
     );
     let contacts_after = state.load_contacts(&mut service, Some(pw)).unwrap();
-    assert!(
-        contacts_after.iter().any(|c| c.did == bob_did),
-        "Contact must remain in address book when WoT revocation fails"
-    );
+    assert!(contacts_after.iter().any(|c| c.did == bob_did));
 
-    // Restore valid WoT state and delete trusted contact -> must remove contact, revoke WoT, AND bump own card version
-    state
-        .save_wot_register(&mut service, &valid_wot, Some(pw))
-        .unwrap();
-    state
-        .delete_contact(&mut service, &bob_did, Some(pw))
-        .unwrap();
-    let contacts_final = state.load_contacts(&mut service, Some(pw)).unwrap();
-    assert!(!contacts_final.iter().any(|c| c.did == bob_did));
+    state.save_wot_register(&mut service, &valid_wot, Some(pw)).unwrap();
+    state.delete_contact(&mut service, &bob_did, Some(pw)).unwrap();
+    assert!(!state.load_contacts(&mut service, Some(pw)).unwrap().iter().any(|c| c.did == bob_did));
+
     let card_v_after = super::load_encrypted_json_opt::<crate::models::StoredOwnMarketProfile>(
         &mut service,
         super::MARKET_OWN_PROFILE_KEY,
@@ -2011,22 +1997,17 @@ fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
     .unwrap()
     .payload
     .v;
-    assert!(
-        card_v_after > card_v_before,
-        "Deleting a trusted contact must bump own card version (before={card_v_before}, after={card_v_after})"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(card_v_after > card_v_before);
 }
 
 #[test]
 fn s09_x4_stale_generation_caches_are_isolated_and_rejected() {
     use std::sync::atomic::Ordering;
 
-    let dir = crate::test_support::temp_test_dir("s09_x4_stale_gen");
+    let dir = TempDirGuard(crate::test_support::temp_test_dir("s09_x4_stale_gen"));
     let pw = "StrongPw-S09-X4!";
     let alice_svc = crate::test_support::setup_test_app(
-        &dir.join("alice"),
+        &dir.0.join("alice"),
         "Alice",
         crate::test_support::ALICE_PHRASE,
         pw,
@@ -2108,9 +2089,24 @@ fn s09_x4_stale_generation_caches_are_isolated_and_rejected() {
     assert!(state.cache_guardian_vault().is_none());
     assert!(state.cache_app_notices().is_none());
 
-    assert!(state.get_cached_app_config().is_err());
-    assert!(state.get_cached_contacts().is_err());
-    assert!(state.get_hydrated_history().is_err());
+    assert!(matches!(
+        state.get_cached_app_config(),
+        Err(super::AppFacadeError::App(
+            human_money_core::error::AppError::StateConflict { ref message }
+        )) if message == "AppConfig caches not loaded"
+    ));
+    assert!(matches!(
+        state.get_cached_contacts(),
+        Err(super::AppFacadeError::App(
+            human_money_core::error::AppError::StateConflict { ref message }
+        )) if message == "Contacts cache not initialized"
+    ));
+    assert!(matches!(
+        state.get_hydrated_history(),
+        Err(super::AppFacadeError::App(
+            human_money_core::error::AppError::StateConflict { ref message }
+        )) if message == "History cache not initialized"
+    ));
 
     let saw_stale = state.with_cached_contacts_mut(|opt| {
         let saw = opt.is_some();
@@ -2153,60 +2149,19 @@ fn s09_x4_stale_generation_caches_are_isolated_and_rejected() {
     });
     assert!(!saw_none);
     assert!(state.profile_caches.lock().unwrap().is_none());
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn s09_encrypted_batch_commit_atomicity_and_rollback() {
-    let dir = crate::test_support::temp_test_dir("s09_batch_commit_rollback");
-    let pw = "StrongPw-S09-Batch!";
-    let alice_svc = crate::test_support::setup_test_app(
-        &dir.join("alice"),
-        "Alice",
-        crate::test_support::ALICE_PHRASE,
-        pw,
-    );
-    let state = crate::test_support::create_test_state(alice_svc);
-    let mut svc = state.lock_service().unwrap();
-    state.initialize_profile_session(&mut svc, pw).unwrap();
-
-    let initial_policy = crate::settings::SecurityPolicy {
-        session_timeout_seconds: 300,
-        ..Default::default()
-    };
-    let initial_prefs = crate::settings::UiPreferences {
-        ui_mode: "simple".to_string(),
-        ..Default::default()
-    };
-    let initial_profile = crate::models::StoredOwnMarketProfile {
-        max_hops: 1,
-        published: false,
-        ..Default::default()
-    };
-    let initial_admin = super::StoredSyncAdmin {
-        descriptor: humoco_market::DropDescriptor {
-            write_url: "https://old.example.org/sync.php".to_string(),
-            read_url: "https://old.example.org/d".to_string(),
-            slot_id: None,
-            drop_pub: "aa".repeat(32),
-        },
-        sync_index: 0,
-        data_dir: "d".to_string(),
-        max_members: 100,
-        max_total_storage_mb: 100,
-        max_user_storage_mb: 10,
-        policies: Default::default(),
-        allow: vec![],
-        last_members_hash: Default::default(),
-        revocation: None,
-    };
+fn seed_initial_batch_commit(
+    state: &super::AppState,
+    svc: &mut human_money_core::app_service::AppService,
+    pw: &str,
+) {
     let mut initial_book = crate::models::FrontendAddressBook::default();
     initial_book.contacts.insert(
         "did:key:zInitial".to_string(),
-        crate::models::FrontendContact {
+        FrontendContact {
             did: "did:key:zInitial".to_string(),
-            profile: crate::models::FrontendUserProfile {
+            profile: FrontendUserProfile {
                 first_name: Some("Initial".to_string()),
                 ..Default::default()
             },
@@ -2220,30 +2175,49 @@ fn s09_encrypted_batch_commit_atomicity_and_rollback() {
             syncs: vec![],
         },
     );
-
     let mut init_batch = super::EncryptedBatchCommit::new();
     init_batch
-        .security_policy(initial_policy)
-        .ui_preferences(initial_prefs)
-        .own_market_profile(initial_profile)
-        .sync_admin(initial_admin)
+        .security_policy(crate::settings::SecurityPolicy {
+            session_timeout_seconds: 300,
+            ..Default::default()
+        })
+        .ui_preferences(crate::settings::UiPreferences {
+            ui_mode: "simple".to_string(),
+            ..Default::default()
+        })
+        .own_market_profile(crate::models::StoredOwnMarketProfile {
+            max_hops: 1,
+            published: false,
+            ..Default::default()
+        })
+        .sync_admin(make_own_sync_admin(
+            "https://old.example.org/sync.php",
+            "https://old.example.org/d",
+            "aa".repeat(32),
+            None,
+        ))
         .contacts(initial_book);
-    init_batch.commit(&state, &mut svc, Some(pw)).unwrap();
+    init_batch.commit(state, svc, Some(pw)).unwrap();
+}
 
-    assert_eq!(
-        state
-            .cache_security_policy()
-            .map(|p| p.session_timeout_seconds),
-        Some(300)
+#[test]
+fn s09_encrypted_batch_commit_atomicity_and_rollback() {
+    let dir = TempDirGuard(crate::test_support::temp_test_dir("s09_batch_commit_rollback"));
+    let pw = "StrongPw-S09-Batch!";
+    let alice_svc = crate::test_support::setup_test_app(
+        &dir.0.join("alice"),
+        "Alice",
+        crate::test_support::ALICE_PHRASE,
+        pw,
     );
-    assert_eq!(
-        state.cache_ui_preferences().map(|p| p.ui_mode),
-        Some("simple".to_string())
-    );
-    assert_eq!(
-        state.cache_own_market_profile().map(|p| p.max_hops),
-        Some(1)
-    );
+    let state = crate::test_support::create_test_state(alice_svc);
+    let mut svc = state.lock_service().unwrap();
+    state.initialize_profile_session(&mut svc, pw).unwrap();
+    seed_initial_batch_commit(&state, &mut svc, pw);
+
+    assert_eq!(state.cache_security_policy().map(|p| p.session_timeout_seconds), Some(300));
+    assert_eq!(state.cache_ui_preferences().map(|p| p.ui_mode), Some("simple".to_string()));
+    assert_eq!(state.cache_own_market_profile().map(|p| p.max_hops), Some(1));
     assert_eq!(
         state
             .read_cache_slot_for_service(&svc, |c| &c.own_sync_descriptor)
@@ -2285,37 +2259,19 @@ fn s09_encrypted_batch_commit_atomicity_and_rollback() {
         "unexpected commit failure variant: {err:?}"
     );
 
-    assert_eq!(
-        state
-            .cache_security_policy()
-            .map(|p| p.session_timeout_seconds),
-        Some(300),
-        "failed EncryptedBatchCommit must not update security_policy RAM cache"
-    );
-    assert_eq!(
-        state.cache_ui_preferences().map(|p| p.ui_mode),
-        Some("simple".to_string()),
-        "failed EncryptedBatchCommit must not update ui_preferences RAM cache"
-    );
-    assert_eq!(
-        state.cache_own_market_profile().map(|p| p.max_hops),
-        Some(1),
-        "failed EncryptedBatchCommit must not update own_market_profile RAM cache"
-    );
+    assert_eq!(state.cache_security_policy().map(|p| p.session_timeout_seconds), Some(300));
+    assert_eq!(state.cache_ui_preferences().map(|p| p.ui_mode), Some("simple".to_string()));
+    assert_eq!(state.cache_own_market_profile().map(|p| p.max_hops), Some(1));
     assert_eq!(
         state
             .read_cache_slot_for_service(&svc, |c| &c.own_sync_descriptor)
             .flatten()
             .map(|d| d.write_url),
-        Some("https://old.example.org/sync.php".to_string()),
-        "failed EncryptedBatchCommit must not clear own_sync_descriptor RAM cache"
+        Some("https://old.example.org/sync.php".to_string())
     );
-    assert!(
-        state
-            .cache_contacts()
-            .is_some_and(|ab| ab.contacts.contains_key("did:key:zInitial")),
-        "failed EncryptedBatchCommit must not update contacts RAM cache"
-    );
+    assert!(state
+        .cache_contacts()
+        .is_some_and(|ab| ab.contacts.contains_key("did:key:zInitial")));
 
     // Successful clear_sync_admin updates own_sync_descriptor to Some(None) atomically.
     let mut clear_batch = super::EncryptedBatchCommit::new();
@@ -2335,23 +2291,22 @@ fn s09_encrypted_batch_commit_atomicity_and_rollback() {
     assert_eq!(auth.generation(), state.current_session_generation());
     assert!(!auth.owner_did().is_empty());
     assert!(!format!("{auth:?}").contains(pw));
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn s11_x3_save_contact_rejects_invalid_sync_descriptors_and_allows_unprobed_qr() {
-    let temp_dir =
-        std::env::temp_dir().join(format!("humoco_s11_x3_save_{}", uuid::Uuid::new_v4()));
+    let temp_dir = TempDirGuard(
+        std::env::temp_dir().join(format!("humoco_s11_x3_save_{}", uuid::Uuid::new_v4())),
+    );
     let password = "test-password-123";
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Alice",
         crate::test_support::ALICE_PHRASE,
         password,
     );
     let bob_service = crate::test_support::setup_test_app(
-        &temp_dir.join("bob"),
+        &temp_dir.0.join("bob"),
         "Bob",
         crate::test_support::BOB_PHRASE,
         password,
@@ -2491,23 +2446,22 @@ fn s11_x3_save_contact_rejects_invalid_sync_descriptors_and_allows_unprobed_qr()
         saved[0].syncs[0].write_url,
         "https://qr-peer.example.org/sync.php"
     );
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn s11_x3_card_sync_update_sanitizes_bad_and_revoked_drops_without_aborting_valid_ones() {
-    let temp_dir =
-        std::env::temp_dir().join(format!("humoco_s11_x3_card_{}", uuid::Uuid::new_v4()));
+    let temp_dir = TempDirGuard(
+        std::env::temp_dir().join(format!("humoco_s11_x3_card_{}", uuid::Uuid::new_v4())),
+    );
     let password = "test-password-123";
     let alice_service = crate::test_support::setup_test_app(
-        &temp_dir.join("alice"),
+        &temp_dir.0.join("alice"),
         "Alice",
         crate::test_support::ALICE_PHRASE,
         password,
     );
     let bob_service = crate::test_support::setup_test_app(
-        &temp_dir.join("bob"),
+        &temp_dir.0.join("bob"),
         "Bob",
         crate::test_support::BOB_PHRASE,
         password,
@@ -2597,14 +2551,37 @@ fn s11_x3_card_sync_update_sanitizes_bad_and_revoked_drops_without_aborting_vali
         "https://valid.example.org/sync.php"
     );
     assert_eq!(saved[0].syncs[0].drop_pub, valid_pub_lower);
+}
 
-    let _ = std::fs::remove_dir_all(&temp_dir);
+fn make_own_sync_admin(
+    write_url: &str,
+    read_url: &str,
+    drop_pub: String,
+    revocation: Option<crate::sync_client::SyncRevocationNotice>,
+) -> super::StoredSyncAdmin {
+    super::StoredSyncAdmin {
+        descriptor: humoco_market::DropDescriptor {
+            write_url: write_url.to_string(),
+            read_url: read_url.to_string(),
+            slot_id: None,
+            drop_pub,
+        },
+        sync_index: 0,
+        data_dir: "d".to_string(),
+        max_members: 50,
+        max_total_storage_mb: 100,
+        max_user_storage_mb: 10,
+        policies: Default::default(),
+        allow: vec![],
+        last_members_hash: Default::default(),
+        revocation,
+    }
 }
 
 #[test]
 fn test_s03_s07_1_revoked_own_sync_excluded_from_descriptor_and_backup_targets() {
-    let dir = crate::test_support::temp_test_dir("s03_s07_1_revoked_own");
-    let wallet_dir = dir.join("wallet");
+    let dir = TempDirGuard(crate::test_support::temp_test_dir("s03_s07_1_revoked_own"));
+    let wallet_dir = dir.0.join("wallet");
     let pw = "StrongPassword123!";
     let svc = crate::test_support::setup_test_app(
         &wallet_dir,
@@ -2617,23 +2594,7 @@ fn test_s03_s07_1_revoked_own_sync_excluded_from_descriptor_and_backup_targets()
     let own_write = "https://own.example.org/sync.php".to_string();
     let own_read = "https://own.example.org/d".to_string();
     let own_drop_pub = crate::test_support::test_ed25519_pub_hex(0x31);
-    let active_admin = super::StoredSyncAdmin {
-        descriptor: humoco_market::DropDescriptor {
-            write_url: own_write.clone(),
-            read_url: own_read.clone(),
-            slot_id: None,
-            drop_pub: own_drop_pub.clone(),
-        },
-        sync_index: 0,
-        data_dir: "d".to_string(),
-        max_members: 50,
-        max_total_storage_mb: 100,
-        max_user_storage_mb: 10,
-        policies: Default::default(),
-        allow: vec![],
-        last_members_hash: Default::default(),
-        revocation: None,
-    };
+    let active_admin = make_own_sync_admin(&own_write, &own_read, own_drop_pub.clone(), None);
 
     {
         let mut s = state.lock_service().unwrap();
@@ -2649,10 +2610,8 @@ fn test_s03_s07_1_revoked_own_sync_excluded_from_descriptor_and_backup_targets()
         init_batch.sync_admin(active_admin.clone());
         init_batch.commit(&state, &mut s, Some(pw)).unwrap();
 
-        assert!(state
-            .get_or_load_own_sync_descriptor(&mut s, Some(pw))
-            .unwrap()
-            .is_some());
+        let own_desc = state.get_or_load_own_sync_descriptor(&mut s, Some(pw)).unwrap();
+        assert_eq!(own_desc.as_ref().map(|d| d.write_url.as_str()), Some(own_write.as_str()));
         let active_targets = crate::services::common::collect_backup_sync_targets_with_service(
             &state,
             &mut s,
@@ -2664,10 +2623,11 @@ fn test_s03_s07_1_revoked_own_sync_excluded_from_descriptor_and_backup_targets()
         assert_eq!(active_targets[0].write_url, own_write);
     }
 
-    let overview_active =
+    assert!(
         crate::services::sync_engine::get_sync_overview_status_impl(Some(pw.to_string()), &state)
-            .unwrap();
-    assert!(overview_active.has_own_sync);
+            .unwrap()
+            .has_own_sync
+    );
 
     // Revoke own StoredSyncAdmin via EncryptedBatchCommit (live cache update)
     let mut revoked_admin = active_admin;
@@ -2685,34 +2645,23 @@ fn test_s03_s07_1_revoked_own_sync_excluded_from_descriptor_and_backup_targets()
         rev_batch.sync_admin(revoked_admin);
         rev_batch.commit(&state, &mut s, Some(pw)).unwrap();
 
-        assert!(
-            state
-                .get_or_load_own_sync_descriptor(&mut s, Some(pw))
-                .unwrap()
-                .is_none(),
-            "S03/S07-1: live cache must omit revoked own sync descriptor"
-        );
-        let rev_targets = crate::services::common::collect_backup_sync_targets_with_service(
+        assert!(state.get_or_load_own_sync_descriptor(&mut s, Some(pw)).unwrap().is_none());
+        assert!(crate::services::common::collect_backup_sync_targets_with_service(
             &state,
             &mut s,
             Some(pw),
             None,
         )
-        .unwrap();
-        assert!(
-            rev_targets.is_empty(),
-            "S07-1: backup targets must omit revoked own sync in live session"
-        );
+        .unwrap()
+        .is_empty());
     }
-    let overview_live_rev =
-        crate::services::sync_engine::get_sync_overview_status_impl(Some(pw.to_string()), &state)
-            .unwrap();
     assert!(
-        !overview_live_rev.has_own_sync,
-        "S03: sync overview must report has_own_sync == false once revoked"
+        !crate::services::sync_engine::get_sync_overview_status_impl(Some(pw.to_string()), &state)
+            .unwrap()
+            .has_own_sync
     );
 
-    // Fresh session initialization must also exclude revoked own sync from own_sync_descriptor
+    // Fresh session initialization must also exclude revoked own sync
     let mut reloaded_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
     let folder = reloaded_svc.list_profiles().unwrap()[0].folder_name.clone();
     reloaded_svc
@@ -2721,57 +2670,87 @@ fn test_s03_s07_1_revoked_own_sync_excluded_from_descriptor_and_backup_targets()
     let reloaded_state = crate::test_support::create_test_state(
         human_money_core::app_service::AppService::new(&wallet_dir).unwrap(),
     );
-    {
-        reloaded_state
-            .initialize_profile_session(&mut reloaded_svc, pw)
-            .unwrap();
-        *reloaded_state.service.lock().unwrap() = reloaded_svc;
-    }
+    reloaded_state.initialize_profile_session(&mut reloaded_svc, pw).unwrap();
+    *reloaded_state.service.lock().unwrap() = reloaded_svc;
 
     {
         let mut s = reloaded_state.lock_service().unwrap();
-        assert!(
-            reloaded_state
-                .get_or_load_own_sync_descriptor(&mut s, None)
-                .unwrap()
-                .is_none(),
-            "S03/S07-1: fresh session init must omit revoked own sync descriptor"
-        );
-        let targets_after_reinit =
-            crate::services::common::collect_backup_sync_targets_with_service(
-                &reloaded_state,
-                &mut s,
-                None,
-                None,
-            )
-            .unwrap();
-        assert!(
-            targets_after_reinit.is_empty(),
-            "S07-1: collect_backup_sync_targets_with_service must omit revoked own sync after fresh session init"
-        );
-        // Full StoredSyncAdmin with revocation must still be readable for admin status/clearance UIs
+        assert!(reloaded_state.get_or_load_own_sync_descriptor(&mut s, None).unwrap().is_none());
+        assert!(crate::services::common::collect_backup_sync_targets_with_service(
+            &reloaded_state,
+            &mut s,
+            None,
+            None,
+        )
+        .unwrap()
+        .is_empty());
         let full_admin =
             crate::services::sync_engine::admin::load_stored_sync_admin_opt(&mut s, Some(pw))
                 .unwrap()
                 .expect("StoredSyncAdmin should still exist");
-        assert!(full_admin.revocation.is_some());
+        assert_eq!(
+            full_admin.revocation.as_ref().and_then(|r| r.reason.as_deref()),
+            Some("Server decommissioned")
+        );
     }
-    let overview_reinit =
-        crate::services::sync_engine::get_sync_overview_status_impl(None, &reloaded_state).unwrap();
-    assert!(!overview_reinit.has_own_sync);
+    assert!(!crate::services::sync_engine::get_sync_overview_status_impl(None, &reloaded_state).unwrap().has_own_sync);
 
     // Also verify timeout == 0 cache-only fallback when Core session is locked
     {
         let mut s = reloaded_state.lock_service().unwrap();
         s.lock_session();
-        assert!(reloaded_state
-            .get_or_load_own_sync_descriptor(&mut s, None)
-            .unwrap()
-            .is_none());
+        assert!(reloaded_state.get_or_load_own_sync_descriptor(&mut s, None).unwrap().is_none());
     }
-    let overview_locked =
-        crate::services::sync_engine::get_sync_overview_status_impl(None, &reloaded_state).unwrap();
-    assert!(!overview_locked.has_own_sync);
+    assert!(!crate::services::sync_engine::get_sync_overview_status_impl(None, &reloaded_state).unwrap().has_own_sync);
+}
 
-    let _ = std::fs::remove_dir_all(&dir);
+#[test]
+fn test_sync_wake_request_is_empty_and_merge_each_flag() {
+    let empty = super::SyncWakeRequest::default();
+    assert!(empty.is_empty());
+
+    let single_flags = [
+        super::SyncWakeRequest { seal: true, ..Default::default() },
+        super::SyncWakeRequest { local_backup: true, ..Default::default() },
+        super::SyncWakeRequest { sync_backup: true, ..Default::default() },
+        super::SyncWakeRequest { sync_backup_force: true, ..Default::default() },
+        super::SyncWakeRequest { post: true, ..Default::default() },
+        super::SyncWakeRequest { market: true, ..Default::default() },
+        super::SyncWakeRequest { market_force_upload: true, ..Default::default() },
+        super::SyncWakeRequest { sync_members: true, ..Default::default() },
+    ];
+    for flag_req in single_flags {
+        assert!(!flag_req.is_empty(), "single bit {:?} must not be empty", flag_req);
+
+        let mut from_empty = super::SyncWakeRequest::default();
+        from_empty.merge(flag_req);
+        assert_eq!(from_empty, flag_req);
+
+        let mut keep_existing = flag_req;
+        keep_existing.merge(super::SyncWakeRequest::default());
+        assert_eq!(keep_existing, flag_req);
+    }
+
+    let mut combined = super::SyncWakeRequest::default();
+    for flag_req in single_flags {
+        combined.merge(flag_req);
+    }
+    assert_eq!(
+        combined,
+        super::SyncWakeRequest {
+            seal: true,
+            local_backup: true,
+            sync_backup: true,
+            sync_backup_force: true,
+            post: true,
+            market: true,
+            market_force_upload: true,
+            sync_members: true,
+        }
+    );
+
+    assert!(matches!(
+        super::app_state_err("conflict msg".to_string()),
+        super::AppFacadeError::App(human_money_core::error::AppError::StateConflict { message }) if message == "conflict msg"
+    ));
 }

@@ -321,29 +321,45 @@ pub fn reset_failed_attempts(keystore_dir: &Path, folder_name: &str) -> Result<(
 mod tests {
     use super::*;
 
-    fn temp_keystore_dir(label: &str) -> PathBuf {
+    struct TempDirGuard(PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_keystore_dir(label: &str) -> TempDirGuard {
         let dir = std::env::temp_dir().join(format!(
             "humoco_pin_keystore_test_{}_{}",
             label,
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(&dir).unwrap();
-        dir
+        TempDirGuard(dir)
     }
 
     #[test]
     fn test_validate_pin_format_and_scope() {
-        assert!(validate_pin_format("12345").is_err());
-        assert!(validate_pin_format("123456789").is_err());
-        assert!(validate_pin_format("12ab56").is_err());
-        assert!(validate_pin_format("123456").is_ok());
-        assert!(validate_pin_format("12345678").is_ok());
+        for invalid_pin in ["1234", "12345", "123456789", "1234567890", "12ab56"] {
+            assert_eq!(
+                validate_pin_format(invalid_pin).unwrap_err(),
+                "PIN must consist of 6 to 8 digits.",
+                "expected exact PIN validation error for '{invalid_pin}'"
+            );
+        }
+        for valid_pin in ["123456", "1234567", "12345678"] {
+            assert_eq!(validate_pin_format(valid_pin), Ok(()));
+        }
 
+        assert_eq!(scope_to_str(SecondaryScope::DailyPay), "dailyPay");
+        assert_eq!(scope_to_str(SecondaryScope::ReceiveOnly), "receiveOnly");
         assert_eq!(parse_scope("dailyPay").unwrap(), SecondaryScope::DailyPay);
-        assert!(parse_scope("receiveOnly").is_err());
-        assert!(parse_scope("daily_pay").is_err());
-        assert!(parse_scope("receive_only").is_err());
-        assert!(parse_scope("full").is_err());
+        for bad_scope in ["receiveOnly", "daily_pay", "receive_only", "full"] {
+            assert_eq!(
+                parse_scope(bad_scope).unwrap_err(),
+                format!("Unsupported PIN scope: {bad_scope}")
+            );
+        }
     }
 
     #[test]
@@ -354,54 +370,52 @@ mod tests {
         let pin = "246810";
 
         let secret =
-            create_and_store_pepper(&dir, dev, folder, pin, SecondaryScope::DailyPay).unwrap();
+            create_and_store_pepper(&dir.0, dev, folder, pin, SecondaryScope::DailyPay).unwrap();
         assert_eq!(secret.len(), 64);
 
-        let entry = get_entry(&dir, folder).unwrap().expect("entry must exist");
+        let entry = get_entry(&dir.0, folder).unwrap().expect("entry must exist");
         assert_eq!(entry.failed_attempts, 0);
         assert_eq!(entry.scope, SecondaryScope::DailyPay);
 
         // Strike 1
-        let (derived, attempt) = begin_pin_attempt(&dir, dev, folder, pin).unwrap();
+        let (derived, attempt) = begin_pin_attempt(&dir.0, dev, folder, pin).unwrap();
         assert_eq!(attempt, 1);
         assert_eq!(derived.as_str(), secret.as_str());
 
         // Strike 2: device mismatch fails unwrapping with PinAttemptError::DeviceMismatch
-        let mismatch = begin_pin_attempt(&dir, "other-device", folder, pin);
+        let mismatch = begin_pin_attempt(&dir.0, "other-device", folder, pin);
         assert!(matches!(mismatch, Err(PinAttemptError::DeviceMismatch(_))));
 
         // Remaining strikes up to MAX_PIN_ATTEMPTS = 5
         for expected_attempt in 3..=MAX_PIN_ATTEMPTS {
-            let (derived, attempt) = begin_pin_attempt(&dir, dev, folder, pin).unwrap();
+            let (derived, attempt) = begin_pin_attempt(&dir.0, dev, folder, pin).unwrap();
             assert_eq!(attempt, expected_attempt);
             assert_eq!(derived.as_str(), secret.as_str());
         }
 
         // Once MAX_PIN_ATTEMPTS is reached, any further attempt refuses before unwrapping pepper
-        let exhausted = begin_pin_attempt(&dir, dev, folder, pin);
+        let exhausted = begin_pin_attempt(&dir.0, dev, folder, pin);
         assert_eq!(exhausted.unwrap_err(), PinAttemptError::MaxAttemptsReached);
 
         // Lockdown / success recovery resets failed_attempts without wiping entry
-        reset_failed_attempts(&dir, folder).unwrap();
-        let after_reset = get_entry(&dir, folder).unwrap().unwrap();
+        reset_failed_attempts(&dir.0, folder).unwrap();
+        let after_reset = get_entry(&dir.0, folder).unwrap().unwrap();
         assert_eq!(after_reset.failed_attempts, 0);
 
         // Remove entry cleans keystore slot
-        remove_entry(&dir, folder).unwrap();
-        assert!(get_entry(&dir, folder).unwrap().is_none());
-
-        let _ = fs::remove_dir_all(dir);
+        remove_entry(&dir.0, folder).unwrap();
+        assert!(get_entry(&dir.0, folder).unwrap().is_none());
     }
 
     #[test]
     fn test_corrupt_pin_keystore_refuses_overwrite() {
         let dir = temp_keystore_dir("corrupt");
-        let path = keystore_path(&dir);
+        let path = keystore_path(&dir.0);
         let corrupt = b"{not-valid-json";
         fs::write(&path, corrupt).unwrap();
 
         let err = create_and_store_pepper(
-            &dir,
+            &dir.0,
             "dev-1",
             "profile_b",
             "246810",
@@ -410,7 +424,100 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("Invalid PIN keystore JSON"));
         assert_eq!(fs::read(&path).unwrap(), corrupt);
+    }
 
-        let _ = fs::remove_dir_all(dir);
+    #[test]
+    fn test_pin_keystore_restore_entry_error_variants_and_display() {
+        let dir = temp_keystore_dir("variants");
+        let dev = "dev-binding-xyz";
+        let folder = "profile_variants";
+
+        let blank_dev_err = create_and_store_pepper(
+            &dir.0,
+            "   ",
+            folder,
+            "123456",
+            SecondaryScope::DailyPay,
+        )
+        .unwrap_err();
+        assert_eq!(
+            blank_dev_err,
+            "Missing device binding identifier for PIN keystore."
+        );
+
+        let p1 = [0x11u8; 32];
+        let p2 = [0x22u8; 32];
+        let s1 = derive_pin_secret(&p1, "prof_a", "123456");
+        assert_eq!(s1.as_str(), derive_pin_secret(&p1, "prof_a", "123456").as_str());
+        assert_ne!(s1.as_str(), derive_pin_secret(&p2, "prof_a", "123456").as_str());
+        assert_ne!(s1.as_str(), derive_pin_secret(&p1, "prof_b", "123456").as_str());
+        assert_ne!(s1.as_str(), derive_pin_secret(&p1, "prof_a", "654321").as_str());
+
+        assert_eq!(
+            begin_pin_attempt(&dir.0, dev, folder, "12345").unwrap_err(),
+            PinAttemptError::InvalidFormat("PIN must consist of 6 to 8 digits.".to_string())
+        );
+        assert_eq!(
+            begin_pin_attempt(&dir.0, dev, folder, "123456").unwrap_err(),
+            PinAttemptError::NotEnabled(
+                "PIN is not enabled for this profile on this device.".to_string()
+            )
+        );
+        assert_eq!(
+            PinAttemptError::MaxAttemptsReached.to_string(),
+            "Maximum PIN attempts already exhausted."
+        );
+        assert_eq!(
+            PinAttemptError::from("custom storage msg".to_string()).to_string(),
+            "custom storage msg"
+        );
+
+        create_and_store_pepper(&dir.0, dev, folder, "246810", SecondaryScope::DailyPay).unwrap();
+        let saved = get_entry(&dir.0, folder).unwrap().unwrap();
+        remove_entry(&dir.0, folder).unwrap();
+        assert!(get_entry(&dir.0, folder).unwrap().is_none());
+
+        restore_entry(&dir.0, folder, Some(saved.clone())).unwrap();
+        let restored = get_entry(&dir.0, folder).unwrap().unwrap();
+        assert_eq!(restored.encrypted_pepper_b64, saved.encrypted_pepper_b64);
+        assert_eq!(restored.failed_attempts, saved.failed_attempts);
+        assert_eq!(restored.scope, saved.scope);
+
+        restore_entry(
+            &dir.0,
+            folder,
+            Some(PinKeystoreEntry {
+                encrypted_pepper_b64: "!!!not-base64!!!".to_string(),
+                failed_attempts: 0,
+                scope: SecondaryScope::DailyPay,
+            }),
+        )
+        .unwrap();
+        match begin_pin_attempt(&dir.0, dev, folder, "246810").unwrap_err() {
+            PinAttemptError::Storage(msg) => {
+                assert!(msg.starts_with("Corrupt PIN keystore entry:"), "got: {msg}");
+            }
+            other => panic!("expected Corrupt PIN keystore entry, got: {other:?}"),
+        }
+
+        let short_wrapped =
+            crypto::encrypt_data(&derive_keystore_wrap_key(dev), b"short-pepper").unwrap();
+        restore_entry(
+            &dir.0,
+            folder,
+            Some(PinKeystoreEntry {
+                encrypted_pepper_b64: B64.encode(short_wrapped),
+                failed_attempts: 0,
+                scope: SecondaryScope::DailyPay,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            begin_pin_attempt(&dir.0, dev, folder, "246810").unwrap_err(),
+            PinAttemptError::Storage("Invalid unwrapped pepper length.".to_string())
+        );
+
+        restore_entry(&dir.0, folder, None).unwrap();
+        assert!(get_entry(&dir.0, folder).unwrap().is_none());
     }
 }
