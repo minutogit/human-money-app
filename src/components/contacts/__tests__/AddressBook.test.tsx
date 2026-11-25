@@ -363,7 +363,7 @@ describe('AddressBook Component', () => {
     mockNavigateToSettingsSection.mockClear();
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
-      if (cmd === 'get_drop_overview_status') {
+      if (cmd === 'get_sync_overview_status') {
         return Promise.resolve({
           connectedCount: 0,
           friendSyncs: 0,
@@ -899,5 +899,40 @@ describe('AddressBook Component', () => {
     } finally {
       window.removeEventListener('humoco:transient-sync-toast', onToast);
     }
+  });
+
+  it('canceling contact deletion closes confirmation dialog without calling delete_contact', async () => {
+    render(<AddressBook onBack={mockOnBack} />);
+    await waitFor(() => screen.getByText(/John Doe/i));
+
+    const deleteBtns = screen.getAllByTitle(/Remove Contact/i);
+    fireEvent.click(deleteBtns[0]);
+    expect(screen.getByRole('button', { name: /^Delete Contact$/i })).toBeInTheDocument();
+
+    const cancelBtn = screen.getByRole('button', { name: /common\.cancel|Cancel|Abbrechen/i });
+    fireEvent.click(cancelBtn);
+
+    expect(screen.queryByRole('button', { name: /^Delete Contact$/i })).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith('delete_contact', expect.anything());
+  });
+
+  it('surfaces error feedback when delete_contact rejects and keeps contacts visible', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'delete_contact') return Promise.reject(new Error('delete permission denied'));
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+    await waitFor(() => screen.getByText(/John Doe/i));
+
+    const deleteBtns = screen.getAllByTitle(/Remove Contact/i);
+    fireEvent.click(deleteBtns[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^Delete Contact$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/delete permission denied/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
   });
 });

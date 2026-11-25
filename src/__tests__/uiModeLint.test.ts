@@ -72,8 +72,27 @@ describe('UI Mode Architecture Guardrail (APP-UX-09)', () => {
             }
         }
 
+        expect(files.length).toBeGreaterThan(50);
+        for (const prefix of ALLOWED_RELATIVE_PREFIXES) {
+            expect(fs.existsSync(path.join(SRC_ROOT, prefix))).toBe(true);
+        }
+
         expect(useUiModeViolations).toEqual([]);
         expect(contextImportViolations).toEqual([]);
         expect(propertyAccessViolations).toEqual([]);
+    });
+
+    it('detects direct UiMode escape hatches while allowing Primitive components', () => {
+        const unsafeHook = 'const { mode } = useUiMode();';
+        const unsafeContext = 'import { UiModeContext } from "../context/UiModeContext";';
+        const unsafeProp = 'if (config.uiPreferences.uiMode === "expert") {}';
+        const safePrimitive = '<Advanced><TechId value="did:key:z1" uiModeLabel="x" /></Advanced>';
+
+        expect(/\buseUiMode\b/.test(unsafeHook)).toBe(true);
+        expect(/\bUiModeContext\b/.test(unsafeContext)).toBe(true);
+        expect(/\.uiMode\b/.test(unsafeProp)).toBe(true);
+        expect(/\buseUiMode\b/.test(safePrimitive)).toBe(false);
+        expect(/\bUiModeContext\b/.test(safePrimitive)).toBe(false);
+        expect(/\.uiMode\b/.test(safePrimitive)).toBe(false);
     });
 });

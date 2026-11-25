@@ -19,7 +19,7 @@ describe('TrustLevelRadioCards Component', () => {
     const onChange = vi.fn();
     render(<TrustLevelRadioCards value={1} onChange={onChange} allowUnrated={true} />);
 
-    const level2Card = screen.getByText(/contacts\.trustLevel2|Freund|Friend/i).closest('button')!;
+    const level2Card = screen.getByTestId('trust-level-2');
     fireEvent.click(level2Card);
 
     expect(onChange).toHaveBeenCalledWith(2);
@@ -78,5 +78,43 @@ describe('TrustLevelRadioCards Component', () => {
     expect(screen.getByText(/contacts\.trustLevel1|Bekannt|Acquaintance/i)).toBeInTheDocument();
     expect(screen.queryByText(/contacts\.trustLevel2|Freund|Friend/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/contacts\.trustLevel3|Enger Vertrauter|Close confidant/i)).not.toBeInTheDocument();
+  });
+
+  it('exposes radiogroup semantics, exact aria-checked states, custom idPrefix, and unrated selection callback', () => {
+    const onChange = vi.fn();
+    render(
+      <TrustLevelRadioCards
+        value={2}
+        onChange={onChange}
+        allowUnrated={true}
+        idPrefix="custom-trust"
+      />
+    );
+
+    const group = screen.getByRole('radiogroup');
+    expect(group).toBeInTheDocument();
+
+    const cardUnrated = screen.getByTestId('trust-level-unrated');
+    const card0 = screen.getByTestId('trust-level-0');
+    const card2 = screen.getByTestId('trust-level-2');
+
+    expect(card2).toHaveAttribute('id', 'custom-trust-2');
+    expect(card2).toHaveAttribute('aria-checked', 'true');
+    expect(card0).toHaveAttribute('aria-checked', 'false');
+    expect(cardUnrated).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(cardUnrated);
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
+  it('keeps unrated option visible alongside restricted allowedLevels when allowUnrated is true', () => {
+    const onChange = vi.fn();
+    render(<TrustLevelRadioCards value={null} onChange={onChange} allowUnrated={true} allowedLevels={[0, 1]} />);
+
+    expect(screen.getByTestId('trust-level-unrated')).toBeInTheDocument();
+    expect(screen.getByTestId('trust-level-0')).toBeInTheDocument();
+    expect(screen.getByTestId('trust-level-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('trust-level-2')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('trust-level-3')).not.toBeInTheDocument();
   });
 });

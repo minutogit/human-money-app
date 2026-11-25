@@ -460,4 +460,83 @@ describe('ContactDialog Component', () => {
       expect(firstNameInput.value).toBe('');
     });
   });
+
+  it('returns null when isOpen is false', () => {
+    const { container } = render(
+      <ContactDialog
+        isOpen={false}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+      />
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('surfaces error when probing sync endpoint fails and keeps list intact on cancel delete', async () => {
+    vi.mocked(marketService.probePublicSync).mockRejectedValueOnce(new Error('network timeout'));
+    const existing: Contact = {
+      did: 'did:key:z12345',
+      profile: { id: 'did:key:z12345', firstName: 'Alice' },
+      tags: [],
+      addedAt: '2024-01-01',
+      syncs: [
+        {
+          readUrl: 'https://sync1.example.com/sync.php',
+          writeUrl: 'https://sync1.example.com/sync.php',
+          dropPub: 'Pub1',
+        },
+      ],
+    };
+
+    render(
+      <UiModeProvider initialMode="expert">
+        <ContactDialog
+          isOpen={true}
+          onClose={mockOnClose}
+          onSave={mockOnSave}
+          existingContact={existing}
+        />
+      </UiModeProvider>
+    );
+
+    const syncInput = screen.getByPlaceholderText(/https:\/\/sync-server\./i);
+    fireEvent.change(syncInput, { target: { value: 'https://broken.example.com/sync.php' } });
+    const probeBtn = screen.getByRole('button', { name: /contacts\.syncProbeAndAdd|Prüfen & Hinzufügen|Probe & Add/i });
+    fireEvent.click(probeBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Could not reach sync service|Sync-Dienst konnte nicht erreicht werden/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText('broken.example.com')).not.toBeInTheDocument();
+
+    const deleteBtn = screen.getByTitle(/contacts\.syncDelete|Remove|Entfernen/i);
+    fireEvent.click(deleteBtn);
+    const cancelBtn = screen.getByRole('button', { name: /contacts\.syncDeleteCancelBtn|^No$|^Nein$/i });
+    fireEvent.click(cancelBtn);
+    expect(screen.getByText('sync1.example.com')).toBeInTheDocument();
+  });
+
+  it('keeps dialog open and shows error when onSave rejects', async () => {
+    mockOnSave.mockRejectedValueOnce(new Error('save boom'));
+
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('contact-did-input'), {
+      target: { value: 'did:key:z6MkSaveFail111' },
+    });
+    const saveBtn = screen.getByRole('button', { name: /contacts\.saveContact|Kontakt speichern|Save Contact/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockOnSave).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/save boom/)).toBeInTheDocument();
+    });
+    expect(mockOnClose).not.toHaveBeenCalled();
+  });
 });

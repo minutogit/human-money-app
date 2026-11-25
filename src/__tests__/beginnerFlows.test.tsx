@@ -48,7 +48,11 @@ vi.mock('../context/SessionContext', () => ({
         isAuthenticated: true,
         hasCachedSession: true,
     }),
-    useOptionalSession: () => null,
+    useOptionalSession: () => ({
+        protectAction: mockProtectAction,
+        isAuthenticated: true,
+        hasCachedSession: true,
+    }),
 }));
 
 vi.mock('../services/backupService', () => ({
@@ -171,7 +175,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
      */
     it('Task 1: guides beginner to create a backup from checklist to BackupSettingsCard', async () => {
         // Step 1: Render FirstStepsChecklist
-        render(
+        const { unmount: unmountChecklist } = render(
             <FirstStepsChecklist
                 hasBackup={false}
                 hasContact={false}
@@ -190,6 +194,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             view: 'settings',
             initialSection: 'backup',
         });
+        unmountChecklist();
 
         // Step 2: Render BackupSettingsCard in the Security & Backup tab
         const mockConfig = createBeginnerConfig('/home/user/Backups');
@@ -226,6 +231,8 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         fireEvent.click(backupNowBtn);
 
         await waitFor(() => {
+            expect(backupService.getBackupStatus).toHaveBeenCalledTimes(1);
+            expect(backupService.syncBackupFolder).toHaveBeenCalledTimes(1);
             expect(backupService.syncBackupFolder).toHaveBeenCalledWith(
                 expect.objectContaining({
                     folderPath: '/home/user/Backups',
@@ -424,7 +431,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         });
     });
 
-    it('Task 4: hides technical Advanced elements and raw did:key in Simple mode and reveals them in Expert mode', () => {
+    it('Task 4: hides technical Advanced elements and raw did:key in Simple mode and reveals them in Expert mode', async () => {
         const sampleDid = 'did:key:z6MkuBeginnerSampleDid987654';
 
         const { container } = render(
@@ -437,6 +444,10 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             </UiModeProvider>
         );
 
+        await waitFor(() => {
+            expect(settingsService.getConfig).toHaveBeenCalled();
+        });
+
         // Simple mode by default: no Advanced panel, no raw did:key in DOM
         expect(screen.queryByTestId('advanced-raw-panel')).not.toBeInTheDocument();
         expect(screen.getByTestId('tech-id-value')).toHaveTextContent('…987654');
@@ -446,12 +457,14 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         fireEvent.click(screen.getByTestId('ui-mode-expert'));
         expect(screen.getByTestId('advanced-raw-panel')).toBeInTheDocument();
         expect(screen.getByTestId('tech-id-value')).toHaveTextContent(sampleDid);
+        expect(settingsService.patchUiPreferences).toHaveBeenCalledWith({ uiMode: 'expert' });
         expect(localStorage.length).toBe(0);
 
         // Switch back to Simple mode
         fireEvent.click(screen.getByTestId('ui-mode-simple'));
         expect(screen.queryByTestId('advanced-raw-panel')).not.toBeInTheDocument();
         expect(container.innerHTML).not.toContain('did:key:');
+        expect(settingsService.patchUiPreferences).toHaveBeenCalledWith({ uiMode: 'simple' });
     });
 
     it('Task 5 (APP-UX-09 P3): keeps SendView and ReceiveView simple, unified, and free of raw did:key in Simple mode', async () => {
@@ -722,8 +735,12 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         fireEvent.click(submitButton);
 
         await waitFor(() => {
-            expect(screen.getByRole('dialog')).toBeInTheDocument();
+            const dialog = screen.getByRole('dialog');
+            expect(dialog).toBeInTheDocument();
+            expect(dialog.textContent).toContain('25');
+            expect(dialog.textContent).toContain('Taler');
         });
+        expect(invoke).not.toHaveBeenCalledWith('create_voucher', expect.anything());
     });
 
     it('Task 8: P10 organizes Help Center for beginners and answers 3 conflict questions calmly', async () => {

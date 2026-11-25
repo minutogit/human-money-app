@@ -2,10 +2,16 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { readFile } from '@tauri-apps/plugin-fs';
+import { marketService } from '../services/marketService';
+import { recoveryService } from '../services/recoveryService';
 import App from '../App';
 
 const mockNavigate = vi.fn();
 let capturedOnFinishLaunchItem: ((item: string) => void) | undefined;
+let capturedGuardianReleaseProps: {
+  isOpen: boolean;
+  initialRequestUri?: string;
+} | null = null;
 const mockSetPendingDroppedFile = vi.fn();
 const mockSessionState = {
   isForkLocked: false,
@@ -38,6 +44,18 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   readFile: vi.fn(),
 }));
 
+vi.mock('../services/marketService', () => ({
+  marketService: {
+    importContactCard: vi.fn(),
+  },
+}));
+
+vi.mock('../services/recoveryService', () => ({
+  recoveryService: {
+    getActiveRecoverySession: vi.fn().mockResolvedValue(null),
+  },
+}));
+
 vi.mock('../context/SessionContext', () => ({
   SessionProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   useSession: () => mockSessionState,
@@ -68,7 +86,13 @@ vi.mock('../components/shell/GlobalFileDropZone', () => ({
   GlobalFileDropZone: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock('../components/auth/GuardianReleaseModal', () => ({
-  GuardianReleaseModal: () => null,
+  GuardianReleaseModal: (props: { isOpen: boolean; initialRequestUri?: string }) => {
+    capturedGuardianReleaseProps = {
+      isOpen: props.isOpen,
+      initialRequestUri: props.initialRequestUri,
+    };
+    return null;
+  },
 }));
 vi.mock('../components/profile/GlobalProfileEditorModal', () => ({
   GlobalProfileEditorModal: () => null,
@@ -84,9 +108,12 @@ describe('App FIFO launch queue with deferred ack (H9)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capturedOnFinishLaunchItem = undefined;
+    capturedGuardianReleaseProps = null;
     mockSessionState.isAuthenticated = false;
     mockSessionState.protectAction.mockImplementation(async (fn: (pwd: string | null) => Promise<unknown>) => fn(null));
     mockNavState.appState = { view: 'needs_login' };
+    vi.mocked(marketService.importContactCard).mockReset();
+    vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(null);
   });
 
   it('keeps auth-required items un-acked until login and processes/acks them sequentially in FIFO order', async () => {
@@ -258,5 +285,136 @@ describe('App FIFO launch queue with deferred ack (H9)', () => {
       expect(mockSessionState.protectAction).toHaveBeenCalledTimes(1);
     });
     expect(acked).toEqual([]);
+  });
+
+  it('routes humoco://recovery-reply to needs_recovery during reset_local_password session and restore_backup otherwise', async () => {
+    const recoveryUri = 'humoco://recovery-reply?v=1&data=replydata';
+    const acked: string[] = [];
+
+    (invoke as Mock).mockImplementation(async (cmd: string, args?: { item?: string }) => {
+      if (cmd === 'peek_startup_launch_items') return [recoveryUri];
+      if (cmd === 'ack_startup_launch_item' && args?.item) {
+        acked.push(args.item);
+        return true;
+      }
+      return undefined;
+    });
+
+    vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValueOnce({
+      sessionMode: 'reset_local_password',
+    } as Awaited<ReturnType<typeof recoveryService.getActiveRecoverySession>>);
+
+    const first = render(<App />);
+    await waitFor(() => {
+      expect(acked).toEqual([recoveryUri]);
+    });
+    expect(mockNavigate).toHaveBeenCalledWith({
+      view: 'needs_recovery',
+      initialPayload: recoveryUri,
+    });
+    first.unmount();
+
+    mockNavigate.mockClear();
+    acked.length = 0;
+    vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValueOnce(null);
+
+    render(<App />);
+    await waitFor(() => {
+      expect(acked).toEqual([recoveryUri]);
+    });
+    expect(mockNavigate).toHaveBeenCalledWith({
+      view: 'restore_backup',
+      initialMethod: 'social',
+      initialPayload: recoveryUri,
+    });
+  });
+
+  it('routes accepted card URI to marketplace, surfaces rejected_offender feedback, and keeps un-acked on auth cancel', async () => {
+    const cardUri = 'humoco://card?env=eyJjYXJkX3dpcmUiOiJhLmIuYyJ9';
+    const acked: string[] = [];
+
+    (invoke as Mock).mockImplementation(async (cmd: string, args?: { item?: string }) => {
+      if (cmd === 'peek_startup_launch_items') return [cardUri];
+      if (cmd === 'ack_startup_launch_item' && args?.item) {
+        acked.push(args.item);
+        return true;
+      }
+      return undefined;
+    });
+
+    mockSessionState.isAuthenticated = true;
+    mockNavState.appState = { view: 'logged_in' };
+
+    // 1. Accepted card navigates to marketplace profile and acks
+    vi.mocked(marketService.importContactCard).mockResolvedValueOnce({
+      status: 'accepted',
+      did: 'did:key:zCard1',
+      replaced: false,
+    });
+    const first = render(<App />);
+    await waitFor(() => {
+      expect(acked).toEqual([cardUri]);
+    });
+    expect(mockNavigate).toHaveBeenCalledWith({
+      view: 'marketplace',
+      selectedDid: 'did:key:zCard1',
+    });
+    first.unmount();
+
+    // 2. Rejected offender shows localized feedback banner and acks
+    mockNavigate.mockClear();
+    acked.length = 0;
+    vi.mocked(marketService.importContactCard).mockResolvedValueOnce({
+      status: 'rejected_offender',
+      replaced: false,
+    });
+    const second = render(<App />);
+    await waitFor(() => {
+      expect(acked).toEqual([cardUri]);
+      expect(screen.getByTestId('deeplink-feedback-banner')).toHaveTextContent(
+        /Known Offender|böswilliger Akteur|malicious actor/i,
+      );
+    });
+    expect(mockNavigate).not.toHaveBeenCalled();
+    second.unmount();
+
+    // 3. Auth cancel error keeps card URI un-acked
+    acked.length = 0;
+    vi.mocked(marketService.importContactCard).mockRejectedValueOnce(
+      new Error('User cancelled authentication'),
+    );
+    render(<App />);
+    await waitFor(() => {
+      expect(marketService.importContactCard).toHaveBeenCalledTimes(3);
+    });
+    expect(acked).toEqual([]);
+  });
+
+  it('opens GuardianReleaseModal on recovery-req URI and acks unreadable launch files without stalling queue', async () => {
+    const brokenFile = '/tmp/broken.transfer';
+    const reqUri = 'humoco://recovery-req?v=1&data=reqabc';
+    const acked: string[] = [];
+
+    (readFile as Mock).mockRejectedValueOnce(new Error('ENOENT: missing'));
+    (invoke as Mock).mockImplementation(async (cmd: string, args?: { item?: string }) => {
+      if (cmd === 'peek_startup_launch_items') return [brokenFile, reqUri];
+      if (cmd === 'ack_startup_launch_item' && args?.item) {
+        acked.push(args.item);
+        return true;
+      }
+      return undefined;
+    });
+
+    mockSessionState.isAuthenticated = true;
+    mockNavState.appState = { view: 'logged_in' };
+    render(<App />);
+
+    await waitFor(() => {
+      expect(acked).toEqual([brokenFile, reqUri]);
+    });
+    expect(capturedGuardianReleaseProps).toEqual({
+      isOpen: true,
+      initialRequestUri: reqUri,
+    });
   });
 });

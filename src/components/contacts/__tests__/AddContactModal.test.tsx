@@ -5,8 +5,13 @@ import { AddContactModal } from '../AddContactModal';
 import { UiModeProvider } from '../../../context/UiModeContext';
 import { readFromClipboard } from '../../../utils/clipboard';
 import { marketService } from '../../../services/marketService';
+import { profileService } from '../../../services/profileService';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
+
+const mockProtectAction = vi.fn(
+  async (action: (password: string | null) => Promise<unknown>) => await action(null),
+);
 
 vi.mock('../../../utils/clipboard', () => ({
   readFromClipboard: vi.fn(),
@@ -19,9 +24,15 @@ vi.mock('../../../services/marketService', () => ({
   },
 }));
 
+vi.mock('../../../services/profileService', () => ({
+  profileService: {
+    getUserId: vi.fn().mockResolvedValue('did:key:z6MkTestDid2222222222222222222222222222222222222'),
+  },
+}));
+
 vi.mock('../../../context/SessionContext', () => ({
   useSession: () => ({
-    protectAction: vi.fn(async (action) => await action(undefined)),
+    protectAction: mockProtectAction,
   }),
   useOptionalSession: () => null,
 }));
@@ -44,6 +55,13 @@ describe('AddContactModal Component', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    mockProtectAction.mockImplementation(
+      async (action: (password: string | null) => Promise<unknown>) => await action(null),
+    );
+    vi.mocked(marketService.probeContactSyncs).mockResolvedValue([]);
+    vi.mocked(profileService.getUserId).mockResolvedValue(
+      'did:key:z6MkTestDid2222222222222222222222222222222222222',
+    );
   });
 
   it('renders smart input and disclosure in Simple mode and hides 4 expert tiles', async () => {
@@ -294,5 +312,186 @@ describe('AddContactModal Component', () => {
         expect.stringMatching(/Ungültiges Kontakt- oder Visitenkarten-Format|Invalid contact card or business card format/i)
       );
     });
+  });
+
+  it('blocks importing own active DID in smart input without opening manual dialog', async () => {
+    render(
+      <AddContactModal
+        isOpen={true}
+        onClose={mockOnClose}
+        onOpenManualAdd={mockOnOpenManualAdd}
+        onContactAdded={mockOnContactAdded}
+        onSuccess={mockOnSuccess}
+        onError={mockOnError}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('smart-contact-input'), {
+      target: { value: 'did:key:z6MkTestDid2222222222222222222222222222222222222' },
+    });
+    fireEvent.click(screen.getByTestId('smart-contact-submit'));
+
+    const errNode = await screen.findByTestId('smart-add-error');
+    expect(errNode.textContent).toMatch(/eigenes Profil|currently active own profile/i);
+    expect(mockOnError).toHaveBeenCalledWith(errNode.textContent);
+    expect(mockOnOpenManualAdd).not.toHaveBeenCalled();
+    expect(mockOnClose).not.toHaveBeenCalled();
+  });
+
+  it('parses humoco://contact URI with multi-word name and sync URLs and forwards them to manual add', async () => {
+    const contactUri =
+      'humoco://contact?did=did%3Akey%3Az6MkAnna111111111111111111111111111111111111&name=Anna+Maria+Schmidt&sync=https%3A%2F%2Fsync.example.org%2Fsync.php';
+
+    render(
+      <AddContactModal
+        isOpen={true}
+        onClose={mockOnClose}
+        onOpenManualAdd={mockOnOpenManualAdd}
+        onContactAdded={mockOnContactAdded}
+        onSuccess={mockOnSuccess}
+        onError={mockOnError}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('smart-contact-input'), {
+      target: { value: contactUri },
+    });
+    fireEvent.click(screen.getByTestId('smart-contact-submit'));
+
+    await waitFor(() => {
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+      expect(mockOnOpenManualAdd).toHaveBeenCalledWith(
+        'did:key:z6MkAnna111111111111111111111111111111111111',
+        { firstName: 'Anna Maria', lastName: 'Schmidt' },
+        ['https://sync.example.org/sync.php'],
+      );
+    });
+  });
+
+  it('H1: never forwards consumed hmc_grant_* one-shot token to probeContactSyncs after card import', async () => {
+    const cardPayload = '{"card_wire":"header.payload.sig"}';
+    mockProtectAction.mockImplementationOnce(
+      async (action: (pwd: string | null) => Promise<unknown>) => await action('hmc_grant_oneshot_abc'),
+    );
+    vi.mocked(marketService.importContactCard).mockResolvedValueOnce({
+      status: 'accepted',
+      did: 'did:key:zCardImported',
+      replaced: true,
+    });
+
+    render(
+      <AddContactModal
+        isOpen={true}
+        onClose={mockOnClose}
+        onOpenManualAdd={mockOnOpenManualAdd}
+        onContactAdded={mockOnContactAdded}
+        onSuccess={mockOnSuccess}
+        onError={mockOnError}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('smart-contact-input'), {
+      target: { value: cardPayload },
+    });
+    fireEvent.click(screen.getByTestId('smart-contact-submit'));
+
+    await waitFor(() => {
+      expect(marketService.importContactCard).toHaveBeenCalledWith(cardPayload, 'hmc_grant_oneshot_abc');
+      expect(marketService.probeContactSyncs).toHaveBeenCalledWith(false, undefined);
+      expect(mockOnContactAdded).toHaveBeenCalledTimes(1);
+      expect(mockOnSuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/newer version of this business card was successfully saved|Visitenkarte erfolgreich aktualisiert/i),
+      );
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('maps non-accepted card import statuses to inline error without closing', async () => {
+    const cases: Array<{ status: 'ignored_stale' | 'rejected_expired' | 'rejected_hops' | 'rejected_offender'; re: RegExp }> = [
+      { status: 'ignored_stale', re: /gleicher oder neuerer Version|same or newer version/i },
+      { status: 'rejected_expired', re: /abgelaufen|expired/i },
+      { status: 'rejected_hops', re: /maximum allowed recommendation distance|Reichweite|hop/i },
+      { status: 'rejected_offender', re: /Known Offender|malicious|Betrugsverdacht|böswilliger/i },
+    ];
+
+    render(
+      <AddContactModal
+        isOpen={true}
+        onClose={mockOnClose}
+        onOpenManualAdd={mockOnOpenManualAdd}
+        onContactAdded={mockOnContactAdded}
+        onSuccess={mockOnSuccess}
+        onError={mockOnError}
+      />
+    );
+
+    for (const c of cases) {
+      vi.mocked(marketService.importContactCard).mockResolvedValueOnce({
+        status: c.status,
+        replaced: false,
+      });
+      fireEvent.change(screen.getByTestId('smart-contact-input'), {
+        target: { value: '{"card_wire":"h.p.s"}' },
+      });
+      fireEvent.click(screen.getByTestId('smart-contact-submit'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('smart-add-error')).toHaveTextContent(c.re);
+      });
+      expect(mockOnError).toHaveBeenLastCalledWith(expect.stringMatching(c.re));
+      expect(mockOnClose).not.toHaveBeenCalled();
+    }
+  });
+
+  it('surfaces empty smart paste error and ignores stale async card import after closing modal', async () => {
+    (readFromClipboard as Mock).mockResolvedValueOnce({ text: '   ', error: undefined });
+    let resolveDeferred!: (res: { status: 'accepted'; did: string; replaced: boolean }) => void;
+    vi.mocked(marketService.importContactCard).mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveDeferred = resolve;
+      }),
+    );
+
+    const { rerender } = render(
+      <AddContactModal
+        isOpen={true}
+        onClose={mockOnClose}
+        onOpenManualAdd={mockOnOpenManualAdd}
+        onContactAdded={mockOnContactAdded}
+        onSuccess={mockOnSuccess}
+        onError={mockOnError}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('smart-paste-clipboard-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('smart-add-error')).toHaveTextContent(/Zwischenablage ist leer|Clipboard is empty/i);
+    });
+
+    fireEvent.change(screen.getByTestId('smart-contact-input'), {
+      target: { value: '{"card_wire":"slow.p.s"}' },
+    });
+    fireEvent.click(screen.getByTestId('smart-contact-submit'));
+    await waitFor(() => {
+      expect(marketService.importContactCard).toHaveBeenCalledTimes(1);
+    });
+
+    // Close modal before deferred promise resolves -> stale completion must do nothing
+    rerender(
+      <AddContactModal
+        isOpen={false}
+        onClose={mockOnClose}
+        onOpenManualAdd={mockOnOpenManualAdd}
+        onContactAdded={mockOnContactAdded}
+        onSuccess={mockOnSuccess}
+        onError={mockOnError}
+      />
+    );
+    resolveDeferred({ status: 'accepted', did: 'did:key:zStale', replaced: false });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockOnSuccess).not.toHaveBeenCalled();
+    expect(mockOnContactAdded).not.toHaveBeenCalled();
   });
 });
