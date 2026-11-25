@@ -448,22 +448,78 @@ mod tests {
 
     #[test]
     fn f4_corrupt_profile_metadata_fails_closed_without_overwrite() {
-        let dir = crate::test_support::temp_test_dir("f4_corrupt_profile_meta");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("f4_corrupt_profile_meta"));
+        let dir = &dir_guard.0;
         let meta_path = dir.join(PROFILE_METADATA_FILE);
         let corrupt = br#"{"broken": "#;
         std::fs::write(&meta_path, corrupt).unwrap();
 
-        assert!(load_profile_metadata_in_dir(&dir).is_err());
-        assert!(record_profile_metadata_in_dir(&dir, "p1", Some("did:key:z1".into())).is_err());
-        assert!(remove_profile_metadata_entry_in_dir(&dir, "p1").is_err());
+        let err_load = load_profile_metadata_in_dir(dir)
+            .expect_err("corrupt profile_metadata.json must fail load");
+        assert!(
+            err_load.contains("Failed to parse profile metadata"),
+            "unexpected load error: {}",
+            err_load
+        );
+
+        let err_rec = record_profile_metadata_in_dir(dir, "p1", Some("did:key:z1".into()))
+            .expect_err("corrupt profile_metadata.json must fail record");
+        assert!(
+            err_rec.contains("Failed to parse profile metadata"),
+            "unexpected record error: {}",
+            err_rec
+        );
+
+        let err_rem = remove_profile_metadata_entry_in_dir(dir, "p1")
+            .expect_err("corrupt profile_metadata.json must fail remove");
+        assert!(
+            err_rem.contains("Failed to parse profile metadata"),
+            "unexpected remove error: {}",
+            err_rem
+        );
+
+        assert!(
+            load_profile_metadata_map_from_dir(dir).is_empty(),
+            "display helper must fall back to empty map without mutating disk"
+        );
         assert_eq!(
             std::fs::read(&meta_path).unwrap(),
             corrupt,
             "F4: corrupt profile_metadata.json must NEVER be overwritten on read/parse error"
         );
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    #[test]
+    fn test_profile_metadata_roundtrip_preserves_user_id_and_removes_entry() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("profile_meta_roundtrip"));
+        let dir = &dir_guard.0;
+
+        assert!(
+            load_profile_metadata_in_dir(dir).unwrap().is_empty(),
+            "missing profile_metadata.json must load as empty map"
+        );
+
+        record_profile_metadata_in_dir(dir, "wallet_1", Some("did:key:zAlice".to_string()))
+            .unwrap();
+        record_profile_metadata_in_dir(dir, "wallet_1", None).unwrap();
+
+        let loaded = load_profile_metadata_in_dir(dir).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            loaded.get("wallet_1").and_then(|m| m.user_id.as_deref()),
+            Some("did:key:zAlice"),
+            "updating last_used with None user_id must preserve existing user_id"
+        );
+
+        let display_map = load_profile_metadata_map_from_dir(dir);
+        assert_eq!(
+            display_map.get("wallet_1").and_then(|(_, uid)| uid.as_deref()),
+            Some("did:key:zAlice")
+        );
+
+        remove_profile_metadata_entry_in_dir(dir, "nonexistent").unwrap();
+        remove_profile_metadata_entry_in_dir(dir, "wallet_1").unwrap();
+        assert!(load_profile_metadata_in_dir(dir).unwrap().is_empty());
     }
 
     #[cfg(unix)]
@@ -471,8 +527,8 @@ mod tests {
     fn s07_f16_write_file_atomic_sets_0600_and_restore_rejects_symlink_and_colon_id() {
         use std::os::unix::fs::{symlink, PermissionsExt};
 
-        let dir = crate::test_support::temp_test_dir("s07_f16_fs");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("s07_f16_fs"));
+        let dir = &dir_guard.0;
 
         let target = dir.join("secret.json");
         write_file_atomic(&target, b"secret-data").unwrap();
@@ -491,35 +547,182 @@ mod tests {
         let valid_toml = human_money_core::test_utils::generate_signed_standard_toml(
             "voucher_standards/freetaler_v1/standard.toml",
         );
+
         let mut bad_map = HashMap::new();
         bad_map.insert("bad:colon".to_string(), valid_toml.clone());
-        let restored_colon = restore_custom_standards_to_dir(&standards_base, &bad_map).unwrap();
-        assert_eq!(
-            restored_colon, 0,
-            "S07-F16: unsafe filename component with ':' must be rejected"
-        );
+        bad_map.insert("invalid_toml".to_string(), "not = [valid toml".to_string());
+        let skipped = restore_custom_standards_to_dir(&standards_base, &bad_map).unwrap();
+        assert_eq!(skipped, 0, "unsafe id and invalid TOML must both be skipped");
+        assert!(!standards_base.join("invalid_toml").exists());
 
+        // Positive baseline: valid standard restores once and never overwrites existing file
+        let mut good_map = HashMap::new();
+        good_map.insert("good_std".to_string(), valid_toml.clone());
+        let restored = restore_custom_standards_to_dir(&standards_base, &good_map).unwrap();
+        assert_eq!(restored, 1);
+        let existing_file = standards_base.join("good_std").join("standard.toml");
+        std::fs::write(&existing_file, b"sentinel").unwrap();
+        assert_eq!(
+            restore_custom_standards_to_dir(&standards_base, &good_map).unwrap(),
+            0,
+            "existing custom standard must not be overwritten"
+        );
+        assert_eq!(std::fs::read(&existing_file).unwrap(), b"sentinel");
+
+        // Negative: symlinked target_dir
         let mut sym_map = HashMap::new();
-        sym_map.insert("sym_std".to_string(), valid_toml);
-        let sym_res = restore_custom_standards_to_dir(&standards_base, &sym_map);
+        sym_map.insert("sym_std".to_string(), valid_toml.clone());
+        let sym_dir_err = restore_custom_standards_to_dir(&standards_base, &sym_map)
+            .expect_err("symlinked target_dir must return error");
         assert!(
-            sym_res.is_err() || !outside_dir.join("standard.toml").exists(),
-            "S07-F16: restore_custom_standards_to_dir must NEVER write through symlink target_dir"
+            sym_dir_err.message.contains("symlink directory"),
+            "unexpected error for symlink dir: {}",
+            sym_dir_err.message
         );
         assert!(
             !outside_dir.join("standard.toml").exists(),
-            "S07-F16: outside symlink target must remain untouched"
+            "outside symlink target must remain untouched"
         );
 
-        let _ = std::fs::remove_dir_all(&dir);
+        // Negative: symlinked standards_base directory
+        let sym_base = dir.join("sym_base");
+        symlink(&standards_base, &sym_base).unwrap();
+        let sym_base_err = restore_custom_standards_to_dir(&sym_base, &good_map)
+            .expect_err("symlinked standards_base must return error");
+        assert!(
+            sym_base_err.message.contains("symlinked directory"),
+            "unexpected error for symlink base: {}",
+            sym_base_err.message
+        );
+
+        // Negative: symlinked target standard.toml file
+        std::fs::create_dir_all(standards_base.join("sym_file_std")).unwrap();
+        std::fs::write(outside_dir.join("outside.toml"), b"outside").unwrap();
+        symlink(
+            outside_dir.join("outside.toml"),
+            standards_base.join("sym_file_std").join("standard.toml"),
+        )
+        .unwrap();
+        let mut sym_file_map = HashMap::new();
+        sym_file_map.insert("sym_file_std".to_string(), valid_toml);
+        let sym_file_err = restore_custom_standards_to_dir(&standards_base, &sym_file_map)
+            .expect_err("symlinked standard.toml target must return error");
+        assert!(
+            sym_file_err.message.contains("symlink file"),
+            "unexpected error for symlink file: {}",
+            sym_file_err.message
+        );
+        assert_eq!(
+            std::fs::read(outside_dir.join("outside.toml")).unwrap(),
+            b"outside"
+        );
     }
 
     #[test]
-    fn s07_f4_f8_f14_f16_f20_fs_primitives_and_cleanup_invariants() {
-        let dir = crate::test_support::temp_test_dir("s07_fs_primitives");
-        std::fs::create_dir_all(&dir).unwrap();
+    fn test_collect_custom_standards_rejects_symlinks_unsafe_ids_and_oversized_files() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("collect_custom_standards_sec"));
+        let dir = &dir_guard.0;
+        let standards_base = dir.join("standards");
+        let outside_dir = dir.join("outside");
+        std::fs::create_dir_all(standards_base.join("valid_std")).unwrap();
+        std::fs::create_dir_all(standards_base.join("exact_max")).unwrap();
+        std::fs::create_dir_all(standards_base.join("huge_std")).unwrap();
+        std::fs::create_dir_all(standards_base.join("non_utf8")).unwrap();
+        std::fs::create_dir_all(standards_base.join("bad:colon")).unwrap();
+        std::fs::create_dir_all(&outside_dir).unwrap();
 
-        // 1. is_safe_filename_component
+        std::fs::write(
+            standards_base.join("valid_std").join("standard.toml"),
+            "name = \"ok\"",
+        )
+        .unwrap();
+        let exact_max_bytes = vec![b'#'; MAX_CUSTOM_STANDARD_TOML_BYTES];
+        std::fs::write(
+            standards_base.join("exact_max").join("standard.toml"),
+            &exact_max_bytes,
+        )
+        .unwrap();
+        std::fs::write(
+            standards_base.join("huge_std").join("standard.toml"),
+            vec![b'a'; MAX_CUSTOM_STANDARD_TOML_BYTES + 1],
+        )
+        .unwrap();
+        std::fs::write(
+            standards_base.join("non_utf8").join("standard.toml"),
+            [0xffu8, 0xfe],
+        )
+        .unwrap();
+        std::fs::write(
+            standards_base.join("bad:colon").join("standard.toml"),
+            "name = \"bad\"",
+        )
+        .unwrap();
+        std::fs::write(outside_dir.join("standard.toml"), "secret = true").unwrap();
+
+        // Missing or file (non-dir) standards_base returns empty map
+        assert!(collect_custom_standards_from_dir(&dir.join("missing")).is_empty());
+        let not_dir = dir.join("not_a_dir");
+        std::fs::write(&not_dir, b"x").unwrap();
+        assert!(collect_custom_standards_from_dir(&not_dir).is_empty());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(&outside_dir, standards_base.join("sym_dir")).unwrap();
+            std::fs::create_dir_all(standards_base.join("sym_file_std")).unwrap();
+            symlink(
+                outside_dir.join("standard.toml"),
+                standards_base.join("sym_file_std").join("standard.toml"),
+            )
+            .unwrap();
+            let sym_base = dir.join("sym_base");
+            symlink(&standards_base, &sym_base).unwrap();
+            assert!(
+                collect_custom_standards_from_dir(&sym_base).is_empty(),
+                "symlinked standards_dir base must yield empty map"
+            );
+        }
+
+        let collected = collect_custom_standards_from_dir(&standards_base);
+        assert_eq!(
+            collected.get("valid_std").map(String::as_str),
+            Some("name = \"ok\"")
+        );
+        assert_eq!(
+            collected.get("exact_max").map(|s| s.len()),
+            Some(MAX_CUSTOM_STANDARD_TOML_BYTES),
+            "exact 1 MiB limit standard.toml must still be accepted"
+        );
+        assert!(
+            !collected.contains_key("huge_std"),
+            "oversized standard.toml (> 1 MiB) must not be collected"
+        );
+        assert!(
+            !collected.contains_key("non_utf8"),
+            "non-UTF-8 standard.toml must not be collected"
+        );
+        assert!(
+            !collected.contains_key("bad:colon"),
+            "unsafe directory name with ':' must not be collected"
+        );
+        #[cfg(unix)]
+        {
+            assert!(
+                !collected.contains_key("sym_dir"),
+                "symlink child directory must not be collected"
+            );
+            assert!(
+                !collected.contains_key("sym_file_std"),
+                "symlink standard.toml file must not be collected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_safe_filename_component_and_canonical_child_of() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("fs_safe_name_child"));
+        let dir = &dir_guard.0;
+
         assert!(is_safe_filename_component("minuto_v1"));
         assert!(is_safe_filename_component("blob-01.enc"));
         for bad in [
@@ -541,57 +744,180 @@ mod tests {
             );
         }
 
-        // 2. is_canonical_child_of + read_regular_file_bounded
         let child = dir.join("child.bin");
         write_file_atomic(&child, b"12345678").unwrap();
-        assert!(is_canonical_child_of(&child, &dir));
-        assert!(!is_canonical_child_of(&dir, &dir));
-        assert_eq!(read_regular_file_bounded(&child, 8).unwrap(), b"12345678");
-        assert!(read_regular_file_bounded(&child, 7).is_err());
-        assert!(read_regular_file_bounded(&dir, 1024).is_err());
+        assert!(is_canonical_child_of(&child, dir));
+        assert!(!is_canonical_child_of(dir, dir));
+        assert!(!is_canonical_child_of(&dir.join("missing.bin"), dir));
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
             let sym = dir.join("sym_child.bin");
             symlink(&child, &sym).unwrap();
-            assert!(!is_canonical_child_of(&sym, &dir));
-            assert!(read_regular_file_bounded(&sym, 1024).is_err());
+            assert!(!is_canonical_child_of(&sym, dir));
         }
+    }
 
-        // 3. resolve_or_create_fallback_instance_id_in_dir is stable across repeated calls
+    #[test]
+    fn test_read_regular_file_bounded_enforces_limit_and_rejects_non_regular() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("fs_read_bounded"));
+        let dir = &dir_guard.0;
+
+        let child = dir.join("child.bin");
+        write_file_atomic(&child, b"12345678").unwrap();
+        assert_eq!(read_regular_file_bounded(&child, 8).unwrap(), b"12345678");
+
+        let err_limit = read_regular_file_bounded(&child, 7)
+            .expect_err("file exceeding max_bytes must be rejected");
+        assert!(
+            err_limit
+                .message
+                .contains("exceeds maximum allowed size (7 bytes)"),
+            "unexpected size-limit error: {}",
+            err_limit.message
+        );
+
+        let err_dir =
+            read_regular_file_bounded(dir, 1024).expect_err("directory must not pass as file");
+        assert!(
+            err_dir.message.contains("is not a regular file"),
+            "unexpected directory error: {}",
+            err_dir.message
+        );
+
+        let err_missing = read_regular_file_bounded(&dir.join("missing.bin"), 1024)
+            .expect_err("missing path must fail inspect");
+        assert!(
+            err_missing.message.contains("Failed to inspect"),
+            "unexpected missing error: {}",
+            err_missing.message
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let sym = dir.join("sym_child.bin");
+            symlink(&child, &sym).unwrap();
+            let err_sym =
+                read_regular_file_bounded(&sym, 1024).expect_err("symlink must be rejected");
+            assert!(
+                err_sym.message.contains("is not a regular file"),
+                "unexpected symlink error: {}",
+                err_sym.message
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_or_create_fallback_instance_id_stable_and_replaces_empty() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("fs_fallback_id"));
+        let dir = &dir_guard.0;
         let cfg_dir = dir.join("cfg");
+
         let id1 = resolve_or_create_fallback_instance_id_in_dir(&cfg_dir).unwrap();
         let id2 = resolve_or_create_fallback_instance_id_in_dir(&cfg_dir).unwrap();
         assert_eq!(id1, id2);
-        assert!(!id1.is_empty());
+        assert!(uuid::Uuid::parse_str(&id1).is_ok());
 
-        // 4. cleanup_stale_tmp_restore_files_at expires pwreset_* after 1h and active_recovery_session.json after 7d
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(cfg_dir.join("instance_id_fallback"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        // Whitespace-only fallback file is replaced with a fresh valid UUID and persisted
+        std::fs::write(cfg_dir.join("instance_id_fallback"), b"   \n\t ").unwrap();
+        let replacement = resolve_or_create_fallback_instance_id_in_dir(&cfg_dir).unwrap();
+        assert!(uuid::Uuid::parse_str(&replacement).is_ok());
+        assert_ne!(replacement, id1);
+        assert_eq!(
+            std::fs::read_to_string(cfg_dir.join("instance_id_fallback")).unwrap(),
+            replacement
+        );
+    }
+
+    #[test]
+    fn test_cleanup_stale_tmp_restore_files_at_respects_ttls_prefixes_and_symlinks() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("fs_cleanup_ttl"));
+        let dir = &dir_guard.0;
         let tmp_dir = dir.join("tmp_restore");
+        let outside = dir.join("outside");
         std::fs::create_dir_all(tmp_dir.join("pwreset_old")).unwrap();
+        std::fs::create_dir_all(tmp_dir.join("other_dir")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(tmp_dir.join("pwreset_old").join("dummy"), b"x").unwrap();
+        std::fs::write(tmp_dir.join("other_dir").join("keep"), b"k").unwrap();
         std::fs::write(tmp_dir.join("dropped_old.hmcbackup"), b"y").unwrap();
         std::fs::write(tmp_dir.join("active_recovery_session.json"), b"{}").unwrap();
+        std::fs::write(outside.join("keep.txt"), b"outside").unwrap();
 
-        let after_2h = std::time::SystemTime::now() + std::time::Duration::from_secs(7200);
-        cleanup_stale_tmp_restore_files_at(&tmp_dir, after_2h);
-        assert!(
-            !tmp_dir.join("pwreset_old").exists(),
-            "S07-F20: stale pwreset_* directory must be swept after 1 hour"
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(&outside, tmp_dir.join("pwreset_sym")).unwrap();
+        }
+
+        let mtimes = [
+            fs::symlink_metadata(tmp_dir.join("pwreset_old"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            fs::symlink_metadata(tmp_dir.join("dropped_old.hmcbackup"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            fs::symlink_metadata(tmp_dir.join("active_recovery_session.json"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+        ];
+        let earliest_mtime = *mtimes.iter().min().unwrap();
+        let latest_mtime = *mtimes.iter().max().unwrap();
+        let session_mtime = mtimes[2];
+
+        // Exact 3600s boundary: elapsed.as_secs() <= 3600 -> everything survives
+        cleanup_stale_tmp_restore_files_at(
+            &tmp_dir,
+            earliest_mtime + std::time::Duration::from_secs(3600),
         );
+        assert!(tmp_dir.join("pwreset_old").exists());
+        assert!(tmp_dir.join("dropped_old.hmcbackup").exists());
+        assert!(tmp_dir.join("active_recovery_session.json").exists());
+
+        // 3601s after latest creation: pwreset_* and dropped file expire; other_dir and session survive
+        cleanup_stale_tmp_restore_files_at(
+            &tmp_dir,
+            latest_mtime + std::time::Duration::from_secs(3601),
+        );
+        assert!(!tmp_dir.join("pwreset_old").exists());
         assert!(!tmp_dir.join("dropped_old.hmcbackup").exists());
-        assert!(
-            tmp_dir.join("active_recovery_session.json").exists(),
-            "active_recovery_session.json must survive < 7 days"
-        );
+        assert!(tmp_dir.join("other_dir").join("keep").exists());
+        assert!(tmp_dir.join("active_recovery_session.json").exists());
 
-        let after_8d = std::time::SystemTime::now() + std::time::Duration::from_secs(8 * 86_400);
-        cleanup_stale_tmp_restore_files_at(&tmp_dir, after_8d);
-        assert!(
-            !tmp_dir.join("active_recovery_session.json").exists(),
-            "S07-F4: active_recovery_session.json must expire after 7 days"
+        // Exact 7-day boundary: active_recovery_session.json still survives
+        cleanup_stale_tmp_restore_files_at(
+            &tmp_dir,
+            session_mtime + std::time::Duration::from_secs(ACTIVE_RECOVERY_SESSION_MAX_AGE_SECS),
         );
+        assert!(tmp_dir.join("active_recovery_session.json").exists());
 
-        let _ = std::fs::remove_dir_all(&dir);
+        // 7d + 1s: active_recovery_session.json expires; non-pwreset dir and symlink/outside survive
+        cleanup_stale_tmp_restore_files_at(
+            &tmp_dir,
+            session_mtime + std::time::Duration::from_secs(ACTIVE_RECOVERY_SESSION_MAX_AGE_SECS + 1),
+        );
+        assert!(!tmp_dir.join("active_recovery_session.json").exists());
+        assert!(tmp_dir.join("other_dir").join("keep").exists());
+        #[cfg(unix)]
+        {
+            assert!(fs::symlink_metadata(tmp_dir.join("pwreset_sym")).is_ok());
+            assert_eq!(std::fs::read(outside.join("keep.txt")).unwrap(), b"outside");
+        }
     }
 }

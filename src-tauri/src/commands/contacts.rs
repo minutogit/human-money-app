@@ -219,11 +219,34 @@ mod tests {
 
         assert_eq!(original.did, deserialized.did);
         assert_eq!(original.tags, deserialized.tags);
+        assert_eq!(original.added_at, deserialized.added_at);
+        assert_eq!(original.notes, deserialized.notes);
+        assert_eq!(original.profile.id, deserialized.profile.id);
         assert_eq!(original.profile.first_name, deserialized.profile.first_name);
+        assert_eq!(original.profile.last_name, deserialized.profile.last_name);
         assert_eq!(
             original.profile.organization,
             deserialized.profile.organization
         );
+        assert_eq!(original.profile.community, deserialized.profile.community);
+        let orig_addr = original.profile.address.as_ref().unwrap();
+        let des_addr = deserialized.profile.address.as_ref().unwrap();
+        assert_eq!(orig_addr.street, des_addr.street);
+        assert_eq!(orig_addr.house_number, des_addr.house_number);
+        assert_eq!(orig_addr.zip_code, des_addr.zip_code);
+        assert_eq!(orig_addr.city, des_addr.city);
+        assert_eq!(orig_addr.country, des_addr.country);
+        assert_eq!(orig_addr.full_address, des_addr.full_address);
+        assert_eq!(original.profile.gender, deserialized.profile.gender);
+        assert_eq!(original.profile.email, deserialized.profile.email);
+        assert_eq!(original.profile.phone, deserialized.profile.phone);
+        assert_eq!(original.profile.coordinates, deserialized.profile.coordinates);
+        assert_eq!(original.profile.url, deserialized.profile.url);
+        assert_eq!(
+            original.profile.service_offer,
+            deserialized.profile.service_offer
+        );
+        assert_eq!(original.profile.needs, deserialized.profile.needs);
     }
 
     #[test]
@@ -231,19 +254,50 @@ mod tests {
         use crate::models::{FrontendAddressBook, FrontendContact, FrontendUserProfile};
         use chrono::Utc;
         use human_money_core::app_service::AppService;
-        use std::path::PathBuf;
 
-        // Mock AppState with cached contacts
-        let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
+        let temp_guard =
+            crate::services::fs_helpers::TempDirGuard(crate::test_support::temp_test_dir("contacts_cache"));
+        let service = AppService::new(&temp_guard.0).unwrap();
+
+        let state_raw = AppState::new(service);
+        let init_err = state_raw
+            .get_cached_contacts()
+            .expect_err("uninitialized contacts cache must fail closed");
+        assert!(
+            init_err.to_string().contains("Contacts cache not initialized"),
+            "unexpected error: {}",
+            init_err
+        );
+
         let mut book = FrontendAddressBook::default();
         book.contacts.insert(
-            "did:key:test".to_string(),
+            "did:key:zara".to_string(),
             FrontendContact {
-                did: "did:key:test".to_string(),
+                did: "did:key:zara".to_string(),
                 profile: FrontendUserProfile {
-                    id: Some("did:key:test".to_string()),
-                    first_name: Some("Cached".to_string()),
-                    last_name: Some("User".to_string()),
+                    id: Some("did:key:zara".to_string()),
+                    first_name: Some("Zara".to_string()),
+                    last_name: Some("Last".to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: None,
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![],
+            },
+        );
+        book.contacts.insert(
+            "did:key:alice".to_string(),
+            FrontendContact {
+                did: "did:key:alice".to_string(),
+                profile: FrontendUserProfile {
+                    id: Some("did:key:alice".to_string()),
+                    first_name: Some("alice".to_string()),
+                    last_name: Some("First".to_string()),
                     ..Default::default()
                 },
                 tags: vec![],
@@ -257,23 +311,21 @@ mod tests {
             },
         );
 
-        let state_raw = AppState::new(service);
         state_raw.set_cached_contacts(Some(book));
 
-        let cache = state_raw.cache_contacts();
-        assert!(cache.is_some());
-        assert_eq!(cache.as_ref().unwrap().contacts.len(), 1);
-        assert_eq!(
-            cache
-                .as_ref()
-                .unwrap()
-                .contacts
-                .get("did:key:test")
-                .unwrap()
-                .profile
-                .first_name,
-            Some("Cached".to_string())
-        );
+        let cached_map = state_raw
+            .cache_contacts()
+            .expect("cached address book must be present");
+        assert_eq!(cached_map.contacts.len(), 2);
+
+        let contacts = state_raw
+            .get_cached_contacts()
+            .expect("cached contacts list must resolve");
+        assert_eq!(contacts.len(), 2);
+        assert_eq!(contacts[0].did, "did:key:alice");
+        assert_eq!(contacts[0].profile.first_name.as_deref(), Some("alice"));
+        assert_eq!(contacts[1].did, "did:key:zara");
+        assert_eq!(contacts[1].profile.first_name.as_deref(), Some("Zara"));
     }
 
     #[test]
@@ -281,8 +333,10 @@ mod tests {
         use crate::models::{FrontendContact, FrontendSyncDescriptor, FrontendUserProfile};
         use chrono::Utc;
 
-        let temp_dir =
-            std::env::temp_dir().join(format!("humoco_contacts_test_{}", uuid::Uuid::new_v4()));
+        let temp_guard = crate::services::fs_helpers::TempDirGuard(
+            crate::test_support::temp_test_dir("humoco_contacts_save"),
+        );
+        let temp_dir = &temp_guard.0;
         let password = "test-password-123";
         let alice_service = crate::test_support::setup_test_app(
             &temp_dir.join("alice"),
@@ -374,6 +428,8 @@ mod tests {
             .find(|c| c.did == *did)
             .expect("Alice should exist");
         assert_eq!(alice.profile.first_name, Some("Alice Renamed".to_string()));
+        assert_eq!(alice.notes.as_deref(), Some("Friend note"));
+        assert_eq!(alice.trust_level, Some(2));
         assert_eq!(
             alice.syncs.len(),
             0,
@@ -394,44 +450,93 @@ mod tests {
             slot_id: None,
             ..Default::default()
         };
-        assert!(validate_contact_sync_descriptors(&[unprobed]).is_ok());
+        validate_contact_sync_descriptors(&[unprobed])
+            .expect("unprobed write_url-only descriptor must pass");
+
+        let read_only = FrontendSyncDescriptor {
+            write_url: String::new(),
+            read_url: "https://sync.example.com/d".to_string(),
+            drop_pub: String::new(),
+            slot_id: None,
+            ..Default::default()
+        };
+        validate_contact_sync_descriptors(&[read_only])
+            .expect("read_url-only descriptor must pass");
 
         let empty_both = FrontendSyncDescriptor::default();
-        assert!(validate_contact_sync_descriptors(&[empty_both]).is_err());
+        let err_empty = validate_contact_sync_descriptors(&[empty_both])
+            .expect_err("empty descriptor must fail");
+        assert!(
+            err_empty.message.contains("writeUrl or readUrl"),
+            "unexpected error for empty descriptor: {}",
+            err_empty.message
+        );
 
         let query_read = FrontendSyncDescriptor {
             write_url: "https://sync.example.com/sync.php".to_string(),
             read_url: "https://sync.example.com/data?leak=1".to_string(),
             ..Default::default()
         };
-        assert!(validate_contact_sync_descriptors(&[query_read]).is_err());
+        let err_query = validate_contact_sync_descriptors(&[query_read])
+            .expect_err("readUrl with query must fail");
+        assert!(
+            err_query
+                .message
+                .contains("must not contain a query string"),
+            "unexpected error for query readUrl: {}",
+            err_query.message
+        );
 
         let ssrf_write = FrontendSyncDescriptor {
             write_url: "http://169.254.169.254/latest/meta-data".to_string(),
             ..Default::default()
         };
-        assert!(validate_contact_sync_descriptors(&[ssrf_write]).is_err());
+        let err_ssrf = validate_contact_sync_descriptors(&[ssrf_write])
+            .expect_err("SSRF writeUrl must fail");
+        assert!(
+            err_ssrf.message.contains("blocked internal/private address"),
+            "unexpected error for SSRF writeUrl: {}",
+            err_ssrf.message
+        );
 
         let bad_pub = FrontendSyncDescriptor {
             write_url: "https://sync.example.com/sync.php".to_string(),
             drop_pub: "not-hex".to_string(),
             ..Default::default()
         };
-        assert!(validate_contact_sync_descriptors(&[bad_pub]).is_err());
+        let err_bad_pub = validate_contact_sync_descriptors(&[bad_pub])
+            .expect_err("non-hex dropPub must fail");
+        assert!(
+            err_bad_pub.message.contains("Invalid sync dropPub"),
+            "unexpected error for non-hex dropPub: {}",
+            err_bad_pub.message
+        );
 
         let weak_pub = FrontendSyncDescriptor {
             write_url: "https://sync.example.com/sync.php".to_string(),
             drop_pub: "00".repeat(32),
             ..Default::default()
         };
-        assert!(validate_contact_sync_descriptors(&[weak_pub]).is_err());
+        let err_weak = validate_contact_sync_descriptors(&[weak_pub])
+            .expect_err("weak small-order dropPub must fail");
+        assert!(
+            err_weak.message.contains("weak small-order point"),
+            "unexpected error for weak dropPub: {}",
+            err_weak.message
+        );
 
         let bad_slot = FrontendSyncDescriptor {
             write_url: "https://sync.example.com/sync.php".to_string(),
             slot_id: Some("bad slot with spaces".to_string()),
             ..Default::default()
         };
-        assert!(validate_contact_sync_descriptors(&[bad_slot]).is_err());
+        let err_slot = validate_contact_sync_descriptors(&[bad_slot])
+            .expect_err("invalid slotId must fail");
+        assert!(
+            err_slot.message.contains("Invalid sync slotId"),
+            "unexpected error for invalid slotId: {}",
+            err_slot.message
+        );
 
         let bad_rep = FrontendSyncDescriptor {
             write_url: "https://sync.example.com/sync.php".to_string(),
@@ -442,6 +547,108 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(validate_contact_sync_descriptors(&[bad_rep]).is_err());
+        let err_rep = validate_contact_sync_descriptors(&[bad_rep])
+            .expect_err("ftp replacement writeUrl must fail");
+        assert!(
+            err_rep.message.contains("must use HTTPS"),
+            "unexpected error for ftp replacement: {}",
+            err_rep.message
+        );
+    }
+
+    #[test]
+    fn test_save_contact_did_validation_and_normalization() {
+        let bob_guard = crate::services::fs_helpers::TempDirGuard(
+            crate::test_support::temp_test_dir("contacts_did_norm"),
+        );
+        let bob_service = crate::test_support::setup_test_app(
+            &bob_guard.0,
+            "Test Bob",
+            crate::test_support::BOB_PHRASE,
+            "pw-did-norm",
+        );
+        let bob_did = bob_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let padded = format!("  {}  ", bob_did);
+        let parsed = human_money_core::ValidatedUserId::parse(&padded)
+            .expect("padded valid DID must normalize cleanly");
+        assert_eq!(parsed.as_str(), bob_did);
+
+        let err_empty = human_money_core::ValidatedUserId::parse("   ")
+            .expect_err("blank DID must be rejected");
+        assert!(matches!(
+            err_empty,
+            human_money_core::crypto::GetPubkeyError::InvalidDidFormat
+        ));
+
+        let err_ws = human_money_core::ValidatedUserId::parse("did:key:bad space")
+            .expect_err("DID with internal whitespace must be rejected");
+        assert!(matches!(
+            err_ws,
+            human_money_core::crypto::GetPubkeyError::UnexpectedWhitespace
+        ));
+    }
+
+    #[test]
+    fn test_delete_contact_removes_saved_entry() {
+        use crate::models::{FrontendContact, FrontendUserProfile};
+        use chrono::Utc;
+
+        let temp_guard = crate::services::fs_helpers::TempDirGuard(
+            crate::test_support::temp_test_dir("contacts_delete"),
+        );
+        let temp_dir = &temp_guard.0;
+        let password = "pw-contacts-delete";
+        let alice_service = crate::test_support::setup_test_app(
+            &temp_dir.join("alice"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            password,
+        );
+        let bob_service = crate::test_support::setup_test_app(
+            &temp_dir.join("bob"),
+            "Bob",
+            crate::test_support::BOB_PHRASE,
+            password,
+        );
+        let bob_did = bob_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let state = crate::test_support::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+        let contact = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                id: Some(bob_did.clone()),
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(1),
+            desired_hops: None,
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+
+        state
+            .save_contact_with_options(&mut service, contact, Some(password), false)
+            .unwrap();
+        assert_eq!(state.load_contacts(&mut service, Some(password)).unwrap().len(), 1);
+
+        state
+            .delete_contact_with_options(&mut service, &bob_did, Some(password), false)
+            .unwrap();
+        let after_delete = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert!(
+            after_delete.iter().all(|c| c.did != bob_did),
+            "deleted contact {} must no longer appear in load_contacts",
+            bob_did
+        );
     }
 }

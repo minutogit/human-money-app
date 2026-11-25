@@ -5,11 +5,76 @@ use super::*;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use human_money_core::humoco_proto::{
     causal::{LockEntry, LOCK_ENTRY_WIRE_LEN},
+    crypto::{MAX_LOCK_POW_BITS},
     decode_hex_fixed, GenesisTicket,
 };
 use human_money_core::models::layer2_api::{SyncLockBatchRequest, SyncLockBatchResponse};
 use humoco_market::SignedDropHeaders;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+
+fn parse_http_headers<'a>(lines: impl Iterator<Item = &'a str>) -> HashMap<String, String> {
+    lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        .collect()
+}
+
+async fn read_request_non_empty(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 8192];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert!(n > 0, "expected non-empty HTTP request from client");
+    String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+async fn write_allow_early_close(stream: &mut tokio::net::TcpStream, data: &[u8]) -> bool {
+    use tokio::io::AsyncWriteExt;
+    match stream.write_all(data).await {
+        Ok(()) => true,
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+            ) =>
+        {
+            false
+        }
+        Err(e) => panic!("unexpected mock server write failure: {}", e),
+    }
+}
+
+fn assert_local_validation_contains<T: std::fmt::Debug>(
+    res: Result<T, SyncClientError>,
+    expected: &str,
+    ctx: &str,
+) {
+    let err = res.expect_err(ctx);
+    assert!(
+        matches!(err, SyncClientError::LocalValidation(ref m) if m.contains(expected)),
+        "{}: expected LocalValidation containing '{}', got {:?}",
+        ctx,
+        expected,
+        err
+    );
+}
+
+fn assert_invalid_payload_contains<T: std::fmt::Debug>(
+    res: Result<T, SyncClientError>,
+    expected: &str,
+    ctx: &str,
+) {
+    let err = res.expect_err(ctx);
+    assert!(
+        matches!(err, SyncClientError::InvalidPayload(ref m) if m.contains(expected)),
+        "{}: expected InvalidPayload containing '{}', got {:?}",
+        ctx,
+        expected,
+        err
+    );
+}
 
 #[test]
 fn test_parse_retry_after_header() {
@@ -169,15 +234,27 @@ fn test_sign_and_verify_revocation_notice() {
 
     assert!(verify_revocation_notice(&notice, &drop_pub).is_ok());
 
-    // Wrong expected drop_pub
-    let wrong_pub = hex::encode([99u8; 32]);
-    assert!(verify_revocation_notice(&notice, &wrong_pub).is_err());
+    // Wrong expected drop_pub (valid Ed25519 point from distinct key)
+    let wrong_pub = hex::encode(
+        SigningKey::from_bytes(&[99u8; 32])
+            .verifying_key()
+            .as_bytes(),
+    );
+    assert_invalid_payload_contains(
+        verify_revocation_notice(&notice, &wrong_pub),
+        "drop_pub mismatch",
+        "wrong expected_drop_pub",
+    );
 
-    // Tampered replacement URL
+    // Tampered replacement URL breaks Ed25519 signature
     let mut tampered = notice.clone();
     tampered.replacement.as_mut().unwrap().write_url =
         "https://evil.example.org/sync.php".to_string();
-    assert!(verify_revocation_notice(&tampered, &drop_pub).is_err());
+    assert_invalid_payload_contains(
+        verify_revocation_notice(&tampered, &drop_pub),
+        "Invalid revocation notice Ed25519 signature",
+        "tampered replacement URL",
+    );
 
     // Insecure http:// replacement URL rejected
     let bad_rep = SyncReplacementTarget {
@@ -185,10 +262,18 @@ fn test_sign_and_verify_revocation_notice() {
         read_url: "https://new.example.org/d-1234".to_string(),
         drop_pub: rep_drop_pub,
     };
-    assert!(sign_revocation_notice(&sk, 100, 200, None, Some(bad_rep)).is_err());
+    assert_local_validation_contains(
+        sign_revocation_notice(&sk, 100, 200, None, Some(bad_rep)),
+        "must use HTTPS",
+        "http:// replacement write_url",
+    );
 
     // Newline injection in reason rejected
-    assert!(sign_revocation_notice(&sk, 100, 200, Some("bad\nline".to_string()), None).is_err());
+    assert_local_validation_contains(
+        sign_revocation_notice(&sk, 100, 200, Some("bad\nline".to_string()), None),
+        "Invalid revocation reason",
+        "newline in reason",
+    );
 }
 
 #[tokio::test]
@@ -276,20 +361,44 @@ async fn test_get_slot_etag_304_not_modified() {
 
 #[test]
 fn test_ssrf_and_production_https_validation() {
-    assert!(validate_sync_url("https://sync.example.com/api.php").is_ok());
-    assert!(validate_sync_url("https://10.0.0.1/api.php").is_err());
-    assert!(validate_sync_url("https://192.168.1.50/api.php").is_err());
-    assert!(validate_sync_url("https://169.254.169.254/latest/meta-data").is_err());
-    assert!(validate_sync_url("https://printer.local/sync").is_err());
-    assert!(validate_sync_url("https://user:pass@sync.example.com/api.php").is_err());
+    validate_sync_url("https://sync.example.com/api.php").unwrap();
+    for (url, expected) in [
+        (
+            "https://10.0.0.1/api.php",
+            "blocked internal/private address",
+        ),
+        (
+            "https://192.168.1.50/api.php",
+            "blocked internal/private address",
+        ),
+        (
+            "https://169.254.169.254/latest/meta-data",
+            "blocked internal/private address",
+        ),
+        ("https://printer.local/sync", "internal hostname"),
+        (
+            "https://user:pass@sync.example.com/api.php",
+            "credentials or fragment",
+        ),
+    ] {
+        assert_local_validation_contains(validate_sync_url(url), expected, url);
+    }
 
     // Strict production check (allow_loopback = false):
-    assert!(validate_sync_url_strict("http://sync.example.com/api.php", false).is_err());
-    assert!(validate_sync_url_strict("http://127.0.0.1:8080/api.php", false).is_err());
-    assert!(validate_sync_url_strict("https://sync.example.com/api.php", false).is_ok());
+    assert_local_validation_contains(
+        validate_sync_url_strict("http://sync.example.com/api.php", false),
+        "must use HTTPS",
+        "http production",
+    );
+    assert_local_validation_contains(
+        validate_sync_url_strict("http://127.0.0.1:8080/api.php", false),
+        "blocked internal/private address",
+        "loopback production",
+    );
+    validate_sync_url_strict("https://sync.example.com/api.php", false).unwrap();
 
     // Dev loopback allowed:
-    assert!(validate_sync_url_strict("http://127.0.0.1:8080/api.php", true).is_ok());
+    validate_sync_url_strict("http://127.0.0.1:8080/api.php", true).unwrap();
     assert_eq!(
         normalize_lock_read_base("https://sync.example.com/data/locks/"),
         "https://sync.example.com/data"
@@ -300,6 +409,11 @@ fn test_ssrf_and_production_https_validation() {
 fn test_verify_lock_delegation_selftest_and_probe() {
     let admin_sk = SigningKey::from_bytes(&[11u8; 32]);
     let admin_hex = hex::encode(admin_sk.verifying_key().as_bytes());
+    let wrong_admin_hex = hex::encode(
+        SigningKey::from_bytes(&[99u8; 32])
+            .verifying_key()
+            .as_bytes(),
+    );
     let lock_sk = SigningKey::from_bytes(&[22u8; 32]);
     let lock_hex = hex::encode(lock_sk.verifying_key().as_bytes());
 
@@ -320,7 +434,7 @@ fn test_verify_lock_delegation_selftest_and_probe() {
     assert!(!verify_lock_delegation(
         &lock_hex,
         &del,
-        Some(&hex::encode([99u8; 32]))
+        Some(&wrong_admin_hex)
     ));
     let mut bad_url_del = del.clone();
     bad_url_del.write_url = "ftp://invalid.example/sync".to_string();
@@ -368,6 +482,19 @@ fn test_verify_lock_delegation_selftest_and_probe() {
         sig: hex::encode(lock_sk.sign(st_msg.as_bytes()).to_bytes()),
     };
     assert!(verify_lock_selftest(&lock_hex, &report));
+    assert!(!verify_lock_selftest(&wrong_admin_hex, &report));
+
+    let mut failed_report = report.clone();
+    failed_report.all_passed = false;
+    assert!(!verify_lock_selftest(&lock_hex, &failed_report));
+
+    let mut python_report = report.clone();
+    python_report.runtime = "python".into();
+    assert!(!verify_lock_selftest(&lock_hex, &python_report));
+
+    let mut tampered_inodes = report;
+    tampered_inodes.free_inodes = 49999;
+    assert!(!verify_lock_selftest(&lock_hex, &tampered_inodes));
 
     let nonce = "ab".repeat(32);
     let probe_msg = format!("HUMOCO-LOCK-PROBE-V1\n{}\n{}\n1700000020", lock_hex, nonce);
@@ -379,6 +506,28 @@ fn test_verify_lock_delegation_selftest_and_probe() {
         sig: hex::encode(lock_sk.sign(probe_msg.as_bytes()).to_bytes()),
     };
     assert!(verify_lock_probe_response(&lock_hex, &nonce, &probe_resp));
+    assert!(!verify_lock_probe_response(
+        &wrong_admin_hex,
+        &nonce,
+        &probe_resp
+    ));
+    assert!(!verify_lock_probe_response(
+        &lock_hex,
+        &"cd".repeat(32),
+        &probe_resp
+    ));
+
+    let mut bad_ok_probe = probe_resp.clone();
+    bad_ok_probe.probe_ok = false;
+    assert!(!verify_lock_probe_response(&lock_hex, &nonce, &bad_ok_probe));
+
+    let mut tampered_ts_probe = probe_resp;
+    tampered_ts_probe.server_time += 1;
+    assert!(!verify_lock_probe_response(
+        &lock_hex,
+        &nonce,
+        &tampered_ts_probe
+    ));
 }
 
 #[tokio::test]
@@ -457,13 +606,21 @@ fn test_append_sync_query_and_path_helpers() {
         append_sync_query("https://sync.example.com/index.php?drop=1", "lock_ticket").unwrap(),
         "https://sync.example.com/index.php?drop=1&lock_ticket"
     );
-    assert!(append_sync_query("https://10.0.0.1/api.php", "info").is_err());
+    assert_local_validation_contains(
+        append_sync_query("https://10.0.0.1/api.php", "info"),
+        "blocked internal/private address",
+        "SSRF query URL",
+    );
 
     assert_eq!(
         append_sync_path("https://sync.example.com/d-123/", "/index.json").unwrap(),
         "https://sync.example.com/d-123/index.json"
     );
-    assert!(append_sync_path("https://192.168.1.10/d-123", "index.json").is_err());
+    assert_local_validation_contains(
+        append_sync_path("https://192.168.1.10/d-123", "index.json"),
+        "blocked internal/private address",
+        "SSRF read URL",
+    );
 }
 
 #[test]
@@ -537,7 +694,7 @@ fn test_rate_limit_error_and_header_helpers() {
 
 #[tokio::test]
 async fn test_put_slot_special_status_codes() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -552,8 +709,12 @@ async fn test_put_slot_special_status_codes() {
     let server = tokio::spawn(async move {
         for raw in responses {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf).await.unwrap();
+            let req = read_request_non_empty(&mut stream).await;
+            assert!(
+                req.starts_with("PUT /sync.php "),
+                "unexpected PUT request line: {}",
+                req.lines().next().unwrap_or("")
+            );
             stream.write_all(raw.as_bytes()).await.unwrap();
         }
     });
@@ -639,21 +800,18 @@ async fn test_push_lock_delegation_signs_put_lock_delegate() {
             req_line
         );
 
-        let mut hdr_pub = String::new();
-        let mut hdr_sig = String::new();
-        let mut hdr_ts = 0u64;
-        let mut hdr_nonce = String::new();
-        for line in lines {
-            if let Some((k, v)) = line.split_once(':') {
-                match k.trim().to_ascii_lowercase().as_str() {
-                    "x-drop-pubkey" => hdr_pub = v.trim().to_string(),
-                    "x-drop-signature" => hdr_sig = v.trim().to_string(),
-                    "x-drop-timestamp" => hdr_ts = v.trim().parse().unwrap(),
-                    "x-drop-nonce" => hdr_nonce = v.trim().to_string(),
-                    _ => {}
-                }
-            }
-        }
+        let hdrs = parse_http_headers(lines);
+        let hdr_pub = hdrs.get("x-drop-pubkey").expect("missing X-Drop-Pubkey").clone();
+        let hdr_sig = hdrs
+            .get("x-drop-signature")
+            .expect("missing X-Drop-Signature")
+            .clone();
+        let hdr_ts: u64 = hdrs
+            .get("x-drop-timestamp")
+            .expect("missing X-Drop-Timestamp")
+            .parse()
+            .unwrap();
+        let hdr_nonce = hdrs.get("x-drop-nonce").expect("missing X-Drop-Nonce").clone();
 
         assert_eq!(hdr_pub, admin_pub_expected);
         let canonical = humoco_market::format_admin_request_message(
@@ -737,21 +895,16 @@ async fn test_request_genesis_ticket_direct_and_stealth_vs_pow_rejected() {
             let req_line = lines.next().unwrap();
             assert!(req_line.starts_with("POST /sync.php?lock_ticket"));
 
-            let mut hdr_pub = String::new();
-            let mut hdr_sig = String::new();
-            let mut hdr_ts: Option<u64> = None;
-            let mut hdr_nonce = String::new();
-            for line in lines {
-                if let Some((k, v)) = line.split_once(':') {
-                    match k.trim().to_ascii_lowercase().as_str() {
-                        "x-drop-pubkey" => hdr_pub = v.trim().to_ascii_lowercase(),
-                        "x-drop-signature" => hdr_sig = v.trim().to_string(),
-                        "x-drop-timestamp" => hdr_ts = v.trim().parse().ok(),
-                        "x-drop-nonce" => hdr_nonce = v.trim().to_string(),
-                        _ => {}
-                    }
-                }
-            }
+            let hdrs = parse_http_headers(lines);
+            let hdr_pub = hdrs
+                .get("x-drop-pubkey")
+                .map(|v| v.to_ascii_lowercase())
+                .unwrap_or_default();
+            let hdr_sig = hdrs.get("x-drop-signature").cloned().unwrap_or_default();
+            let hdr_ts: Option<u64> = hdrs
+                .get("x-drop-timestamp")
+                .and_then(|v| v.parse().ok());
+            let hdr_nonce = hdrs.get("x-drop-nonce").cloned().unwrap_or_default();
 
             let authorized_key = hdr_pub == exp_admin || hdr_pub == exp_stealth;
             let valid_sig = hdr_ts.is_some_and(|ts| {
@@ -897,22 +1050,40 @@ fn test_h11_ssrf_blocks_ipv4_mapped_v6_nat64_and_filters_resolved_ips() {
     assert!(!is_blocked_ip(mapped_loopback, true));
 
     let bad_urls = [
-        "https://[::ffff:127.0.0.1]/sync.php",
-        "https://[::ffff:169.254.169.254]/sync.php",
-        "https://[64:ff9b::7f00:1]/sync.php",
-        "https://user:pass@sync.example.org/sync.php",
-        "https://sync.example.org/sync.php#frag",
-        "https://service.local/sync.php",
-        "http://localhost:8080/sync.php",
+        (
+            "https://[::ffff:127.0.0.1]/sync.php",
+            "blocked internal/private address",
+        ),
+        (
+            "https://[::ffff:169.254.169.254]/sync.php",
+            "blocked internal/private address",
+        ),
+        (
+            "https://[64:ff9b::7f00:1]/sync.php",
+            "blocked internal/private address",
+        ),
+        (
+            "https://user:pass@sync.example.org/sync.php",
+            "credentials or fragment",
+        ),
+        (
+            "https://sync.example.org/sync.php#frag",
+            "credentials or fragment",
+        ),
+        ("https://service.local/sync.php", "internal hostname"),
+        (
+            "http://localhost:8080/sync.php",
+            "loopback is forbidden in production",
+        ),
     ];
-    for url in bad_urls {
-        assert!(
-            validate_sync_url_strict(url, false).is_err(),
-            "expected URL '{}' to be rejected with allow_loopback=false",
-            url
+    for (url, expected) in bad_urls {
+        assert_local_validation_contains(
+            validate_sync_url_strict(url, false),
+            expected,
+            url,
         );
     }
-    assert!(validate_sync_url_strict("https://sync.example.org/sync.php", false).is_ok());
+    validate_sync_url_strict("https://sync.example.org/sync.php", false).unwrap();
 
     let empty_err = filter_resolved_addrs(Vec::new(), "dual.example.org", false).unwrap_err();
     assert_eq!(empty_err.kind(), std::io::ErrorKind::NotFound);
@@ -989,7 +1160,7 @@ fn headers_with(val: &str) -> reqwest::header::HeaderMap {
 
 #[tokio::test]
 async fn test_s08_f1_bounded_http_body_and_sanitized_error_body() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -998,48 +1169,58 @@ async fn test_s08_f1_bounded_http_body_and_sanitized_error_body() {
         // 1. Static lock with Content-Length: 606 (> 605)
         {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf).await;
+            let req = read_request_non_empty(&mut stream).await;
+            assert!(req.starts_with("GET "));
             let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 606\r\n\r\n";
-            let _ = stream.write_all(resp.as_bytes()).await;
+            stream.write_all(resp.as_bytes()).await.unwrap();
         }
         // 2. Static lock with chunked streaming > 605 bytes (no Content-Length)
         {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf).await;
-            let _ = stream
-                .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
-                .await;
+            let req = read_request_non_empty(&mut stream).await;
+            assert!(req.starts_with("GET "));
             let chunk = vec![b'A'; 700];
             let chunk_hdr = format!("{:x}\r\n", chunk.len());
-            let _ = stream.write_all(chunk_hdr.as_bytes()).await;
-            let _ = stream.write_all(&chunk).await;
-            let _ = stream.write_all(b"\r\n0\r\n\r\n").await;
+            if write_allow_early_close(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+                && write_allow_early_close(&mut stream, chunk_hdr.as_bytes()).await
+                && write_allow_early_close(&mut stream, &chunk).await
+            {
+                let finished_tail = write_allow_early_close(&mut stream, b"\r\n0\r\n\r\n").await;
+                if finished_tail {
+                    stream.flush().await.unwrap_or(());
+                }
+            }
         }
         // 3. fetch_sync_info with Content-Length > 256 KiB
         {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf).await;
+            let req = read_request_non_empty(&mut stream).await;
+            assert!(req.starts_with("GET "));
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
                 300 * 1024
             );
-            let _ = stream.write_all(resp.as_bytes()).await;
+            stream.write_all(resp.as_bytes()).await.unwrap();
         }
         // 4. Error 500 with > 4 KiB body and control characters / newlines
         {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf).await;
+            let req = read_request_non_empty(&mut stream).await;
+            assert!(req.starts_with("GET "));
             let malicious_body = format!("bad\r\n\t\x1b[31merror {}", "X".repeat(8192));
             let resp = format!(
                 "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n{}",
                 malicious_body.len(),
                 malicious_body
             );
-            let _ = stream.write_all(resp.as_bytes()).await;
+            let sent_all = write_allow_early_close(&mut stream, resp.as_bytes()).await;
+            if sent_all {
+                stream.flush().await.unwrap_or(());
+            }
         }
     });
 
@@ -1172,7 +1353,11 @@ async fn test_s08_f2_path_traversal_query_and_read_url_guards() {
     );
 
     // append_sync_path rejects query string in read_url
-    assert!(append_sync_path("https://sync.example.org/d-test?q=1", "index.json").is_err());
+    assert_local_validation_contains(
+        append_sync_path("https://sync.example.org/d-test?q=1", "index.json"),
+        "must not contain a query string",
+        "append_sync_path read_url query",
+    );
 
     // fetch_static_lock_entry rejects query in read_url and traversal / encoded / query paths
     assert_validation_err(
@@ -1231,43 +1416,62 @@ async fn test_s08_f2_path_traversal_query_and_read_url_guards() {
             valid_id
         )]
     );
-    assert!(anchor_manifest_candidate_urls(write_url, "not-64-hex").is_err());
+    assert_local_validation_contains(
+        anchor_manifest_candidate_urls(write_url, "not-64-hex"),
+        "Invalid anchor_hex",
+        "anchor_manifest_candidate_urls invalid anchor hex",
+    );
 }
 
 #[tokio::test]
-async fn test_s08_f4_f5_crypto_canonicalization_and_etag_quoting() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+async fn test_s08_f4_etag_normalization_and_list_index_conditional_statuses() {
+    use tokio::io::AsyncWriteExt;
 
-    // 1. Weak ETag normalization
+    // 1. Weak/quoted ETag normalization & rejection of empty/quote/control tokens
     let mut weak_hdrs = reqwest::header::HeaderMap::new();
     weak_hdrs.insert(reqwest::header::ETAG, "W/\"abc123\"".parse().unwrap());
     assert_eq!(extract_etag(&weak_hdrs), Some("abc123".to_string()));
     weak_hdrs.insert(reqwest::header::ETAG, "w/\"xyz789\"".parse().unwrap());
     assert_eq!(extract_etag(&weak_hdrs), Some("xyz789".to_string()));
+    assert_eq!(normalize_etag_token("\"\""), None);
+    assert_eq!(normalize_etag_token("bad\"inner"), None);
 
-    // 2. list_index sends quoted If-None-Match and handles 304 / 404 / 429
+    // 2. list_index sends quoted If-None-Match + If-Modified-Since and handles 200 / 304 / 404 / 429
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let ok_json = serde_json::to_string(&vec![SyncIndexEntry {
+        id: "aa".repeat(32),
+        prefix: None,
+        channel: "card".to_string(),
+        mtime: 1_700_000_000,
+        size: 128,
+        etag: Some("row-etag".to_string()),
+    }])
+    .unwrap();
+
     let server = tokio::spawn(async move {
-        for idx in 0..3 {
+        for idx in 0..4 {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 4096];
-            let n = stream.read(&mut buf).await.unwrap();
-            let req = String::from_utf8_lossy(&buf[..n]);
-            let inm = req
-                .lines()
-                .filter_map(|l| l.split_once(':'))
-                .find(|(k, _)| k.eq_ignore_ascii_case("if-none-match"))
-                .map(|(_, v)| v.trim().to_string());
+            let req = read_request_non_empty(&mut stream).await;
+            let hdrs = parse_http_headers(req.lines().skip(1));
+            let inm = hdrs.get("if-none-match").map(String::as_str);
+            let ims = hdrs.get("if-modified-since").map(String::as_str);
             let resp = match idx {
                 0 => {
-                    assert_eq!(inm.as_deref(), Some("\"etag-v1\""));
-                    "HTTP/1.1 304 Not Modified\r\nContent-Length: 0\r\n\r\n"
+                    assert_eq!(inm, Some("\"etag-v1\""));
+                    assert_eq!(ims, Some("Wed, 21 Oct 2015 07:28:00 GMT"));
+                    "HTTP/1.1 304 Not Modified\r\nContent-Length: 0\r\n\r\n".to_string()
                 }
-                1 => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n",
-                _ => {
+                1 => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string(),
+                2 => {
                     "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 12\r\nContent-Length: 0\r\n\r\n"
+                        .to_string()
                 }
+                _ => format!(
+                    "HTTP/1.1 200 OK\r\nETag: W/\"idx-v2\"\r\nLast-Modified: Thu, 22 Oct 2015 08:00:00 GMT\r\nContent-Length: {}\r\n\r\n{}",
+                    ok_json.len(),
+                    ok_json
+                ),
             };
             stream.write_all(resp.as_bytes()).await.unwrap();
         }
@@ -1275,10 +1479,17 @@ async fn test_s08_f4_f5_crypto_canonicalization_and_etag_quoting() {
 
     let client = create_sync_http_client();
     let read_url = format!("http://127.0.0.1:{}/d-test", addr.port());
-    let r304 = list_index(&client, &read_url, Some("etag-v1"), None)
-        .await
-        .unwrap();
+
+    let r304 = list_index(
+        &client,
+        &read_url,
+        Some("etag-v1"),
+        Some("Wed, 21 Oct 2015 07:28:00 GMT"),
+    )
+    .await
+    .unwrap();
     assert_eq!(r304, IndexFetchResult::NotModified);
+
     let r404 = list_index(&client, &read_url, None, None).await.unwrap();
     assert_eq!(
         r404,
@@ -1288,14 +1499,27 @@ async fn test_s08_f4_f5_crypto_canonicalization_and_etag_quoting() {
             last_modified: None
         }
     );
+
     let r429 = list_index(&client, &read_url, None, None)
         .await
         .unwrap_err();
     assert!(r429.is_rate_limited());
     assert_eq!(r429.retry_after_secs(), Some(12));
-    server.await.unwrap();
 
-    // 3. SlotAckReceipt rejects timestamp == 0, wrong expected_lock_pub, tampered etag, and accepts valid
+    let r200 = list_index(&client, &read_url, None, None).await.unwrap();
+    assert!(matches!(
+        r200,
+        IndexFetchResult::Modified {
+            ref entries,
+            etag: Some(ref e),
+            last_modified: Some(ref lm),
+        } if entries.len() == 1 && e == "idx-v2" && lm == "Thu, 22 Oct 2015 08:00:00 GMT"
+    ));
+    server.await.unwrap();
+}
+
+#[test]
+fn test_s08_f4_slot_ack_receipt_verification_invariants() {
     let lock_sk = SigningKey::from_bytes(&[15u8; 32]);
     let lock_pub = hex::encode(lock_sk.verifying_key().as_bytes());
     let other_lock_pub = hex::encode(
@@ -1304,6 +1528,7 @@ async fn test_s08_f4_f5_crypto_canonicalization_and_etag_quoting() {
             .as_bytes(),
     );
     let slot_pk = "aa".repeat(32);
+
     let zero_ts_msg = format!(
         "HUMOCO-SLOT-ACK-V1\n{}\n{}\n\nbackup\netag1\n0",
         lock_pub, slot_pk
@@ -1320,82 +1545,258 @@ async fn test_s08_f4_f5_crypto_canonicalization_and_etag_quoting() {
     assert!(!zero_ts_ack.verify(&lock_pub, &slot_pk, None, "backup", "etag1"));
 
     let valid_ack_msg = format!(
-        "HUMOCO-SLOT-ACK-V1\n{}\n{}\n\nbackup\netag1\n1700000000",
+        "HUMOCO-SLOT-ACK-V1\n{}\n{}\nwork\nbackup\netag1\n1700000000",
         lock_pub, slot_pk
     );
     let valid_ack = SlotAckReceipt {
         lock_pub: lock_pub.clone(),
         pubkey: slot_pk.clone(),
-        prefix: None,
+        prefix: Some("work".to_string()),
         channel: "backup".to_string(),
         etag: "etag1".to_string(),
         timestamp: 1_700_000_000,
         sig: hex::encode(lock_sk.sign(valid_ack_msg.as_bytes()).to_bytes()),
     };
-    assert!(valid_ack.verify(&lock_pub, &slot_pk, None, "backup", "etag1"));
-    assert!(!valid_ack.verify(&other_lock_pub, &slot_pk, None, "backup", "etag1"));
-    assert!(!valid_ack.verify(&lock_pub, &slot_pk, None, "backup", "etag2"));
+    assert!(valid_ack.verify(&lock_pub, &slot_pk, Some("work"), "backup", "etag1"));
+    assert!(!valid_ack.verify(&other_lock_pub, &slot_pk, Some("work"), "backup", "etag1"));
+    assert!(!valid_ack.verify(&lock_pub, &slot_pk, Some("work"), "backup", "etag2"));
+    assert!(!valid_ack.verify(&lock_pub, &slot_pk, Some("other"), "backup", "etag1"));
+    assert!(!valid_ack.verify(&lock_pub, &slot_pk, Some("work"), "post", "etag1"));
 
-    // 4. sign_revocation_notice & verify_revocation_notice strict checks
+    let mut ws_lock_ack = valid_ack;
+    ws_lock_ack.lock_pub = format!(" {}", lock_pub);
+    assert!(!ws_lock_ack.verify(&lock_pub, &slot_pk, Some("work"), "backup", "etag1"));
+}
+
+#[test]
+fn test_s08_f5_revocation_notice_strict_signing_and_verification() {
     let admin_sk = SigningKey::from_bytes(&[16u8; 32]);
     let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
     let rep_sk = SigningKey::from_bytes(&[17u8; 32]);
     let rep_pub = hex::encode(rep_sk.verifying_key().as_bytes());
 
-    assert!(sign_revocation_notice(&admin_sk, 100, 0, None, None).is_err());
-    assert!(sign_revocation_notice(&admin_sk, 0, 100, None, None).is_err());
-    assert!(
-        sign_revocation_notice(&admin_sk, 100, 200, Some("bad\tctrl".to_string()), None).is_err()
-    );
-    assert!(sign_revocation_notice(
+    let valid_notice = sign_revocation_notice(
         &admin_sk,
         100,
         200,
-        None,
+        Some("server migration".to_string()),
         Some(SyncReplacementTarget {
             write_url: "https://new.example.org/sync.php".to_string(),
-            read_url: "https://new.example.org/d?q=1".to_string(),
+            read_url: "https://new.example.org/d".to_string(),
             drop_pub: rep_pub.clone(),
-        })
+        }),
     )
-    .is_err());
+    .expect("valid revocation notice must sign");
+    verify_revocation_notice(&valid_notice, &admin_pub)
+        .expect("valid revocation notice must verify");
+    assert_eq!(valid_notice.drop_pub, admin_pub);
+    assert_eq!(valid_notice.reason.as_deref(), Some("server migration"));
 
-    // Non-curve replacement drop_pub rejected
+    // Blank reason normalizes to None; 200-char reason succeeds on both sign & verify; 201 fails both
+    let blank_reason_notice =
+        sign_revocation_notice(&admin_sk, 100, 200, Some("   ".to_string()), None)
+            .expect("whitespace reason must normalize cleanly");
+    assert_eq!(blank_reason_notice.reason, None);
+    verify_revocation_notice(&blank_reason_notice, &admin_pub).unwrap();
+
+    let max_reason_notice =
+        sign_revocation_notice(&admin_sk, 100, 200, Some("r".repeat(200)), None)
+            .expect("200-char reason must succeed on sign");
+    verify_revocation_notice(&max_reason_notice, &admin_pub)
+        .expect("200-char reason must succeed on verify");
+
+    assert_local_validation_contains(
+        sign_revocation_notice(&admin_sk, 100, 200, Some("r".repeat(201)), None),
+        "Invalid revocation reason",
+        "201-char reason on sign",
+    );
+
+    assert_local_validation_contains(
+        sign_revocation_notice(&admin_sk, 100, 0, None, None),
+        "non-zero issued_at and effective_at",
+        "effective_at == 0",
+    );
+    assert_local_validation_contains(
+        sign_revocation_notice(&admin_sk, 0, 100, None, None),
+        "non-zero issued_at and effective_at",
+        "issued_at == 0",
+    );
+    assert_local_validation_contains(
+        sign_revocation_notice(&admin_sk, 100, 200, Some("bad\tctrl".to_string()), None),
+        "Invalid revocation reason",
+        "control char in reason",
+    );
+    assert_local_validation_contains(
+        sign_revocation_notice(
+            &admin_sk,
+            100,
+            200,
+            None,
+            Some(SyncReplacementTarget {
+                write_url: "https://new.example.org/sync.php".to_string(),
+                read_url: "https://new.example.org/d?q=1".to_string(),
+                drop_pub: rep_pub.clone(),
+            }),
+        ),
+        "must not contain a query string",
+        "query in replacement read_url",
+    );
+
     let non_curve_byte = (1u8..=255)
         .find(|&b| VerifyingKey::from_bytes(&[b; 32]).is_err())
         .unwrap();
     let non_curve_hex = hex::encode([non_curve_byte; 32]);
-    assert!(sign_revocation_notice(
-        &admin_sk,
+    assert_local_validation_contains(
+        sign_revocation_notice(
+            &admin_sk,
+            100,
+            200,
+            None,
+            Some(SyncReplacementTarget {
+                write_url: "https://new.example.org/sync.php".to_string(),
+                read_url: "https://new.example.org/d".to_string(),
+                drop_pub: non_curve_hex,
+            }),
+        ),
+        "Invalid Ed25519 public key",
+        "non-curve replacement drop_pub",
+    );
+}
+
+#[test]
+fn test_s08_f5_revocation_notice_verification_gates() {
+    let admin_sk = SigningKey::from_bytes(&[16u8; 32]);
+    let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+    let rep_sk = SigningKey::from_bytes(&[17u8; 32]);
+    let rep_pub = hex::encode(rep_sk.verifying_key().as_bytes());
+    let max_reason_notice =
+        sign_revocation_notice(&admin_sk, 100, 200, Some("r".repeat(200)), None)
+            .expect("200-char reason must sign cleanly");
+    assert_eq!(max_reason_notice.drop_pub, admin_pub);
+
+    let mut bad_drop_ws = max_reason_notice.clone();
+    bad_drop_ws.drop_pub = format!("{} ", admin_pub);
+    assert_invalid_payload_contains(
+        verify_revocation_notice(&bad_drop_ws, &admin_pub),
+        "invalid whitespace or control chars",
+        "outer ws on drop_pub",
+    );
+
+    let mut bad_sig_ws = max_reason_notice.clone();
+    bad_sig_ws.signature = format!(" {}", bad_sig_ws.signature);
+    assert_invalid_payload_contains(
+        verify_revocation_notice(&bad_sig_ws, &admin_pub),
+        "invalid whitespace or control chars",
+        "outer ws on signature",
+    );
+
+    for (label, issued_at, effective_at) in [("issued_at == 0", 0, 200), ("effective_at == 0", 100, 0)]
+    {
+        let mut zero_ts = max_reason_notice.clone();
+        zero_ts.issued_at = issued_at;
+        zero_ts.effective_at = effective_at;
+        assert_invalid_payload_contains(
+            verify_revocation_notice(&zero_ts, &admin_pub),
+            "missing timestamps",
+            label,
+        );
+    }
+
+    for bad_reason in ["r".repeat(201), "bad\x07reason".to_string()] {
+        let mut bad_r_notice = max_reason_notice.clone();
+        bad_r_notice.reason = Some(bad_reason);
+        assert_invalid_payload_contains(
+            verify_revocation_notice(&bad_r_notice, &admin_pub),
+            "invalid reason",
+            "verify invalid reason",
+        );
+    }
+
+    // Newline/whitespace-padded replacement write_url, read_url, or drop_pub rejected on verify
+    for (label, padded_rep) in [
+        (
+            "padded write_url",
+            SyncReplacementTarget {
+                write_url: "https://new.example.org/sync.php\n".to_string(),
+                read_url: "https://new.example.org/d".to_string(),
+                drop_pub: rep_pub.clone(),
+            },
+        ),
+        (
+            "padded read_url",
+            SyncReplacementTarget {
+                write_url: "https://new.example.org/sync.php".to_string(),
+                read_url: "https://new.example.org/d ".to_string(),
+                drop_pub: rep_pub.clone(),
+            },
+        ),
+        (
+            "padded drop_pub",
+            SyncReplacementTarget {
+                write_url: "https://new.example.org/sync.php".to_string(),
+                read_url: "https://new.example.org/d".to_string(),
+                drop_pub: format!(" {}", rep_pub),
+            },
+        ),
+    ] {
+        let padded_msg = canonical_revocation_message(&admin_pub, 100, 200, Some(&padded_rep), None);
+        let padded_notice = SyncRevocationNotice {
+            drop_pub: admin_pub.clone(),
+            issued_at: 100,
+            effective_at: 200,
+            reason: None,
+            replacement: Some(padded_rep),
+            signature: hex::encode(admin_sk.sign(padded_msg.as_bytes()).to_bytes()),
+        };
+        assert_invalid_payload_contains(
+            verify_revocation_notice(&padded_notice, &admin_pub),
+            "invalid whitespace or control chars",
+            label,
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_s08_f5_lock_delegation_strict_verification_and_push() {
+    let client = create_sync_http_client();
+    let admin_sk = SigningKey::from_bytes(&[16u8; 32]);
+    let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+    let lock_sk = SigningKey::from_bytes(&[15u8; 32]);
+    let lock_pub = hex::encode(lock_sk.verifying_key().as_bytes());
+    let non_curve_byte = (1u8..=255)
+        .find(|&b| VerifyingKey::from_bytes(&[b; 32]).is_err())
+        .unwrap();
+    let non_curve_hex = hex::encode([non_curve_byte; 32]);
+
+    let valid_msg = humoco_market::format_lock_delegate_signature_message(
+        &admin_pub,
+        &lock_pub,
+        "https://sync.example.org/sync.php",
+        "https://sync.example.org/d",
         100,
-        200,
-        None,
-        Some(SyncReplacementTarget {
-            write_url: "https://new.example.org/sync.php".to_string(),
-            read_url: "https://new.example.org/d".to_string(),
-            drop_pub: non_curve_hex.clone(),
-        })
-    )
-    .is_err());
-
-    // Newline-padded replacement write_url must be rejected on verify_revocation_notice
-    let padded_rep = SyncReplacementTarget {
-        write_url: "https://new.example.org/sync.php\n".to_string(),
-        read_url: "https://new.example.org/d".to_string(),
-        drop_pub: rep_pub.clone(),
-    };
-    let padded_msg = canonical_revocation_message(&admin_pub, 100, 200, Some(&padded_rep), None);
-    let padded_notice = SyncRevocationNotice {
-        drop_pub: admin_pub.clone(),
+    );
+    let valid_del = SyncLockDelegationDto {
+        admin_pub: admin_pub.clone(),
+        lock_pub: lock_pub.clone(),
+        write_url: "https://sync.example.org/sync.php".to_string(),
+        read_url: "https://sync.example.org/d".to_string(),
         issued_at: 100,
-        effective_at: 200,
-        reason: None,
-        replacement: Some(padded_rep),
-        signature: hex::encode(admin_sk.sign(padded_msg.as_bytes()).to_bytes()),
+        sig: hex::encode(admin_sk.sign(valid_msg.as_bytes()).to_bytes()),
     };
-    assert!(verify_revocation_notice(&padded_notice, &admin_pub).is_err());
+    assert!(verify_lock_delegation(
+        &lock_pub,
+        &valid_del,
+        Some(&admin_pub)
+    ));
 
-    // 5. verify_lock_delegation & push_lock_delegation strict checks
+    let mut zero_ts_del = valid_del;
+    zero_ts_del.issued_at = 0;
+    assert!(!verify_lock_delegation(
+        &lock_pub,
+        &zero_ts_del,
+        Some(&admin_pub)
+    ));
+
     let query_read_msg = humoco_market::format_lock_delegate_signature_message(
         &admin_pub,
         &lock_pub,
@@ -1459,44 +1860,49 @@ async fn test_s08_f4_f5_crypto_canonicalization_and_etag_quoting() {
         Some(&admin_pub)
     ));
 
-    let push_err = push_lock_delegation(
-        &client,
-        "https://sync.example.org/sync.php",
-        "https://sync.example.org/d",
-        &admin_sk,
-        &non_curve_hex,
-        100,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        push_err.is_local_validation(),
-        "expected LocalValidation key error, got '{}'",
-        push_err
+    assert_local_validation_contains(
+        push_lock_delegation(
+            &client,
+            "https://sync.example.org/sync.php",
+            "https://sync.example.org/d",
+            &admin_sk,
+            &non_curve_hex,
+            100,
+        )
+        .await,
+        "Invalid Ed25519 lock_pub",
+        "push_lock_delegation non-curve lock_pub",
     );
 }
 
-#[tokio::test]
-async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    // 1. IPv6 Global Unicast allowlist & IPv4 192.88.99.0/24
+#[test]
+fn test_s08_f7_ipv6_global_unicast_allowlist_and_reserved_ranges() {
     for ip_str in [
         "5f00::1",
         "2001:1::1",
         "2001:3::1",
+        "2002::1",
+        "3fff::1",
         "fe00::1",
         "4000::1",
         "8000::1",
+        "::1",
+        "192.0.0.1",
+        "192.0.2.1",
         "192.88.99.1",
+        "198.51.100.1",
+        "203.0.113.1",
     ] {
         let ip: std::net::IpAddr = ip_str.parse().unwrap();
         assert!(
             is_blocked_ip(ip, false),
-            "expected {} to be blocked",
+            "expected {} to be blocked when allow_loopback=false",
             ip_str
         );
     }
+    let v6_loopback: std::net::IpAddr = "::1".parse().unwrap();
+    assert!(!is_blocked_ip(v6_loopback, true));
+
     for ip_str in ["2606:4700:4700::1111", "2a01:4f8::1"] {
         let ip: std::net::IpAddr = ip_str.parse().unwrap();
         assert!(
@@ -1505,12 +1911,11 @@ async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
             ip_str
         );
     }
+}
 
-    // 2. post_lock_batch (200 / 409 epoch_frozen / 410 revocation / 429 / 500),
-    //    fetch_revocation_notice (404 / valid 200 / forged 200),
-    //    delete_account (204 / 404 / 500)
+#[tokio::test]
+async fn test_s08_f10_post_lock_batch_status_outcomes() {
     let admin_sk = SigningKey::from_bytes(&[81u8; 32]);
-    let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
     let valid_rev = sign_revocation_notice(
         &admin_sk,
         1_700_000_000,
@@ -1519,8 +1924,6 @@ async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
         None,
     )
     .unwrap();
-    let mut forged_rev = valid_rev.clone();
-    forged_rev.signature = "00".repeat(64);
 
     let batch_200_json = serde_json::to_string(&SyncLockBatchResponse {
         status: "ok".to_string(),
@@ -1530,31 +1933,30 @@ async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
         conflict: None,
     })
     .unwrap();
-    let batch_409_json = r#"{"error":"epoch_frozen"}"#.to_string();
+    let batch_409_frozen_json = r#"{"error":"epoch_frozen"}"#.to_string();
+    let batch_409_other_json = r#"{"error":"double_spend_conflict"}"#.to_string();
     let batch_410_json = serde_json::json!({ "revocation": valid_rev }).to_string();
-    let valid_rev_json = serde_json::to_string(&valid_rev).unwrap();
-    let forged_rev_json = serde_json::to_string(&forged_rev).unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
         let responses = [
             (200, "", batch_200_json),
-            (409, "", batch_409_json),
+            (409, "", batch_409_frozen_json),
+            (409, "", batch_409_other_json),
             (410, "", batch_410_json),
             (429, "Retry-After: 23\r\n", String::new()),
             (500, "", "lock db error".to_string()),
-            (404, "", String::new()),
-            (200, "", valid_rev_json),
-            (200, "", forged_rev_json),
-            (204, "", String::new()),
-            (404, "", String::new()),
-            (500, "", "delete failed".to_string()),
         ];
         for (code, extra_hdrs, body) in responses {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 8192];
-            let _ = stream.read(&mut buf).await;
+            let req = read_request_non_empty(&mut stream).await;
+            assert!(
+                req.starts_with("POST /sync.php?lock "),
+                "unexpected batch request line: {}",
+                req.lines().next().unwrap_or("")
+            );
             let resp = format!(
                 "HTTP/1.1 {} Test\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
                 code,
@@ -1562,13 +1964,12 @@ async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
                 body.len(),
                 body
             );
-            let _ = stream.write_all(resp.as_bytes()).await;
+            stream.write_all(resp.as_bytes()).await.unwrap();
         }
     });
 
     let client = create_sync_http_client();
     let write_url = format!("http://127.0.0.1:{}/sync.php", addr.port());
-    let read_url = format!("http://127.0.0.1:{}/d-test", addr.port());
     let batch_req = SyncLockBatchRequest {
         anchor_id: [0x22u8; 32],
         bucket: [0x11u8; 32],
@@ -1601,6 +2002,15 @@ async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
         post_lock_batch(&client, &write_url, &batch_req)
             .await
             .unwrap(),
+        SyncLockBatchOutcome::Rejected {
+            status_code: 409,
+            ref error
+        } if error == "double_spend_conflict"
+    ));
+    assert!(matches!(
+        post_lock_batch(&client, &write_url, &batch_req)
+            .await
+            .unwrap(),
         SyncLockBatchOutcome::Revoked {
             status_code: 410,
             notice: Some(_)
@@ -1616,6 +2026,60 @@ async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
         .unwrap_err();
     assert_eq!(err_500.http_status(), Some(500));
 
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_s08_f10_revocation_fetch_and_delete_account_paths() {
+    let admin_sk = SigningKey::from_bytes(&[81u8; 32]);
+    let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+    let valid_rev = sign_revocation_notice(
+        &admin_sk,
+        1_700_000_000,
+        1_700_000_100,
+        Some("eol".to_string()),
+        None,
+    )
+    .unwrap();
+    let mut forged_rev = valid_rev.clone();
+    forged_rev.signature = "00".repeat(64);
+    let valid_rev_json = serde_json::to_string(&valid_rev).unwrap();
+    let forged_rev_json = serde_json::to_string(&forged_rev).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        let responses = [
+            (404, String::new()),
+            (200, valid_rev_json),
+            (200, forged_rev_json),
+            (204, String::new()),
+            (404, String::new()),
+            (500, "delete failed".to_string()),
+        ];
+        for (code, body) in responses {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let req = read_request_non_empty(&mut stream).await;
+            assert!(
+                req.starts_with("GET ") || req.starts_with("DELETE "),
+                "unexpected request line: {}",
+                req.lines().next().unwrap_or("")
+            );
+            let resp = format!(
+                "HTTP/1.1 {} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                code,
+                body.len(),
+                body
+            );
+            stream.write_all(resp.as_bytes()).await.unwrap();
+        }
+    });
+
+    let client = create_sync_http_client();
+    let write_url = format!("http://127.0.0.1:{}/sync.php", addr.port());
+    let read_url = format!("http://127.0.0.1:{}/d-test", addr.port());
+
     assert!(fetch_revocation_notice(&client, &read_url, &admin_pub)
         .await
         .unwrap()
@@ -1628,12 +2092,14 @@ async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
             .drop_pub,
         admin_pub
     );
-    assert!(fetch_revocation_notice(&client, &read_url, &admin_pub)
-        .await
-        .is_err());
+    assert_invalid_payload_contains(
+        fetch_revocation_notice(&client, &read_url, &admin_pub).await,
+        "Invalid revocation notice Ed25519 signature",
+        "forged revocation.json signature",
+    );
 
     let signed = SignedDropHeaders {
-        pubkey_hex: admin_pub.clone(),
+        pubkey_hex: admin_pub,
         prefix: None,
         timestamp: 1_700_000_000,
         nonce_hex: "aa".repeat(16),
@@ -1650,23 +2116,43 @@ async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
     );
 
     server.await.unwrap();
+}
 
-    // 3. PoW start nonce & solved pow_nonce stay safely within signed i64::MAX for PHP json_decode
+#[tokio::test]
+async fn test_s08_f6_pow_start_nonce_and_genesis_ticket_pow_within_i64() {
+    use tokio::io::AsyncWriteExt;
+
     for _ in 0..64 {
         assert!(next_pow_start_nonce() <= POW_START_NONCE_MASK);
     }
 
-    let pow_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let pow_addr = pow_listener.local_addr().unwrap();
+    let client = create_sync_http_client();
     let lock_sk = SigningKey::from_bytes(&[82u8; 32]);
     let lock_pub = lock_sk.verifying_key().to_bytes();
     let anchor_id = [0x44u8; 32];
     let retain_q = human_money_core::humoco_proto::encode_quarter(2035, 4).unwrap();
+
+    assert_local_validation_contains(
+        request_genesis_ticket(
+            &client,
+            "https://sync.example.org/sync.php",
+            lock_pub,
+            &anchor_id,
+            retain_q,
+            LockTicketAuth::Pow {
+                pow_bits: MAX_LOCK_POW_BITS + 1,
+            },
+        )
+        .await,
+        "Unsupported GenesisTicket PoW bits",
+        "pow_bits above MAX_LOCK_POW_BITS",
+    );
+
+    let pow_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let pow_addr = pow_listener.local_addr().unwrap();
     let pow_server = tokio::spawn(async move {
         let (mut stream, _) = pow_listener.accept().await.unwrap();
-        let mut buf = [0u8; 8192];
-        let n = stream.read(&mut buf).await.unwrap();
-        let raw = String::from_utf8_lossy(&buf[..n]);
+        let raw = read_request_non_empty(&mut stream).await;
         let (_, body) = raw.split_once("\r\n\r\n").unwrap();
         let req_json: serde_json::Value = serde_json::from_str(body).unwrap();
         let pn = req_json["pow_nonce"].as_u64().unwrap();
@@ -1691,6 +2177,7 @@ async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
         );
         stream.write_all(resp.as_bytes()).await.unwrap();
     });
+
     let pow_write_url = format!("http://127.0.0.1:{}/sync.php", pow_addr.port());
     let pow_ticket = request_genesis_ticket(
         &client,
@@ -1715,7 +2202,14 @@ fn s08_followups_ticket_pow_bits_required_and_origin_key_canonical() {
         "pow_base_bits": 8,
         "allow_pow_tickets": true
     });
-    assert!(serde_json::from_value::<SyncLockInfoDto>(missing).is_err());
+    let err_missing = serde_json::from_value::<SyncLockInfoDto>(missing)
+        .expect_err("missing ticket_pow_bits must fail deserialization")
+        .to_string();
+    assert!(
+        err_missing.contains("missing field `ticket_pow_bits`"),
+        "unexpected serde error for missing field: {}",
+        err_missing
+    );
 
     let null_val = serde_json::json!({
         "lock_pub": "aa".repeat(32),
@@ -1724,7 +2218,14 @@ fn s08_followups_ticket_pow_bits_required_and_origin_key_canonical() {
         "allow_pow_tickets": true,
         "ticket_pow_bits": null
     });
-    assert!(serde_json::from_value::<SyncLockInfoDto>(null_val).is_err());
+    let err_null = serde_json::from_value::<SyncLockInfoDto>(null_val)
+        .expect_err("null ticket_pow_bits must fail deserialization")
+        .to_string();
+    assert!(
+        err_null.contains("invalid type: null"),
+        "unexpected serde error for null field: {}",
+        err_null
+    );
 
     let valid = serde_json::json!({
         "lock_pub": "aa".repeat(32),
@@ -1750,6 +2251,7 @@ fn s08_followups_ticket_pow_bits_required_and_origin_key_canonical() {
         Some("http://127.0.0.1:8080".to_string())
     );
     assert_eq!(sync_origin_key("ftp://sync.example.org/sync.php"), None);
+    assert_eq!(sync_origin_key("not a url"), None);
 }
 
 #[tokio::test]
@@ -1758,28 +2260,15 @@ async fn s08_q1_sync_clients_disable_proxies_and_block_ssrf_targets() {
     let probe_client = create_sync_probe_client();
 
     for client in [&http_client, &probe_client] {
-        let err_rfc1918 = fetch_sync_info(client, "http://10.255.255.1/sync.php")
-            .await
-            .unwrap_err();
-        assert!(err_rfc1918.is_local_validation());
-        assert!(
-            err_rfc1918
-                .to_string()
-                .contains("blocked internal/private address"),
-            "Expected SSRF rejection for private IP, got: {}",
-            err_rfc1918
+        assert_local_validation_contains(
+            fetch_sync_info(client, "http://10.255.255.1/sync.php").await,
+            "blocked internal/private address",
+            "RFC1918 SSRF target",
         );
-
-        let err_metadata = fetch_sync_info(client, "https://169.254.169.254/latest/meta-data")
-            .await
-            .unwrap_err();
-        assert!(err_metadata.is_local_validation());
-        assert!(
-            err_metadata
-                .to_string()
-                .contains("blocked internal/private address"),
-            "Expected SSRF rejection for link-local metadata IP, got: {}",
-            err_metadata
+        assert_local_validation_contains(
+            fetch_sync_info(client, "https://169.254.169.254/latest/meta-data").await,
+            "blocked internal/private address",
+            "link-local metadata SSRF target",
         );
     }
 
@@ -1808,31 +2297,33 @@ async fn s08_q1_sync_clients_disable_proxies_and_block_ssrf_targets() {
 
 #[tokio::test]
 async fn s11_x4_get_media_blob_aborts_oversized_chunked_response() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut req_buf = [0u8; 2048];
-        let _ = stream.read(&mut req_buf).await;
-        let _ = stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
-            )
-            .await;
-        // Stream 200 KiB in 16 KiB chunks without Content-Length
+        let req = read_request_non_empty(&mut stream).await;
+        assert!(req.starts_with("GET "));
         let chunk = vec![0x5Au8; 16 * 1024];
         let chunk_hdr = format!("{:x}\r\n", chunk.len());
-        for _ in 0..13 {
-            if stream.write_all(chunk_hdr.as_bytes()).await.is_err()
-                || stream.write_all(&chunk).await.is_err()
-                || stream.write_all(b"\r\n").await.is_err()
-            {
-                break;
+        if write_allow_early_close(
+            &mut stream,
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+        )
+        .await
+        {
+            for _ in 0..13 {
+                if !write_allow_early_close(&mut stream, chunk_hdr.as_bytes()).await
+                    || !write_allow_early_close(&mut stream, &chunk).await
+                    || !write_allow_early_close(&mut stream, b"\r\n").await
+                {
+                    break;
+                }
+            }
+            if write_allow_early_close(&mut stream, b"0\r\n\r\n").await {
+                use tokio::io::AsyncWriteExt;
+                stream.flush().await.unwrap_or(());
             }
         }
-        let _ = stream.write_all(b"0\r\n\r\n").await;
     });
 
     let client = create_sync_http_client();
@@ -1877,36 +2368,58 @@ fn s11_x4_worst_case_sealed_media_fits_within_media_slot_limit() {
 
 #[tokio::test]
 async fn test_fetch_text_bounded_handles_success_ssrf_http_size_and_utf8() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     let client = create_sync_http_client();
 
     // 1. SSRF / LocalValidation
-    let ssrf_err = fetch_text_bounded(
-        &client,
-        "http://10.0.0.1/provider.json",
-        1024,
-        "provider filter",
-    )
-    .await
-    .unwrap_err();
-    assert!(ssrf_err.is_local_validation());
+    assert_local_validation_contains(
+        fetch_text_bounded(
+            &client,
+            "http://10.0.0.1/provider.json",
+            1024,
+            "provider filter",
+        )
+        .await,
+        "blocked internal/private address",
+        "SSRF provider filter URL",
+    );
 
     // 2. Local server responses: 200 UTF-8, 429, chunked > max_bytes, invalid UTF-8
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        let responses: Vec<Vec<u8>> = vec![
-            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{\"ok\":true}".to_vec(),
-            b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 45\r\nContent-Length: 4\r\n\r\nslow".to_vec(),
-            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\n0123456789abcdef\r\n10\r\n0123456789abcdef\r\n0\r\n\r\n".to_vec(),
-            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n\xff\xfe\xfd".to_vec(),
+        let responses: Vec<(bool, Vec<u8>)> = vec![
+            (
+                false,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{\"ok\":true}".to_vec(),
+            ),
+            (
+                false,
+                b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 45\r\nContent-Length: 4\r\n\r\nslow"
+                    .to_vec(),
+            ),
+            (
+                true,
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\n0123456789abcdef\r\n10\r\n0123456789abcdef\r\n0\r\n\r\n"
+                    .to_vec(),
+            ),
+            (
+                false,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n\xff\xfe\xfd".to_vec(),
+            ),
         ];
-        for body in responses {
+        for (allow_close, body) in responses {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut req_buf = [0u8; 1024];
-            let _ = stream.read(&mut req_buf).await;
-            let _ = stream.write_all(&body).await;
+            let req = read_request_non_empty(&mut stream).await;
+            assert!(req.starts_with("GET "));
+            if allow_close {
+                if write_allow_early_close(&mut stream, &body).await {
+                    stream.flush().await.unwrap_or(());
+                }
+            } else {
+                stream.write_all(&body).await.unwrap();
+            }
         }
     });
 
@@ -1937,4 +2450,177 @@ async fn test_fetch_text_bounded_handles_success_ssrf_http_size_and_utf8() {
     assert!(matches!(err_utf8, SyncClientError::InvalidPayload(_)));
 
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_weak_small_order_ed25519_keys_rejected_in_revocation_and_delegation() {
+    let admin_sk = SigningKey::from_bytes(&[71u8; 32]);
+    let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+    let valid_target_pub = hex::encode(SigningKey::from_bytes(&[72u8; 32]).verifying_key().as_bytes());
+    let zero_key = "00".repeat(32);
+    let order1_key = {
+        let mut b = [0u8; 32];
+        b[0] = 1;
+        hex::encode(b)
+    };
+    let client = create_sync_http_client();
+    let write_url = "https://sync.example.org/sync.php";
+    let read_url = "https://sync.example.org/d";
+
+    let valid_rep = SyncReplacementTarget {
+        write_url: "https://new.example.org/sync.php".to_string(),
+        read_url: "https://new.example.org/d".to_string(),
+        drop_pub: valid_target_pub.clone(),
+    };
+    let valid_notice = sign_revocation_notice(
+        &admin_sk,
+        1_700_000_000,
+        1_700_000_100,
+        None,
+        Some(valid_rep),
+    )
+    .expect("valid replacement drop_pub must succeed");
+    verify_revocation_notice(&valid_notice, &admin_pub)
+        .expect("valid revocation notice must verify");
+    assert_eq!(valid_notice.drop_pub, admin_pub);
+
+    let valid_del_msg = humoco_market::format_lock_delegate_signature_message(
+        &admin_pub,
+        &valid_target_pub,
+        write_url,
+        read_url,
+        1_700_000_000,
+    );
+    let valid_del = SyncLockDelegationDto {
+        admin_pub: admin_pub.clone(),
+        lock_pub: valid_target_pub.clone(),
+        write_url: write_url.to_string(),
+        read_url: read_url.to_string(),
+        issued_at: 1_700_000_000,
+        sig: hex::encode(admin_sk.sign(valid_del_msg.as_bytes()).to_bytes()),
+    };
+    assert!(verify_lock_delegation(
+        &valid_target_pub,
+        &valid_del,
+        Some(&admin_pub)
+    ));
+
+    for weak_pub in [&zero_key, &order1_key] {
+        assert_local_validation_contains(
+            sign_revocation_notice(
+                &admin_sk,
+                1_700_000_000,
+                1_700_000_100,
+                None,
+                Some(SyncReplacementTarget {
+                    write_url: "https://new.example.org/sync.php".to_string(),
+                    read_url: "https://new.example.org/d".to_string(),
+                    drop_pub: weak_pub.clone(),
+                }),
+            ),
+            "weak small-order",
+            "sign_revocation_notice with weak drop_pub",
+        );
+
+        let weak_rep = SyncReplacementTarget {
+            write_url: "https://new.example.org/sync.php".to_string(),
+            read_url: "https://new.example.org/d".to_string(),
+            drop_pub: weak_pub.clone(),
+        };
+        let weak_msg = canonical_revocation_message(
+            &admin_pub,
+            1_700_000_000,
+            1_700_000_100,
+            Some(&weak_rep),
+            None,
+        );
+        let weak_notice = SyncRevocationNotice {
+            drop_pub: admin_pub.clone(),
+            issued_at: 1_700_000_000,
+            effective_at: 1_700_000_100,
+            reason: None,
+            replacement: Some(weak_rep),
+            signature: hex::encode(admin_sk.sign(weak_msg.as_bytes()).to_bytes()),
+        };
+        assert_invalid_payload_contains(
+            verify_revocation_notice(&weak_notice, &admin_pub),
+            "invalid replacement drop_pub",
+            "verify_revocation_notice with weak drop_pub",
+        );
+
+        let weak_del_msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_pub,
+            weak_pub,
+            write_url,
+            read_url,
+            1_700_000_000,
+        );
+        let weak_del = SyncLockDelegationDto {
+            admin_pub: admin_pub.clone(),
+            lock_pub: weak_pub.clone(),
+            write_url: write_url.to_string(),
+            read_url: read_url.to_string(),
+            issued_at: 1_700_000_000,
+            sig: hex::encode(admin_sk.sign(weak_del_msg.as_bytes()).to_bytes()),
+        };
+        assert!(!verify_lock_delegation(weak_pub, &weak_del, Some(&admin_pub)));
+
+        assert_local_validation_contains(
+            push_lock_delegation(
+                &client,
+                write_url,
+                read_url,
+                &admin_sk,
+                weak_pub,
+                1_700_000_000,
+            )
+            .await,
+            "Invalid Ed25519 lock_pub",
+            "push_lock_delegation with weak lock_pub",
+        );
+    }
+}
+
+#[test]
+fn test_validate_static_lock_rel_path_and_anchor_candidates() {
+    assert_eq!(
+        validate_static_lock_rel_path("/locks/2027-Q4/aa/present.lock").unwrap(),
+        "2027-Q4/aa/present.lock"
+    );
+    assert_eq!(
+        validate_static_lock_rel_path("2027-Q4/aa/present.lock").unwrap(),
+        "2027-Q4/aa/present.lock"
+    );
+    for bad in [
+        "",
+        "locks/",
+        "2027-Q4//present.lock",
+        "2027-Q4/./present.lock",
+        "2027-Q4/aa/present.bin",
+        &format!("a/{}.lock", "b".repeat(260)),
+    ] {
+        assert_local_validation_contains(
+            validate_static_lock_rel_path(bad),
+            "Invalid static lock path",
+            bad,
+        );
+    }
+
+    let aid = "ab".repeat(32);
+    assert_eq!(
+        anchor_manifest_candidate_urls("https://sync.example.org/d/locks/", &aid).unwrap(),
+        vec![
+            format!("https://sync.example.org/d/anchors/{}.bin", aid),
+            format!("https://sync.example.org/anchors/{}.bin", aid),
+        ]
+    );
+    assert_eq!(
+        anchor_manifest_candidate_urls("https://sync.example.org/", &aid).unwrap(),
+        vec![format!("https://sync.example.org/anchors/{}.bin", aid)]
+    );
+    assert_local_validation_contains(
+        anchor_manifest_candidate_urls("https://sync.example.org/d?q=1", &aid),
+        "must not contain a query string",
+        "non-sync.php read URL with query",
+    );
 }
