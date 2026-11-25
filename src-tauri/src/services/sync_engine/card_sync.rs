@@ -175,7 +175,9 @@ pub async fn discover_available_syncs_impl(
             }
             std::collections::btree_map::Entry::Occupied(mut o) => {
                 let (existing, _) = o.get_mut();
-                if d.status == "deprecating" || d.status == "revoked" {
+                if d.status == "revoked"
+                    || (d.status == "deprecating" && existing.status != "revoked")
+                {
                     existing.status = d.status;
                     existing.sunset_at = d.sunset_at;
                     existing.revocation_reason = d.revocation_reason;
@@ -1813,6 +1815,85 @@ pub(crate) async fn sync_card_upload_channel(
 mod tests {
     use super::*;
     use crate::test_support::{create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE};
+
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_discover_available_syncs_keeps_revoked_monotonic_over_deprecating() {
+        let base_dir = TempDirGuard(temp_test_dir("discover_monotonic_revoked"));
+        let password = "TestPassword123!";
+        let state = create_test_state(setup_test_app(
+            &base_dir.0.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+
+        let admin_drop_pub = crate::test_support::test_ed25519_pub_hex(0x41);
+        let revoked_admin = crate::state::StoredSyncAdmin {
+            descriptor: humoco_market::DropDescriptor {
+                write_url: "https://revoked-sync.example.org/sync.php".to_string(),
+                read_url: "https://revoked-sync.example.org/d".to_string(),
+                slot_id: None,
+                drop_pub: admin_drop_pub.clone(),
+            },
+            sync_index: 0,
+            data_dir: "d".to_string(),
+            max_members: 50,
+            max_total_storage_mb: 100,
+            max_user_storage_mb: 10,
+            policies: Default::default(),
+            allow: vec![],
+            last_members_hash: Default::default(),
+            revocation: Some(SyncRevocationNotice {
+                drop_pub: admin_drop_pub.clone(),
+                issued_at: 1_760_000_000,
+                effective_at: 1_760_000_000,
+                reason: Some("Decommissioned".to_string()),
+                replacement: None,
+                signature: "00".repeat(64),
+            }),
+        };
+
+        {
+            let mut s = state.service.lock().unwrap();
+            let mut batch = crate::state::EncryptedBatchCommit::new();
+            batch.sync_admin(revoked_admin);
+            batch.commit(&state, &mut s, Some(password)).unwrap();
+
+            state
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.market_selected_syncs.push(FrontendSyncDescriptor {
+                        write_url: "https://revoked-sync.example.org/sync.php".to_string(),
+                        read_url: "https://revoked-sync.example.org/d".to_string(),
+                        slot_id: None,
+                        drop_pub: admin_drop_pub,
+                        status: "deprecating".to_string(),
+                        sunset_at: Some(9_999_999_999),
+                        revocation_reason: Some("Old warning".to_string()),
+                        ..Default::default()
+                    });
+                })
+                .unwrap();
+        }
+
+        let discovered = discover_available_syncs_impl(Some(password.to_string()), &state)
+            .await
+            .unwrap();
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].status, "revoked");
+        assert_eq!(discovered[0].descriptor.status, "revoked");
+        assert!(!discovered[0].is_authorized);
+        assert_eq!(
+            discovered[0].descriptor.revocation_reason.as_deref(),
+            Some("Decommissioned")
+        );
+    }
 
     #[tokio::test]
     async fn test_probe_contact_syncs_corrupt_contacts_fails_without_overwrite() {
