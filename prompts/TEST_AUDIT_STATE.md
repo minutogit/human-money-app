@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `545cb50`
-- **Total Test Files:** 165 | **Total Test Functions:** 1511
+- **Updated at HEAD:** `3ea9735`
+- **Total Test Files:** 165 | **Total Test Functions:** 1522
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -118,13 +118,13 @@
 | `src/utils/__tests__/imageCompression.test.ts` | P3 | 9 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 9/9 (935 pass)`, `tsc/lint 0`; replaced 8 `setTimeout(0)` sleeps w/ microtask helper, added portrait crop, error paths, JPEG fallback, `96px` floor & `maxBytes - 64` tests; Revert-Red `imageCompression.ts` threshold |
 | `src-tauri/src/pin_keystore.rs` | P3 | 4 | 0/0/0 | 🟢 Verified | `545cb50` | `scan 0/0/0/0`, `4/4` + `434/434` lib, `clippy` clean; TempDirGuard, hardened 7 `.is_err()` + added `restore_entry`/blank-dev/`Display`/`Corrupt`/`InvalidLen` tests; `cargo mutants` `26/26` viable caught (`13 unviable`) |
 | `src-tauri/src/settings.rs` | P3 | 5 | 0/0/0 | 🟢 Verified | `545cb50` | `scan 0/0/0/0`, `5/5` + `434/434` lib, `clippy` clean; hardened 4 `.is_err()` + added `is_lock_admin_trusted`/lifecycle DTO/all patch validation & `apply_to` tests; `cargo mutants` `32/32` caught |
-| `src-tauri/src/models/post.rs` | P3 | 1 | 0/3/0 | ⚪ Pending | — | — |
-| `src-tauri/src/models/voucher.rs` | P3 | 1 | 0/1/0 | ⚪ Pending | — | — |
-| `src-tauri/src/test_support.rs` | P3 | 1 | 0/1/0 | ⚪ Pending | — | — |
-| `run-tests.sh` | P3 | 0 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/gateway_resolver.rs` | P3 | 5 | 0/0/3 | ⚪ Pending | — | — |
-| `src-tauri/src/lib.rs` | P3 | 5 | 0/0/2 | ⚪ Pending | — | — |
-| `src-tauri/src/models/error.rs` | P3 | 5 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/models/post.rs` | P3 | 2 | 0/0/0 | 🟢 Verified | `3ea9735` | `scan 0/0/0/0`, `2/2` + `445/445` lib, `clippy` clean; exact `unwrap_err` unknown-field msgs & `InquiryTarget` roundtrips; `cargo mutants` `2 unviable` (tested via roundtrips) |
+| `src-tauri/src/models/voucher.rs` | P3 | 2 | 0/0/0 | 🟢 Verified | `3ea9735` | `scan 0/0/0/0`, `2/2` + `445/445` lib, `clippy` clean; exact `Invalid layer2_anchor hex:` error, 64-hex roundtrip, 6 `VoucherStatus` & sub-DTO conversions; `cargo mutants` `try_from` `2/2` caught |
+| `src-tauri/src/test_support.rs` | P3 | 1 | 0/0/0 | 🟢 Verified | `3ea9735` | `scan 0/0/0/0`, `1/1` + `445/445` lib, `clippy` clean; hardened `put_slot` line 805 to exact `SyncClientError::HttpStatus { status: 403, .. }` |
+| `run-tests.sh` | P3 | 0 | 0/0/0 | 🟢 Verified | `3ea9735` | `0` inline tests; verified `bash -n run-tests.sh` (exit `0`) & `./run-tests.sh --help` (exit `0`) — 100% Rust & Shell complete |
+| `src-tauri/src/gateway_resolver.rs` | P3 | 7 | 0/0/0 | 🟢 Verified | `3ea9735` | `scan 0/0/0/0`, `7/7` + `445/445` lib, `clippy` clean; bounded `read_http_request` removes 3 `stream.read` discards, `sybil_fold_committee` lock_pub dedup, `extract_registrable_domain` & `summarize_intent_dispatch` matrix; `cargo mutants` `16/16` viable caught (`2 unviable`) |
+| `src-tauri/src/lib.rs` | P3 | 6 | 0/0/0 | 🟢 Verified | `3ea9735` | `scan 0/0/0/0`, `6/6` + `445/445` lib, `clippy` clean; `TempDirGuard` replaces `remove_dir_all` discards, boundary/size/`constant_time_eq`/`Interrupted`+`BrokenPipe`/desktop-entry checks; `cargo mutants` `55/55` testable caught (`2 unviable`, `3` equiv: line 298 wall-clock, line 282 JSON leading `\n`, line 157 early-out `--` prefix) |
+| `src-tauri/src/models/error.rs` | P3 | 11 | 0/0/0 | 🟢 Verified | `3ea9735` | `scan 0/0/0/0`, `11/11` + `445/445` lib, `clippy` clean; Fail-First RED->GREEN Bug #14 `c1fcda1` `extract_two_labeled_values` field-order fix + `MarketError`/`WotError`/`SyncClientError`/`AppFacadeError`/`classify_error` matrix; `cargo mutants` `45/45` non-equiv caught (`7 unviable`, `6` equivalent `From` arms) |
 | `src-tauri/src/state/mod.rs` | P3 | 0 | 0/0/0 | 🟢 Verified | `545cb50` | `0 inline tests; SyncWakeRequest::merge|is_empty & app_state_err covered by verified sibling state/tests.rs; cargo mutants 19/19 viable caught (1 unviable)` |
 | `src/__tests__/AppLaunchQueue.test.tsx` | P3 | 4 | 0/0/0 | ⚪ Pending | — | — |
 | `src/__tests__/beginnerFlows.test.tsx` | P3 | 8 | 0/0/0 | ⚪ Pending | — | — |
