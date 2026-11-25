@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `03768e7`
-- **Total Test Files:** 165 | **Total Test Functions:** 1582
+- **Updated at HEAD:** `0f458ff`
+- **Total Test Files:** 165 | **Total Test Functions:** 1598
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -164,10 +164,10 @@
 | `src/hooks/__tests__/useParsedStandards.test.ts` | P3 | 4 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 4/4 (995 pass)`, `tsc/lint 0`; Bug #15 fixed in `8225710` (top-level TOML string shadowing); added top-level unescape/empty fallback & section isolation tests; Revert-Red `useParsedStandards.ts` |
 | `src/hooks/__tests__/useRateLimitCooldown.test.ts` | P3 | 8 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 8/8 (995 pass)`, `tsc/lint 0`; `try/finally` `subscribeSpy`, non-429 return `false` & unmount callback unsubscribe; Revert-Red `useRateLimitCooldown.ts` |
 | `src/hooks/__tests__/useVoucherCreation.test.ts` | P3 | 4 | 0/0/0 | 🟢 Verified | `03768e7` | `scan 0/0/0/0`, `vitest 4/4 (995 pass)`, `tsc/lint 0`; removed `as never`, added creator gender/summary, `validate()`/coord norm & `prepareVoucherData()`/committee/parse-error tests; Revert-Red `useVoucherCreation.ts` |
-| `src/hooks/__tests__/useVoucherFilters.test.ts` | P3 | 7 | 0/0/0 | ⚪ Pending | — | — |
-| `src/hooks/__tests__/useVoucherSelection.test.ts` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
-| `src/utils/__tests__/csvExport.test.ts` | P3 | 14 | 0/0/0 | ⚪ Pending | — | — |
-| `src/utils/__tests__/geoUtils.test.ts` | P3 | 24 | 0/0/0 | ⚪ Pending | — | — |
-| `src/utils/__tests__/humocoFileClassifier.test.ts` | P3 | 5 | 0/0/0 | ⚪ Pending | — | — |
-| `src/utils/__tests__/seedUtils.test.ts` | P3 | 5 | 0/0/0 | ⚪ Pending | — | — |
-| `src/utils/__tests__/userIdHelper.test.ts` | P3 | 12 | 0/0/0 | ⚪ Pending | — | — |
+| `src/hooks/__tests__/useVoucherFilters.test.ts` | P3 | 9 | 0/0/0 | 🟢 Verified | `0f458ff` | `scan 0/0/0/0`, `vitest 9/9 (1011 pass)`, `tsc/lint 0`; expired exclusion from `expiringSoonOnly`/toggle `activeFilterCount` & object status/missing `validUntil` sort; Revert-Red `useVoucherFilters.ts` |
+| `src/hooks/__tests__/useVoucherSelection.test.ts` | P3 | 5 | 0/0/0 | 🟢 Verified | `0f458ff` | `scan 0/0/0/0`, `vitest 5/5 (1011 pass)`, `tsc/lint 0`; fixed stale `planTransfer` mock, `parseStrictPositiveDecimal`, realm isolation/greedy `selectAmount`, `autoSelectGravitational` BigInt split/stale discard & mixed-realm guardrail; Revert-Red `useVoucherSelection.ts` |
+| `src/utils/__tests__/csvExport.test.ts` | P3 | 16 | 0/0/0 | 🟢 Verified | `0f458ff` | `scan 0/0/0/0`, `vitest 16/16 (1011 pass)`, `tsc/lint 0`; formula injection neutralization & sent countable / empty-unit fallback row; Revert-Red `csvExport.ts` |
+| `src/utils/__tests__/geoUtils.test.ts` | P3 | 26 | 0/0/0 | 🟢 Verified | `0f458ff` | `scan 0/0/0/0`, `vitest 26/26 (1011 pass)`, `tsc/lint 0`; removed `dist!`, `geocodeAddress` non-OK/`coarseOnly` & `getCurrentLocation` unavailable/timeout/out-of-range errors; Revert-Red `geoUtils.ts` |
+| `src/utils/__tests__/humocoFileClassifier.test.ts` | P3 | 8 | 0/0/0 | 🟢 Verified | `0f458ff` | `scan 0/0/0/0`, `vitest 8/8 (1011 pass)`, `tsc/lint 0`; JSON magic/deeplink detection, magic-over-extension priority & filter helpers; Revert-Red `humocoFileClassifier.ts` |
+| `src/utils/__tests__/seedUtils.test.ts` | P3 | 6 | 0/0/0 | 🟢 Verified | `0f458ff` | `scan 0/0/0/0`, `vitest 6/6 (1011 pass)`, `tsc/lint 0`; empty/punctuation-only inputs & numbered multiline paste normalization; Revert-Red `seedUtils.ts` |
+| `src/utils/__tests__/userIdHelper.test.ts` | P3 | 14 | 0/0/0 | 🟢 Verified | `0f458ff` | `scan 0/0/0/0`, `vitest 14/14 (1011 pass)`, `tsc/lint 0`; `suggestFilename` path traversal sanitization & empty/short/non-DID edge cases; Revert-Red `userIdHelper.ts` |
