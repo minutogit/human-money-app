@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `1ab2edd`
-- **Total Test Files:** 165 | **Total Test Functions:** 1421
+- **Updated at HEAD:** `16d34aa`
+- **Total Test Files:** 165 | **Total Test Functions:** 1450
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -68,7 +68,7 @@
 | `src-tauri/src/sync_client/tests.rs` | P2 | 34 | 0/0/0 | 🟢 Verified | `c4bc457` | `34/34 pass (385/385 lib); Fail-First RED->GREEN revocation vk.is_weak(); cargo mutants revocation.rs 21/21 viable caught (1 unviable) + ssrf.rs 8/8 viable caught (1 unviable)` |
 | `src-tauri/src/commands/vouchers.rs` | P2 | 11 | 0/0/0 | 🟢 Verified | `1ab2edd` | `11/11 pass (402/402 lib); split 5 mega-tests, removed outer-JSON if-let-Ok skip, bare is_err/is_some & TempDir discards, added edge/locked-fallback checks; cargo mutants open_voucher_signing_request_impl 7/7, resolve_manifest_candidate 5/5 & evaluate_guarantor_anchor_check_with_service 23/23 caught (35/35 total)` |
 | `src-tauri/src/services/sync_engine/channel_reader.rs` | P2 | 11 | 0/0/0 | 🟢 Verified | `1ab2edd` | `11/11 pass (402/402 lib); Fail-First RED->GREEN Commit 1 e0a9a11 sticky revocation & disabled revoked public_sync; removed accept if-let-Ok, split mega-tests & checked HTTP mocks; cargo mutants apply_revocation_notice 2/2 & channel_reader targets 22/22 viable caught (1 unviable)` |
-| `src/components/wallet/__tests__/Dashboard.test.tsx` | P2 | 9 | 1/0/0 | ⚪ Pending | — | — |
+| `src/components/wallet/__tests__/Dashboard.test.tsx` | P2 | 11 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 11/11 (98/98 files, 906 tests full pass); removed conditional_expect if(bannerCard), checked copyable TechId & popover amounts + FirstStepsChecklist/invalidSignature; Revert-Red DashboardBanners initialFilter` |
 | `src-tauri/src/commands/contacts.rs` | P2 | 8 | 0/0/0 | 🟢 Verified | `c4bc457` | `8/8 pass; hardened roundtrip, get_cached_contacts & exact descriptor validation errors + DID norm & delete tests; cargo mutants validate_contact_sync_descriptor(s) 7/7 caught` |
 | `src-tauri/src/services/fs_helpers.rs` | P2 | 8 | 0/0/0 | 🟢 Verified | `c4bc457` | `8/8 pass; Fail-First RED->GREEN collect_custom_standards_from_dir symlinks/1MiB guard, RAII TempDirGuard & exact errors; cargo mutants 15/17 caught (+2 equiv is_symlink||!is_dir)` |
 | `src-tauri/src/services/post_service/tests.rs` | P2 | 27 | 0/5/40 | ⚪ Pending | — | — |
@@ -80,7 +80,7 @@
 | `src-tauri/src/services/preflight.rs` | P2 | 2 | 0/1/7 | ⚪ Pending | — | — |
 | `src-tauri/src/services/sync_coordinator.rs` | P2 | 5 | 0/1/3 | ⚪ Pending | — | — |
 | `src-tauri/src/services/sync_engine/card_sync.rs` | P2 | 4 | 0/1/6 | ⚪ Pending | — | — |
-| `src/components/settings/__tests__/SyncServiceSettingsCard.test.tsx` | P2 | 16 | 0/1/0 | ⚪ Pending | — | — |
+| `src/components/settings/__tests__/SyncServiceSettingsCard.test.tsx` | P2 | 18 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 18/18 (906 full pass); replaced setTimeout(20) w/ deferred probe + SYNC_STATUS_UPDATED_EVENT dedup, removed eslint-disable/require/any, tested unauthorized enabled=false & toggle rollback; Revert-Red useSyncServiceAdmin enabled=hasAuth` |
 | `src-tauri/src/commands/profile.rs` | P2 | 4 | 0/0/4 | ⚪ Pending | — | — |
 | `src-tauri/src/commands/standards.rs` | P2 | 1 | 0/0/1 | ⚪ Pending | — | — |
 | `src-tauri/src/intent_reconciliation.rs` | P2 | 6 | 0/0/2 | ⚪ Pending | — | — |
@@ -93,12 +93,12 @@
 | `src-tauri/src/services/sync_engine/admin.rs` | P2 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/sync_client/mod.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
 | `src-tauri/src/sync_zip.rs` | P2 | 3 | 0/0/1 | ⚪ Pending | — | — |
-| `src/components/profile/__tests__/QuickContactModal.test.tsx` | P2 | 5 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/settings/__tests__/AutoSyncSummaryCard.test.tsx` | P2 | 1 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/wallet/__tests__/CreateVoucher.test.tsx` | P2 | 12 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/wallet/__tests__/FirstStepsChecklist.test.tsx` | P2 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/wallet/__tests__/SignRequestView.test.tsx` | P2 | 10 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/wallet/__tests__/VoucherDetailsView.test.tsx` | P2 | 1 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/profile/__tests__/QuickContactModal.test.tsx` | P2 | 8 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 8/8 (906 full pass); deferred loading state, exact .hmcard bytes, isOpen=false, publish error & Sync badge states; Revert-Red QuickContactModal setPublishError` |
+| `src/components/settings/__tests__/AutoSyncSummaryCard.test.tsx` | P2 | 7 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 7/7 (906 full pass); error rollback/refresh, revoked/host dedup, partial-active badge, unsafe scheme block, replacement adoption & WiFi/media patches; Revert-Red AutoSyncSummaryCard isSafeExternalSyncUrl` |
+| `src/components/wallet/__tests__/CreateVoucher.test.tsx` | P2 | 16 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 16/16 (906 full pass); negative create invoke guard, l2CommitteeChanged diff & empty fallback, forceReprobe retry & error modal close; Revert-Red CreateVoucher empty actualPubs fallback` |
+| `src/components/wallet/__tests__/FirstStepsChecklist.test.tsx` | P2 | 7 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 7/7 (906 full pass); fresh-mount localStorage dismiss, hasIdentityRecovery=false->security route, userId/profileScope isolation & Enter/Space keys; Revert-Red FirstStepsChecklist initialSection` |
+| `src/components/wallet/__tests__/SignRequestView.test.tsx` | P2 | 14 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 14/14 (906 full pass); strict bundle/writeFile/dismissPendingPostItem asserts, disallowed role/conflicts, discover_anchor_manifest_cmd, missing-standard L2 block & trust error guard; Revert-Red SignRequestView !standardContent` |
+| `src/components/wallet/__tests__/VoucherDetailsView.test.tsx` | P2 | 6 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 10/10 (6 fn, 906 full pass); Fail-First RED->GREEN Commit 1 2669456 useVoucherDetails translateError, unspent/offline_only/unanchored/own-voucher guards, claim-at-guarantor & reducedGuarantorProtection badge` |
 | `src/context/__tests__/NavigationContext.test.tsx` | P2 | 11 | 0/0/0 | ⚪ Pending | — | — |
 | `src/context/__tests__/SessionContext.test.tsx` | P2 | 18 | 0/0/0 | ⚪ Pending | — | — |
 | `src/context/__tests__/SessionContextEvents.test.tsx` | P2 | 2 | 0/0/0 | ⚪ Pending | — | — |
