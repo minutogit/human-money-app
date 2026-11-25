@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `f5c105a`
-- **Total Test Files:** 165 | **Total Test Functions:** 1504
+- **Updated at HEAD:** `545cb50`
+- **Total Test Files:** 165 | **Total Test Functions:** 1511
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -114,10 +114,10 @@
 | `src/help/__tests__/helpTopics.test.ts` | P3 | 5 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 5/5 (935 pass)`, `tsc/lint 0`; removed 3 conditional_expect & 13 weak_existence_assert, added non-empty/unique related & group-audience checks; Revert-Red `helpTopics.ts` `titleKey` |
 | `src/components/shell/__tests__/StatusChip.test.tsx` | P3 | 12 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 12/12 (935 pass)`, `tsc/lint 0`; removed 2 conditional_expect, reset mock leaks & added witness/override, pull-sync lock, multi-warning & Escape/outside-click tests; Revert-Red `StatusChip.tsx` conflict filter |
 | `src/locales/__tests__/glossaryLint.test.ts` | P3 | 8 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 8/8 (935 pass)`, `tsc/lint 0`; replaced allowlist conditional_expect tautology w/ concrete boundary & EN-parity assertions; Revert-Red `de.json` `Wallet` injection |
-| `src-tauri/src/state/tests.rs` | P3 | 22 | 0/12/26 | ⚪ Pending | — | — |
+| `src-tauri/src/state/tests.rs` | P3 | 27 | 0/0/0 | 🟢 Verified | `545cb50` | `scan 0/0/0/0`, `27/27` + `434/434` lib, `clippy` clean; TempDirGuard across all temp dirs, split 5 mega-tests, hardened 12 `.is_err()`, 4 `.is_some()` & 2 discards + `SyncWakeRequest`/`app_state_err` tests; `cargo mutants` `state/mod.rs` `19/19` viable caught |
 | `src/utils/__tests__/imageCompression.test.ts` | P3 | 9 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 9/9 (935 pass)`, `tsc/lint 0`; replaced 8 `setTimeout(0)` sleeps w/ microtask helper, added portrait crop, error paths, JPEG fallback, `96px` floor & `maxBytes - 64` tests; Revert-Red `imageCompression.ts` threshold |
-| `src-tauri/src/pin_keystore.rs` | P3 | 3 | 0/7/2 | ⚪ Pending | — | — |
-| `src-tauri/src/settings.rs` | P3 | 4 | 0/4/0 | ⚪ Pending | — | — |
+| `src-tauri/src/pin_keystore.rs` | P3 | 4 | 0/0/0 | 🟢 Verified | `545cb50` | `scan 0/0/0/0`, `4/4` + `434/434` lib, `clippy` clean; TempDirGuard, hardened 7 `.is_err()` + added `restore_entry`/blank-dev/`Display`/`Corrupt`/`InvalidLen` tests; `cargo mutants` `26/26` viable caught (`13 unviable`) |
+| `src-tauri/src/settings.rs` | P3 | 5 | 0/0/0 | 🟢 Verified | `545cb50` | `scan 0/0/0/0`, `5/5` + `434/434` lib, `clippy` clean; hardened 4 `.is_err()` + added `is_lock_admin_trusted`/lifecycle DTO/all patch validation & `apply_to` tests; `cargo mutants` `32/32` caught |
 | `src-tauri/src/models/post.rs` | P3 | 1 | 0/3/0 | ⚪ Pending | — | — |
 | `src-tauri/src/models/voucher.rs` | P3 | 1 | 0/1/0 | ⚪ Pending | — | — |
 | `src-tauri/src/test_support.rs` | P3 | 1 | 0/1/0 | ⚪ Pending | — | — |
@@ -125,7 +125,7 @@
 | `src-tauri/src/gateway_resolver.rs` | P3 | 5 | 0/0/3 | ⚪ Pending | — | — |
 | `src-tauri/src/lib.rs` | P3 | 5 | 0/0/2 | ⚪ Pending | — | — |
 | `src-tauri/src/models/error.rs` | P3 | 5 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/state/mod.rs` | P3 | 0 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/state/mod.rs` | P3 | 0 | 0/0/0 | 🟢 Verified | `545cb50` | `0 inline tests; SyncWakeRequest::merge|is_empty & app_state_err covered by verified sibling state/tests.rs; cargo mutants 19/19 viable caught (1 unviable)` |
 | `src/__tests__/AppLaunchQueue.test.tsx` | P3 | 4 | 0/0/0 | ⚪ Pending | — | — |
 | `src/__tests__/beginnerFlows.test.tsx` | P3 | 8 | 0/0/0 | ⚪ Pending | — | — |
 | `src/__tests__/uiModeLint.test.ts` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
