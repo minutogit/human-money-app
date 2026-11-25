@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `feada67`
-- **Total Test Files:** 165 | **Total Test Functions:** 1483
+- **Updated at HEAD:** `a3ca8b0`
+- **Total Test Files:** 165 | **Total Test Functions:** 1488
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -75,11 +75,11 @@
 | `src-tauri/src/services/sync_endpoints.rs` | P2 | 6 | 0/0/0 | 🟢 Verified | `c4bc457` | `6/6 pass; split into focused unit tests with exact errors & single-field/overlap/sanitize boundary checks; cargo mutants 58/63 + recheck 25/25 caught (63/63 total)` |
 | `src-tauri/src/services/transfer_service.rs` | P2 | 11 | 0/0/0 | 🟢 Verified | `feada67` | `scan 0/0/0/0`, `11/11` tests + `415/415` lib, `clippy` clean, `cargo mutants` `14/14` viable caught |
 | `src-tauri/src/services/settings_service.rs` | P2 | 10 | 0/0/0 | 🟢 Verified | `1ab2edd` | `10/10 pass (402/402 lib); split 2 mega-tests, TempDirGuard, exact preset/fault errors, wake parity incl. wifi-unlock & DailyPay/Full/conflict override gates; cargo mutants presets 13/13, patch_ui_preferences_impl 18/18 & patch_security_policy_impl 22/22 caught (53/53 total)` |
-| `src-tauri/src/services/sync_engine/mod.rs` | P2 | 22 | 0/2/41 | ⚪ Pending | — | — |
+| `src-tauri/src/services/sync_engine/mod.rs` | P2 | 23 | 0/0/0 | 🟢 Verified | `a3ca8b0` | `scan 0/0/0/0`, `41/41` sync_engine + `420/420` lib, `clippy` clean, `cargo mutants` `35/35` viable caught (`SyncErrorTracker::|get_sync_overview_status_impl` + recheck `5/5`) |
 | `src-tauri/src/commands/utils.rs` | P2 | 3 | 0/0/0 | 🟢 Verified | `feada67` | `scan 0/0/0/0`, `3/3` tests + `415/415` lib, `clippy` clean, `cargo mutants` `8/8` sanitize/peek/ack + `read_log_tail_bounded` (`6/7` recheck, `18+6` caught, `1` timeout) |
 | `src-tauri/src/services/preflight.rs` | P2 | 4 | 0/0/0 | 🟢 Verified | `feada67` | `scan 0/0/0/0`, `4/4` tests + `415/415` lib, `clippy` clean, `cargo mutants` `9/9` caught (`run_value_outflow_preflight`) |
-| `src-tauri/src/services/sync_coordinator.rs` | P2 | 5 | 0/1/3 | ⚪ Pending | — | — |
-| `src-tauri/src/services/sync_engine/card_sync.rs` | P2 | 4 | 0/1/6 | ⚪ Pending | — | — |
+| `src-tauri/src/services/sync_coordinator.rs` | P2 | 6 | 0/0/0 | 🟢 Verified | `a3ca8b0` | `scan 0/0/0/0`, `6/6` + `420/420` lib, `clippy` clean, `cargo mutants` `17/17` viable caught (`CoordinatorSchedule`) |
+| `src-tauri/src/services/sync_engine/card_sync.rs` | P2 | 6 | 0/0/0 | 🟢 Verified | `a3ca8b0` | `scan 0/0/0/0`, `41/41` sync_engine + `420/420` lib, `clippy` clean, Fail-First RED->GREEN Commit 1 `00650d2` sticky `revoked`, `cargo mutants` `42/42` (`41 caught, 1 timeout`) |
 | `src/components/settings/__tests__/SyncServiceSettingsCard.test.tsx` | P2 | 18 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 18/18 (906 full pass); replaced setTimeout(20) w/ deferred probe + SYNC_STATUS_UPDATED_EVENT dedup, removed eslint-disable/require/any, tested unauthorized enabled=false & toggle rollback; Revert-Red useSyncServiceAdmin enabled=hasAuth` |
 | `src-tauri/src/commands/profile.rs` | P2 | 4 | 0/0/4 | ⚪ Pending | — | — |
 | `src-tauri/src/commands/standards.rs` | P2 | 1 | 0/0/1 | ⚪ Pending | — | — |
@@ -90,7 +90,7 @@
 | `src-tauri/src/services/post_service/handlers.rs` | P2 | 4 | 0/0/0 | 🟢 Verified | `95bf67b` | `4/4 pass (410/410 lib); TempDirGuard replaces remove_dir_all discards, added extract_payment_uri_recipient & handle_guardian_revoke mismatch/revoke tests; cargo mutants extract_payment_uri_recipient|handle_guardian_revoke 10/10 caught` |
 | `src-tauri/src/services/post_service/mod.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `95bf67b` | `0 inline tests; helpers & pub API covered by verified sibling tests.rs; cargo mutants mod.rs helpers 15/15 caught` |
 | `src-tauri/src/services/post_service/outbox.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `95bf67b` | `0 inline tests; covered by verified sibling tests.rs; cargo mutants verify_outgoing_post_container 4/4 caught` |
-| `src-tauri/src/services/sync_engine/admin.rs` | P2 | 0 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/services/sync_engine/admin.rs` | P2 | 1 | 0/0/0 | 🟢 Verified | `a3ca8b0` | `scan 0/0/0/0`, `41/41` sync_engine + `420/420` lib, `clippy` clean, `cargo mutants` `32/32` viable caught (`admin` helpers) |
 | `src-tauri/src/sync_client/mod.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
 | `src-tauri/src/sync_zip.rs` | P2 | 3 | 0/0/1 | ⚪ Pending | — | — |
 | `src/components/profile/__tests__/QuickContactModal.test.tsx` | P2 | 8 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 8/8 (906 full pass); deferred loading state, exact .hmcard bytes, isOpen=false, publish error & Sync badge states; Revert-Red QuickContactModal setPublishError` |
