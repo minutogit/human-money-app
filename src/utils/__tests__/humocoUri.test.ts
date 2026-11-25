@@ -3,11 +3,13 @@ import { Buffer } from 'node:buffer';
 import {
   buildContactUri,
   parseContactCard,
+  buildPaymentRequestUri,
   buildPaymentRequestText,
   parsePaymentRequest,
   parseCardUri,
   parseHumocoInput,
   normalizeUserIdInput,
+  normalizeSyncUrlInput,
   extractCardPayload,
   isValidUserIdFormat,
   extractHumocoDeepLink,
@@ -329,19 +331,32 @@ describe('humocoUri Utilities', () => {
     });
 
     it('parseHumocoInput discriminates payment, card, contact, and embedded DID inputs', () => {
-      const payRes = parseHumocoInput(`Bitte zahlen: humoco://pay?to=${encodeURIComponent(sampleDid)}&amount=12.50&note=Honig`);
-      expect(payRes?.kind).toBe('payment');
-      if (payRes?.kind === 'payment') {
-        expect(payRes.payment.to).toBe(sampleDid);
-        expect(payRes.payment.amount).toBe('12.50');
-      }
+      const payUri = `humoco://pay?to=${encodeURIComponent(sampleDid)}&amount=12.50&note=Honig`;
+      const payRes = parseHumocoInput(`Bitte zahlen: ${payUri}`);
+      expect(payRes).toEqual({
+        kind: 'payment',
+        uri: payUri,
+        payment: {
+          to: sampleDid,
+          name: undefined,
+          standardUuid: undefined,
+          standardName: undefined,
+          unit: undefined,
+          amount: '12.50',
+          note: 'Honig',
+          isTest: undefined,
+        },
+      });
 
       const contactRes = parseHumocoInput(`humoco://contact?did=${encodeURIComponent(sampleDid)}&name=Alice`);
-      expect(contactRes?.kind).toBe('contact');
-      if (contactRes?.kind === 'contact') {
-        expect(contactRes.contact.did).toBe(sampleDid);
-        expect(contactRes.contact.name).toBe('Alice');
-      }
+      expect(contactRes).toEqual({
+        kind: 'contact',
+        contact: {
+          did: sampleDid,
+          name: 'Alice',
+          syncUrls: undefined,
+        },
+      });
 
       const didRes = parseHumocoInput(`Meine ID im Chat lautet "${sampleSai}", bitte melden.`);
       expect(didRes).toEqual({ kind: 'did', did: sampleSai });
@@ -351,18 +366,26 @@ describe('humocoUri Utilities', () => {
       const cardJson = JSON.stringify({ card_wire: `${header}.${payload}.sig` });
       const cardB64 = toBase64Url(JSON.parse(cardJson));
       const cardUriRes = parseHumocoInput(`humoco://card?env=${cardB64}`);
-      expect(cardUriRes?.kind).toBe('card');
-      if (cardUriRes?.kind === 'card') {
-        expect(cardUriRes.payload).toBe(`humoco://card?env=${cardB64}`);
-        expect('did' in cardUriRes).toBe(false);
-      }
+      expect(cardUriRes).toEqual({
+        kind: 'card',
+        payload: `humoco://card?env=${cardB64}`,
+        card: {
+          envBase64: cardB64,
+          envelopeJson: cardJson,
+        },
+      });
+      expect('did' in (cardUriRes as object)).toBe(false);
 
       const cardJsonRes = parseHumocoInput(cardJson);
-      expect(cardJsonRes?.kind).toBe('card');
-      if (cardJsonRes?.kind === 'card') {
-        expect(cardJsonRes.payload).toBe(cardJson);
-        expect('did' in cardJsonRes).toBe(false);
-      }
+      expect(cardJsonRes).toEqual({
+        kind: 'card',
+        payload: cardJson,
+        card: {
+          envBase64: '',
+          envelopeJson: cardJson,
+        },
+      });
+      expect('did' in (cardJsonRes as object)).toBe(false);
 
       expect(parseHumocoInput('plain text without humoco uri')).toBeNull();
       expect(parseHumocoInput(`invalid@${sampleDid}`)).toBeNull();
@@ -419,6 +442,70 @@ describe('humocoUri Utilities', () => {
       expect(extractCardPayload(JSON.stringify({ envelope: { did: sampleDid } }))).toBeNull();
       expect(extractCardPayload(JSON.stringify({ did: sampleDid }))).toBeNull();
       expect(parseHumocoInput(JSON.stringify({ card: { name: 'Legacy' }, sig: 'abc' }))).toBeNull();
+    });
+
+    it('normalizeSyncUrlInput normalizes schemes, loopback HTTP, default ports, subpaths, and rejects non-HTTP schemes', () => {
+      expect(normalizeSyncUrlInput('')).toBe('');
+      expect(normalizeSyncUrlInput('   \t ')).toBe('');
+      expect(normalizeSyncUrlInput('sync.example.org')).toBe('https://sync.example.org/sync.php');
+      expect(normalizeSyncUrlInput('http://remote.example/api/')).toBe('https://remote.example/api/sync.php');
+      expect(normalizeSyncUrlInput('HTTP://LOCALHOST:8080/')).toBe('http://localhost:8080/sync.php');
+      expect(normalizeSyncUrlInput('http://127.0.0.1:80')).toBe('http://127.0.0.1/sync.php');
+      expect(normalizeSyncUrlInput('http://[::1]:8080/node')).toBe('http://[::1]:8080/node/sync.php');
+      expect(normalizeSyncUrlInput('https://SYNC.Example.ORG:443/sync.php?token=1#frag')).toBe(
+        'https://sync.example.org/sync.php'
+      );
+      expect(normalizeSyncUrlInput('Bitte hier synchronisieren: (https://node.example/sub/sync.php), danke!')).toBe(
+        'https://node.example/sub/sync.php'
+      );
+      expect(normalizeSyncUrlInput('ftp://files.example.org/sync.php')).toBe('');
+      expect(normalizeSyncUrlInput('javascript:alert(1)')).toBe('');
+      expect(normalizeSyncUrlInput('data:text/html,hi')).toBe('');
+      expect(normalizeSyncUrlInput('mailto:alice@example.org')).toBe('');
+      expect(normalizeSyncUrlInput('https://user:pass@evil.example/sync.php')).toBe('');
+      expect(normalizeSyncUrlInput('sync.example.org:8443')).toBe('https://sync.example.org:8443/sync.php');
+
+      expect(
+        parseContactCard(`humoco://contact?did=${encodeURIComponent(sampleDid)}&sync=javascript:alert(1)&sync=https://s1.example`)?.syncUrls
+      ).toEqual(['https://s1.example/sync.php']);
+    });
+
+    it('covers payment text formatting variants, test flag parsing, contact sync capping, and additional deep-link schemes', () => {
+      const uriOnly = buildPaymentRequestUri({ to: sampleDid, amount: '7', unit: 'Minuto', isTest: true });
+      expect(uriOnly).toBe(`humoco://pay?to=${encodeURIComponent(sampleDid)}&amount=7&unit=Minuto&test=true`);
+
+      const unitOnlyText = buildPaymentRequestText(
+        { to: sampleDid, name: 'Bob', unit: 'Taler' },
+        ((_k: string, opts?: { defaultValue?: string }) => {
+          const map: Record<string, string> = {
+            'transfer.paymentRequestText.heading': 'Payment Request:',
+            'transfer.paymentRequestText.recipient': 'To',
+            'transfer.paymentRequestText.currency': 'Unit',
+          };
+          return map[_k] ?? opts?.defaultValue ?? _k;
+        }) as never
+      );
+      expect(unitOnlyText).toContain('Payment Request:');
+      expect(unitOnlyText).toContain(`To: Bob (${sampleDid})`);
+      expect(unitOnlyText).toContain('Unit: Taler');
+
+      const amountOnlyText = buildPaymentRequestText({ to: sampleDid, amount: 42 });
+      expect(amountOnlyText).toContain('Betrag: 42\n');
+
+      expect(parsePaymentRequest(`humoco://pay?to=${encodeURIComponent(sampleDid)}&test=1`)?.isTest).toBe(true);
+      expect(parsePaymentRequest(`humoco://pay?to=${encodeURIComponent(sampleDid)}&test=false`)?.isTest).toBe(false);
+
+      const contactUri = buildContactUri({
+        did: sampleDid,
+        syncUrls: ['ftp://bad.example', 'javascript:alert(1)', 'https://s1.example/sync.php', 'https://s2.example', 'https://s3.example'],
+      });
+      expect(contactUri).toBe(
+        `humoco://contact?did=${encodeURIComponent(sampleDid)}&sync=s1.example&sync=s2.example`
+      );
+
+      expect(extractHumocoDeepLink('Hier:\u200B\u00A0humoco://kit?data=abc123!')).toBe('humoco://kit?data=abc123');
+      expect(extractHumocoDeepLink('humoco://recovery-req?id=r1.')).toBe('humoco://recovery-req?id=r1');
+      expect(extractHumocoDeepLink('humoco://recovery-reply?share=s1;')).toBe('humoco://recovery-reply?share=s1');
     });
   });
 });

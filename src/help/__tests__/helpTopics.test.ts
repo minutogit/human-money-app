@@ -8,68 +8,91 @@ describe('helpTopics Registry', () => {
     const de = deJson as Record<string, string>;
     const en = enJson as Record<string, string>;
 
+    const assertNonEmptyLocaleString = (
+        dict: Record<string, string>,
+        key: string,
+        label: string
+    ) => {
+        expect(typeof dict[key], `${label} (${key}) must exist as a string`).toBe('string');
+        expect(dict[key].trim().length, `${label} (${key}) must not be blank`).toBeGreaterThan(0);
+    };
+
     it('has non-empty topic list', () => {
         expect(topicIds.length).toBeGreaterThan(20);
     });
 
-    it('ensures every topic has valid group defined in HELP_GROUPS and required audience', () => {
+    it('ensures every topic has valid group defined in HELP_GROUPS and aligned audience', () => {
         const validGroups = new Set(HELP_GROUPS.map((g) => g.id));
         expect(HELP_GROUPS).toHaveLength(7);
+        const groupCounts = new Map<string, number>();
+
+        for (const group of HELP_GROUPS) {
+            assertNonEmptyLocaleString(de, group.labelKey, 'DE group label');
+            assertNonEmptyLocaleString(en, group.labelKey, 'EN group label');
+            groupCounts.set(group.id, 0);
+        }
+
         for (const id of topicIds) {
             const topic = HELP_TOPICS[id];
+            expect(topic.id).toBe(id);
             expect(validGroups.has(topic.group)).toBe(true);
             expect(['everyone', 'expert']).toContain(topic.audience);
+            expect(topic.audience === 'expert').toBe(topic.group === 'expert');
+            groupCounts.set(topic.group, (groupCounts.get(topic.group) ?? 0) + 1);
+        }
+
+        for (const group of HELP_GROUPS) {
+            expect(groupCounts.get(group.id) ?? 0, `Group ${group.id} must not be empty`).toBeGreaterThan(0);
         }
         expect('wotReach' in HELP_TOPICS).toBe(false);
         expect('wotSharing' in HELP_TOPICS).toBe(false);
         expect('posMode' in HELP_TOPICS).toBe(false);
     });
 
-    it('ensures every topic has non-empty titleKey, shortKey, and longKey in de.json and en.json', () => {
+    it('ensures every topic has non-empty titleKey, shortKey, longKey, and deepDiveKey in de.json and en.json', () => {
         for (const id of topicIds) {
             const topic = HELP_TOPICS[id];
 
-            // titleKey
             expect(topic.titleKey).toBe(`help.${id}.title`);
-            expect(de[topic.titleKey], `Missing DE for ${topic.titleKey}`).toBeDefined();
-            expect(de[topic.titleKey].trim().length).toBeGreaterThan(0);
-            expect(en[topic.titleKey], `Missing EN for ${topic.titleKey}`).toBeDefined();
-            expect(en[topic.titleKey].trim().length).toBeGreaterThan(0);
+            assertNonEmptyLocaleString(de, topic.titleKey, 'DE title');
+            assertNonEmptyLocaleString(en, topic.titleKey, 'EN title');
 
-            // shortKey
             expect(topic.shortKey).toBe(`help.${id}.short`);
-            expect(de[topic.shortKey], `Missing DE for ${topic.shortKey}`).toBeDefined();
-            expect(de[topic.shortKey].trim().length).toBeGreaterThan(0);
-            expect(en[topic.shortKey], `Missing EN for ${topic.shortKey}`).toBeDefined();
-            expect(en[topic.shortKey].trim().length).toBeGreaterThan(0);
+            assertNonEmptyLocaleString(de, topic.shortKey, 'DE short');
+            assertNonEmptyLocaleString(en, topic.shortKey, 'EN short');
 
-            // longKey
             expect(topic.longKey).toBe(`help.${id}.long`);
-            expect(de[topic.longKey], `Missing DE for ${topic.longKey}`).toBeDefined();
-            expect(de[topic.longKey].trim().length).toBeGreaterThan(0);
-            expect(en[topic.longKey], `Missing EN for ${topic.longKey}`).toBeDefined();
-            expect(en[topic.longKey].trim().length).toBeGreaterThan(0);
+            assertNonEmptyLocaleString(de, topic.longKey, 'DE long');
+            assertNonEmptyLocaleString(en, topic.longKey, 'EN long');
+        }
 
-            // deepDiveKey (optional)
-            if (topic.deepDiveKey) {
-                expect(topic.deepDiveKey).toBe(`help.${id}.deepDive`);
-                expect(de[topic.deepDiveKey], `Missing DE for ${topic.deepDiveKey}`).toBeDefined();
-                expect(de[topic.deepDiveKey].trim().length).toBeGreaterThan(0);
-                expect(en[topic.deepDiveKey], `Missing EN for ${topic.deepDiveKey}`).toBeDefined();
-                expect(en[topic.deepDiveKey].trim().length).toBeGreaterThan(0);
-            }
+        const deepDiveTopics = topicIds
+            .map((id) => HELP_TOPICS[id])
+            .filter(
+                (t): t is (typeof HELP_TOPICS)[HelpTopicId] & { deepDiveKey: string } =>
+                    typeof t.deepDiveKey === 'string'
+            );
+        expect(deepDiveTopics.length).toBeGreaterThan(0);
+
+        for (const topic of deepDiveTopics) {
+            expect(topic.deepDiveKey).toBe(`help.${topic.id}.deepDive`);
+            assertNonEmptyLocaleString(de, topic.deepDiveKey, 'DE deepDive');
+            assertNonEmptyLocaleString(en, topic.deepDiveKey, 'EN deepDive');
         }
     });
 
-    it('ensures every related topic references a valid HelpTopicId and not itself', () => {
+    it('ensures every topic defines non-empty, unique, valid related links without self-references', () => {
         const topicIdSet = new Set(topicIds);
         for (const id of topicIds) {
             const topic = HELP_TOPICS[id];
-            if (topic.related) {
-                for (const relId of topic.related) {
-                    expect(topicIdSet.has(relId), `Invalid related topic ID: ${relId} on ${id}`).toBe(true);
-                    expect(relId, `Topic ${id} should not relate to itself`).not.toBe(id);
-                }
+            const related = topic.related ?? [];
+            expect(Array.isArray(topic.related), `Topic ${id} must declare related topics`).toBe(true);
+            expect(related.length, `Topic ${id} must have at least 1 related topic`).toBeGreaterThan(0);
+            expect(new Set(related).size, `Topic ${id} has duplicate related links`).toBe(related.length);
+
+            for (const relId of related) {
+                expect(topicIdSet.has(relId), `Invalid related topic ID: ${relId} on ${id}`).toBe(true);
+                expect(relId, `Topic ${id} should not relate to itself`).not.toBe(id);
             }
         }
     });
@@ -102,10 +125,8 @@ describe('helpTopics Registry', () => {
         ];
 
         for (const k of expectedUiKeys) {
-            expect(de[k], `Missing DE key ${k}`).toBeDefined();
-            expect(de[k].trim().length).toBeGreaterThan(0);
-            expect(en[k], `Missing EN key ${k}`).toBeDefined();
-            expect(en[k].trim().length).toBeGreaterThan(0);
+            assertNonEmptyLocaleString(de, k, 'DE UI key');
+            assertNonEmptyLocaleString(en, k, 'EN UI key');
         }
 
         const expectedNewIds: HelpTopicId[] = [
@@ -128,17 +149,7 @@ describe('helpTopics Registry', () => {
             'faqSyncDown',
         ];
         for (const newId of expectedNewIds) {
-            expect(HELP_TOPICS[newId]).toBeDefined();
-        }
-
-        for (const id of topicIds) {
-            const topic = HELP_TOPICS[id];
-            if (topic.deepDiveKey) {
-                expect(de[topic.deepDiveKey], `Missing DE deepDive ${topic.deepDiveKey}`).toBeDefined();
-                expect(de[topic.deepDiveKey].trim().length).toBeGreaterThan(0);
-                expect(en[topic.deepDiveKey], `Missing EN deepDive ${topic.deepDiveKey}`).toBeDefined();
-                expect(en[topic.deepDiveKey].trim().length).toBeGreaterThan(0);
-            }
+            expect(HELP_TOPICS[newId]?.id).toBe(newId);
         }
     });
 });

@@ -91,12 +91,12 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
             }
         }
 
-        if (violations.length > 0) {
-            const report = violations
+        expect(
+            violations,
+            `Found ${violations.length} forbidden glossary term(s) in de.json:\n${violations
                 .map((v) => `  - [${v.term}] ${v.key}: "${v.text}"`)
-                .join('\n');
-            expect.fail(`Found ${violations.length} forbidden glossary term(s) in de.json:\n${report}`);
-        }
+                .join('\n')}`
+        ).toEqual([]);
     });
 
     it('ensures Web of Trust & Contact keys never use "bürgen" or "haften"', () => {
@@ -114,14 +114,12 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
             }
         }
 
-        if (violations.length > 0) {
-            const report = violations
+        expect(
+            violations,
+            `Found ${violations.length} WoT/Contact key(s) using guarantor terminology (bürgen/haften):\n${violations
                 .map((v) => `  - ${v.key}: "${v.text}"`)
-                .join('\n');
-            expect.fail(
-                `Found ${violations.length} WoT/Contact key(s) using guarantor terminology (bürgen/haften):\n${report}`
-            );
-        }
+                .join('\n')}`
+        ).toEqual([]);
     });
 
     it('ensures en.json respects core terminology without forbidden jargon', () => {
@@ -148,25 +146,37 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
             }
         }
 
-        if (violations.length > 0) {
-            const report = violations
+        expect(
+            violations,
+            `Found ${violations.length} forbidden term(s) in en.json:\n${violations
                 .map((v) => `  - [${v.term}] ${v.key}: "${v.text}"`)
-                .join('\n');
-            expect.fail(`Found ${violations.length} forbidden term(s) in en.json:\n${report}`);
-        }
+                .join('\n')}`
+        ).toEqual([]);
     });
 
     it('ensures allowlist keys only apply to valid technical explanation paths', () => {
-        for (const key of Object.keys(de)) {
-            if (isAllowlisted(key)) {
-                expect(
-                    (key.startsWith('help.') && (key.endsWith('.long') || key.endsWith('.deepDive'))) ||
-                        key.startsWith('settings.advanced') ||
-                        /\.expert(\.|$)/.test(key),
-                    `Unexpected allowlisted key pattern: ${key}`
-                ).toBe(true);
-            }
-        }
+        const allowlistedKeys = Object.keys(de).filter(isAllowlisted);
+        expect(allowlistedKeys.length).toBeGreaterThan(10);
+
+        // Simple-mode help titles/short hints must NEVER be allowlisted
+        const forbiddenHelpAllowlisted = allowlistedKeys.filter((k) =>
+            /^help\.[^.]+\.(title|short)$/.test(k)
+        );
+        expect(forbiddenHelpAllowlisted).toEqual([]);
+
+        // Every allowlisted DE key must also exist cleanly as a string in EN
+        const missingEnAllowlisted = allowlistedKeys.filter((k) => typeof en[k] !== 'string');
+        expect(missingEnAllowlisted).toEqual([]);
+
+        // Concrete positive & negative allowlist matcher boundaries
+        expect(isAllowlisted('help.benutzerId.long')).toBe(true);
+        expect(isAllowlisted('help.benutzerId.deepDive')).toBe(true);
+        expect(isAllowlisted('settings.advancedTitle')).toBe(true);
+        expect(isAllowlisted('section.expert.hint')).toBe(true);
+        expect(isAllowlisted('help.benutzerId.title')).toBe(false);
+        expect(isAllowlisted('help.benutzerId.short')).toBe(false);
+        expect(isAllowlisted('settings.backup')).toBe(false);
+        expect(isAllowlisted('section.expertise')).toBe(false);
     });
 
     it('detects forbidden terms and guarantor terms if injected into test fixtures', () => {
