@@ -36,6 +36,7 @@ function NavigationConsumer() {
   const {
     appState,
     navigate,
+    navigateToSettingsSection,
     goBack,
     isSidebarOpen,
     setSidebarOpen,
@@ -49,6 +50,9 @@ function NavigationConsumer() {
       <div data-testid="voucher-id">
         {'voucherId' in appState ? appState.voucherId : ''}
       </div>
+      <div data-testid="initial-section">
+        {'initialSection' in appState && appState.initialSection ? appState.initialSection : ''}
+      </div>
       <div data-testid="sidebar-open">{String(isSidebarOpen)}</div>
       <div data-testid="app-version">{appVersion}</div>
 
@@ -61,6 +65,7 @@ function NavigationConsumer() {
         Nav Voucher Details
       </button>
       <button onClick={() => navigate({ view: 'settings' })}>Nav Settings</button>
+      <button onClick={() => navigateToSettingsSection('backup')}>Nav Settings Backup</button>
       <button onClick={() => navigate({ view: 'transaction_history' })}>Nav History</button>
       <button onClick={() => navigate({ view: 'logged_in' })}>Nav Logged In</button>
       <button onClick={() => navigate({ view: 'needs_login' })}>Nav Needs Login</button>
@@ -330,14 +335,17 @@ describe('NavigationContext', () => {
       }
     });
 
-    // We can go back up to 20 times without error, popping bounded entries
-    for (let i = 0; i < 22; i++) {
+    // Exactly 20 previous entries are retained before falling back to logged_in on the 21st pop.
+    for (let i = 0; i < 20; i++) {
       await act(async () => {
         navContext.goBack();
       });
     }
+    expect(['wallet', 'settings']).toContain(navContext.appState.view);
 
-    // After exhausting history, it safely stays at logged_in
+    await act(async () => {
+      navContext.goBack();
+    });
     expect(navContext.appState.view).toBe('logged_in');
   });
 
@@ -369,15 +377,14 @@ describe('NavigationContext', () => {
       return null;
     }
 
-    // Suppress console.error for expected throw
-    const originalConsoleError = console.error;
-    console.error = vi.fn();
-
-    expect(() => render(<InvalidConsumer />)).toThrow(
-      'useNavigation must be used within a NavigationProvider'
-    );
-
-    console.error = originalConsoleError;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => render(<InvalidConsumer />)).toThrow(
+        'useNavigation must be used within a NavigationProvider'
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('returns null when useOptionalNavigation is used outside of NavigationProvider', () => {
@@ -420,5 +427,64 @@ describe('NavigationContext', () => {
     await waitFor(() => {
       expect(screen.getByTestId('current-view')).toHaveTextContent('wallet');
     });
+  });
+
+  it('navigateToSettingsSection navigates with exact initialSection and records history', async () => {
+    render(
+      <NavigationProvider>
+        <NavigationConsumer />
+      </NavigationProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-view')).toHaveTextContent('logged_in');
+    });
+
+    await act(async () => {
+      screen.getByText('Nav Settings Backup').click();
+    });
+
+    expect(screen.getByTestId('current-view')).toHaveTextContent('settings');
+    expect(screen.getByTestId('initial-section')).toHaveTextContent('backup');
+
+    await act(async () => {
+      screen.getByText('Go Back').click();
+    });
+    expect(screen.getByTestId('current-view')).toHaveTextContent('logged_in');
+  });
+
+  it('resolves profileName and folderName from listProfiles on auto-login and falls back to needs_login when listProfiles fails', async () => {
+    (authService.listProfiles as Mock).mockResolvedValueOnce([
+      { userId: 'did:key:zUser123', profileName: 'Alice Profile', folderName: 'alice_dir' },
+    ]);
+
+    const first = render(
+      <NavigationProvider>
+        <NavigationConsumer />
+      </NavigationProvider>
+    );
+
+    await waitFor(() => {
+      expect(mockNotifyLogin).toHaveBeenCalledWith('Alice Profile', 'alice_dir');
+    });
+    first.unmount();
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      (profileService.getProfile as Mock).mockRejectedValueOnce(new Error('No session'));
+      (authService.listProfiles as Mock).mockRejectedValueOnce(new Error('IO failure'));
+
+      render(
+        <NavigationProvider>
+          <NavigationConsumer />
+        </NavigationProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('current-view')).toHaveTextContent('needs_login');
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

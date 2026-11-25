@@ -60,6 +60,7 @@ describe("Backend command & service reachability guard", () => {
         const invokedSorted = [...invokedCommands].sort();
         const policySorted = Object.keys(COMMAND_ACCESS_POLICY).sort();
 
+        expect(registeredCommands.length).toBeGreaterThan(20);
         expect(dynamicInvokes).toEqual([]);
         expect(invokedSorted).toEqual(registeredCommands);
         expect(policySorted).toEqual(registeredCommands);

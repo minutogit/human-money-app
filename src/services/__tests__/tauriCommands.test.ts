@@ -75,7 +75,9 @@ describe('Tauri Command Integrity', () => {
       });
     }
 
-    // 3. Verify
+    // 3. Verify non-empty parse baseline and missing commands
+    expect(registeredCommands.size).toBeGreaterThan(20);
+    expect(invokedCommands.size).toBeGreaterThan(20);
     const missingCommands: string[] = [];
     for (const [cmd, locations] of invokedCommands.entries()) {
       if (!registeredCommands.has(cmd)) {
@@ -399,7 +401,9 @@ describe('Tauri Command Integrity', () => {
       }
     }
 
-    // 3. Compare invoked frontend payloads against backend command parameters
+    // 3. Verify non-empty parse baseline and compare invoked frontend payloads against backend command parameters
+    expect(backendCommands.size).toBeGreaterThan(20);
+    expect(invokedCommandsWithKeys.size).toBeGreaterThan(20);
     const mismatches: string[] = [];
 
     for (const [cmdName, invocations] of invokedCommandsWithKeys.entries()) {

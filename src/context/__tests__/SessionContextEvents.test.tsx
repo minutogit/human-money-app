@@ -1,8 +1,10 @@
 import { render, act, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SessionProvider } from '../SessionContext';
+import { rateLimitManager } from '../../sync/rateLimitManager';
+import { dispatchBackupUpdated } from '../../sync/syncBridge';
 import { APP_EVENTS } from '../../utils/appEvents';
-import { SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
+import { APP_NOTICES_UPDATED_EVENT, SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
 
 const eventListeners = new Map<string, (ev: { payload: unknown }) => void>();
 
@@ -164,5 +166,195 @@ describe('SessionContext Tauri event bridge', () => {
       window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, onSyncStatus);
       window.removeEventListener(APP_EVENTS.SYNC_COMPLETED, onSyncCompleted);
     }
+  });
+
+  it('bridges humoco://backup-updated, humoco://sync-status-updated with retryAfterSecs cooldown, and humoco://conflicts-updated', async () => {
+    rateLimitManager.clearCooldown();
+    render(
+      <SessionProvider>
+        <div />
+      </SessionProvider>
+    );
+
+    await waitFor(() => {
+      expect(eventListeners.has('humoco://backup-updated')).toBe(true);
+      expect(eventListeners.has('humoco://sync-status-updated')).toBe(true);
+      expect(eventListeners.has('humoco://conflicts-updated')).toBe(true);
+    });
+
+    let syncUpdated = 0;
+    let conflictsUpdated = 0;
+    const onSyncStatus = () => {
+      syncUpdated += 1;
+    };
+    const onConflicts = () => {
+      conflictsUpdated += 1;
+    };
+    window.addEventListener(SYNC_STATUS_UPDATED_EVENT, onSyncStatus);
+    window.addEventListener(APP_EVENTS.CONFLICTS_UPDATED, onConflicts);
+
+    try {
+      await act(async () => {
+        eventListeners.get('humoco://backup-updated')!({ payload: { dirty: false } });
+        eventListeners.get('humoco://sync-status-updated')!({ payload: { retryAfterSecs: 45 } });
+        eventListeners.get('humoco://conflicts-updated')!({ payload: null });
+      });
+
+      expect(dispatchBackupUpdated).toHaveBeenCalledWith({ dirty: false });
+      expect(syncUpdated).toBe(1);
+      expect(conflictsUpdated).toBe(1);
+      expect(rateLimitManager.isCoolingDown()).toBe(true);
+      expect(rateLimitManager.getRemainingSeconds()).toBeGreaterThanOrEqual(40);
+    } finally {
+      rateLimitManager.clearCooldown();
+      window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, onSyncStatus);
+      window.removeEventListener(APP_EVENTS.CONFLICTS_UPDATED, onConflicts);
+    }
+  });
+
+  it('does not emit POST_INBOX_UPDATED or SYNC_COMPLETED when humoco://post-synced has zero inbox changes', async () => {
+    render(
+      <SessionProvider>
+        <div />
+      </SessionProvider>
+    );
+
+    await waitFor(() => {
+      expect(eventListeners.has('humoco://post-synced')).toBe(true);
+    });
+
+    const received: string[] = [];
+    const onPost = () => received.push(APP_EVENTS.POST_INBOX_UPDATED);
+    const onSync = () => received.push(APP_EVENTS.SYNC_COMPLETED);
+    const onNotices = () => received.push(APP_NOTICES_UPDATED_EVENT);
+    window.addEventListener(APP_EVENTS.POST_INBOX_UPDATED, onPost);
+    window.addEventListener(APP_EVENTS.SYNC_COMPLETED, onSync);
+    window.addEventListener(APP_NOTICES_UPDATED_EVENT, onNotices);
+
+    try {
+      await act(async () => {
+        eventListeners.get('humoco://post-synced')!({
+          payload: {
+            uploadedTo: 0,
+            polledSyncs: 0,
+            importedPayments: 0,
+            importedReceipts: 0,
+            importedSignatures: 0,
+            newSignRequests: 0,
+            newWotHandshakes: 0,
+            importedWotLists: 0,
+            newInquiries: 0,
+            newInquiryMessages: 0,
+            prunedBoxes: 0,
+            errors: [],
+          },
+        });
+      });
+
+      expect(received).toEqual([]);
+
+      await act(async () => {
+        eventListeners.get('humoco://post-synced')!({
+          payload: {
+            uploadedTo: 0,
+            polledSyncs: 1,
+            importedPayments: 0,
+            importedReceipts: 0,
+            importedSignatures: 0,
+            newSignRequests: 0,
+            newWotHandshakes: 0,
+            importedWotLists: 0,
+            newInquiries: 0,
+            newInquiryMessages: 0,
+            prunedBoxes: 0,
+            errors: [],
+          },
+        });
+      });
+
+      expect(received).toEqual([APP_NOTICES_UPDATED_EVENT]);
+    } finally {
+      window.removeEventListener(APP_EVENTS.POST_INBOX_UPDATED, onPost);
+      window.removeEventListener(APP_EVENTS.SYNC_COMPLETED, onSync);
+      window.removeEventListener(APP_NOTICES_UPDATED_EVENT, onNotices);
+    }
+  });
+
+  it('emits MARKET_CARD_UPDATED, CONTACTS_UPDATED, and WOT_UPDATED selectively on humoco://market-synced', async () => {
+    render(
+      <SessionProvider>
+        <div />
+      </SessionProvider>
+    );
+
+    await waitFor(() => {
+      expect(eventListeners.has('humoco://market-synced')).toBe(true);
+    });
+
+    const received: string[] = [];
+    const onCard = () => received.push(APP_EVENTS.MARKET_CARD_UPDATED);
+    const onContacts = () => received.push(APP_EVENTS.CONTACTS_UPDATED);
+    const onWot = () => received.push(APP_EVENTS.WOT_UPDATED);
+    const onSync = () => received.push(APP_EVENTS.SYNC_COMPLETED);
+    window.addEventListener(APP_EVENTS.MARKET_CARD_UPDATED, onCard);
+    window.addEventListener(APP_EVENTS.CONTACTS_UPDATED, onContacts);
+    window.addEventListener(APP_EVENTS.WOT_UPDATED, onWot);
+    window.addEventListener(APP_EVENTS.SYNC_COMPLETED, onSync);
+
+    try {
+      await act(async () => {
+        eventListeners.get('humoco://market-synced')!({
+          payload: {
+            uploadedTo: 0,
+            polledSyncs: 0,
+            importedCards: 0,
+            newAds: 1,
+            importedWotLists: 0,
+            errors: [],
+          },
+        });
+      });
+
+      expect(received).toEqual([APP_EVENTS.MARKET_CARD_UPDATED]);
+      received.length = 0;
+
+      await act(async () => {
+        eventListeners.get('humoco://market-synced')!({
+          payload: {
+            uploadedTo: 0,
+            polledSyncs: 1,
+            importedCards: 1,
+            newAds: 0,
+            importedWotLists: 1,
+            errors: [],
+          },
+        });
+      });
+
+      expect(received).toContain(APP_EVENTS.MARKET_CARD_UPDATED);
+      expect(received).toContain(APP_EVENTS.CONTACTS_UPDATED);
+      expect(received).toContain(APP_EVENTS.WOT_UPDATED);
+      expect(received).toContain(APP_EVENTS.SYNC_COMPLETED);
+    } finally {
+      window.removeEventListener(APP_EVENTS.MARKET_CARD_UPDATED, onCard);
+      window.removeEventListener(APP_EVENTS.CONTACTS_UPDATED, onContacts);
+      window.removeEventListener(APP_EVENTS.WOT_UPDATED, onWot);
+      window.removeEventListener(APP_EVENTS.SYNC_COMPLETED, onSync);
+    }
+  });
+
+  it('cleans up all registered Tauri event listeners on unmount', async () => {
+    const { unmount } = render(
+      <SessionProvider>
+        <div />
+      </SessionProvider>
+    );
+
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(5);
+    });
+
+    unmount();
+    expect(eventListeners.size).toBe(0);
   });
 });

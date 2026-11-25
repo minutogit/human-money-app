@@ -238,4 +238,140 @@ describe('walletEvents utilities', () => {
         expect(formatSignedNetBalance('1.2345')).toMatch(/^\+1[.,]2345$/);
         expect(formatSignedNetBalance('-0.005')).toMatch(/^-0[.,]005$/);
     });
+
+    it('maps activated, voided, expired, quarantined, and unknown kinds across direction and contexts', () => {
+        const cases: Array<{
+            eventType: WalletEvent['eventType'];
+            kind: ReturnType<typeof normalizeWalletEventKind>;
+            direction: 'in' | 'out' | 'neutral';
+            dashLabel: string;
+            histLabel: string;
+        }> = [
+            { eventType: 'voucherActivated', kind: 'activated', direction: 'in', dashLabel: 'dashboard.eventVoucherActivated', histLabel: 'history.eventActivated' },
+            { eventType: 'voucherVoided', kind: 'voided', direction: 'out', dashLabel: 'dashboard.eventVoucherVoided', histLabel: 'history.eventVoided' },
+            { eventType: 'voucherExpired', kind: 'expired', direction: 'out', dashLabel: 'dashboard.eventVoucherExpired', histLabel: 'history.eventExpired' },
+            { eventType: 'voucherQuarantined', kind: 'quarantined', direction: 'neutral', dashLabel: 'dashboard.eventVoucherQuarantined', histLabel: 'history.eventQuarantine' },
+            { eventType: { unknown: 'mystery' }, kind: 'unknown', direction: 'neutral', dashLabel: 'dashboard.eventUnknown', histLabel: 'history.eventDefault' },
+        ];
+
+        for (const c of cases) {
+            const ev = makeEvent({ eventType: c.eventType });
+            expect(normalizeWalletEventKind(c.eventType)).toBe(c.kind);
+            expect(getWalletEventDirection(ev)).toBe(c.direction);
+            expect(isTransferWalletEvent(ev)).toBe(false);
+            expect(getWalletEventPresentation(ev, 'dashboard', translateMock).label).toBe(c.dashLabel);
+            expect(getWalletEventPresentation(ev, 'history', translateMock).label).toBe(c.histLabel);
+        }
+    });
+
+    it('handles invalid timestamps, missing currency/counterparty fallbacks, and skips malformed amounts in summaries', () => {
+        const ev = makeEvent({
+            eventId: 'bad-ts',
+            timestamp: 'not-a-valid-date',
+            bffData: {
+                displayCurrency: '',
+                amount: 'not-a-number',
+                isTestVoucher: false,
+                counterpartyId: '',
+                counterpartyName: '',
+            },
+        });
+
+        expect(resolveEventCounterpartyLabel(ev)).toBe('Unknown');
+        expect(formatWalletEventAmount(ev)).toBe('');
+        expect(groupWalletEventsByDate([ev])).toEqual([{ dateKey: 'unknown', events: [ev] }]);
+        expect(summarizeWalletEventAmounts([ev])).toEqual({});
+
+        const txSummary = summarizeTransactionHistory([
+            {
+                id: 'tx-bad',
+                direction: 'received',
+                senderId: 'did:key:s',
+                timestamp: '2026-06-01T00:00:00Z',
+                summableAmounts: { Minuto: 'invalid' },
+                countableItems: {},
+                involvedVouchers: [],
+            },
+        ]);
+        expect(txSummary).toEqual({
+            totalBookings: 1,
+            inboundSums: {},
+            outboundSums: {},
+            summaryUnits: [],
+        });
+    });
+
+    it('matches transaction records via involvedSourcesDetails and enforces 60s inclusive boundary and direction', () => {
+        const record: TransactionRecord = {
+            id: 'tx-bound',
+            direction: 'sent',
+            recipientId: 'did:key:r',
+            timestamp: '2026-06-02T12:00:00.000Z',
+            summableAmounts: { Minuto: '10' },
+            countableItems: {},
+            involvedVouchers: [],
+            involvedSourcesDetails: [
+                {
+                    localInstanceId: 'src-inst-1',
+                    voucherId: 'v-src',
+                    standardName: 'Minuto',
+                    amount: '10',
+                    unit: 'Minuto',
+                    isTestVoucher: false,
+                    displayCurrency: 'Minuto',
+                    displayStandardName: 'Minuto',
+                },
+            ],
+        };
+
+        const srcMatch = makeEvent({
+            eventId: 'src-match',
+            localInstanceId: 'src-inst-1',
+            voucherId: 'v-other',
+            timestamp: '2026-01-01T00:00:00.000Z',
+        });
+        const exact60sMatch = makeEvent({
+            eventId: 'exact-60s',
+            localInstanceId: 'none',
+            voucherId: 'none',
+            eventType: 'transferSent',
+            timestamp: '2026-06-02T12:01:00.000Z',
+        });
+        const over60sNoMatch = makeEvent({
+            eventId: 'over-60s',
+            localInstanceId: 'none',
+            voucherId: 'none',
+            eventType: 'transferSent',
+            timestamp: '2026-06-02T12:01:00.001Z',
+        });
+        const wrongDirNoMatch = makeEvent({
+            eventId: 'wrong-dir',
+            localInstanceId: 'none',
+            voucherId: 'none',
+            eventType: 'transferReceived',
+            timestamp: '2026-06-02T12:00:01.000Z',
+        });
+
+        expect(
+            matchEventsForTransactionRecord(record, [srcMatch, exact60sMatch, over60sNoMatch, wrongDirNoMatch]).map(
+                (e) => e.eventId,
+            ),
+        ).toEqual(['src-match', 'exact-60s']);
+    });
+
+    it('covers formatRelativeExpiry edge cases and formatSignedNetBalance NaN pass-through', () => {
+        const now = Date.UTC(2026, 5, 1, 12, 0, 0);
+        expect(formatRelativeExpiry(undefined, translateMock, now)).toBe('');
+        expect(formatRelativeExpiry('invalid-date', translateMock, now)).toBe('');
+        expect(formatRelativeExpiry(new Date(now).toISOString(), translateMock, now)).toBe(
+            'dashboard.expiresToday',
+        );
+        expect(formatRelativeExpiry(new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString(), translateMock, now)).toBe(
+            'dashboard.expiresInMonths:{"count":3}',
+        );
+        expect(formatRelativeExpiry(new Date(now + 800 * 24 * 60 * 60 * 1000).toISOString(), translateMock, now)).toBe(
+            'dashboard.expiresInYears:{"count":2}',
+        );
+        expect(formatSignedNetBalance('not-a-number')).toBe('not-a-number');
+    });
 });

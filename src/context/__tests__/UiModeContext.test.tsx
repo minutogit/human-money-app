@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { UiModeProvider, useUiMode } from '../UiModeContext';
 import { settingsService } from '../../services/settingsService';
+import { tourBridge } from '../../utils/tourBridge';
 import type { AppConfigDto, UiPreferences } from '../../types';
 
 let mockSessionState = {
@@ -164,5 +165,58 @@ describe('UiModeContext', () => {
         expect(settingsService.getConfig).toHaveBeenCalledTimes(1);
         expect(getItemSpy).not.toHaveBeenCalled();
         expect(setItemSpy).not.toHaveBeenCalled();
+    });
+
+    it('toggle switches modes and skips patchUiPreferences when session is uncached or unauthenticated', () => {
+        mockSessionState = { isAuthenticated: true, hasCachedSession: false };
+
+        render(
+            <UiModeProvider>
+                <ModeHarness />
+            </UiModeProvider>
+        );
+
+        expect(screen.getByTestId('mode-value')).toHaveTextContent('simple');
+        fireEvent.click(screen.getByTestId('toggle-mode'));
+        expect(screen.getByTestId('mode-value')).toHaveTextContent('expert');
+
+        fireEvent.click(screen.getByTestId('toggle-mode'));
+        expect(screen.getByTestId('mode-value')).toHaveTextContent('simple');
+        expect(settingsService.patchUiPreferences).not.toHaveBeenCalled();
+    });
+
+    it('useUiMode falls back cleanly to local state when rendered outside UiModeProvider', () => {
+        render(<ModeHarness />);
+
+        expect(screen.getByTestId('mode-value')).toHaveTextContent('simple');
+        expect(screen.getByTestId('is-expert-value')).toHaveTextContent('false');
+
+        fireEvent.click(screen.getByTestId('toggle-mode'));
+        expect(screen.getByTestId('mode-value')).toHaveTextContent('expert');
+        expect(screen.getByTestId('is-expert-value')).toHaveTextContent('true');
+
+        fireEvent.click(screen.getByTestId('toggle-mode'));
+        expect(screen.getByTestId('mode-value')).toHaveTextContent('simple');
+    });
+
+    it('respects tourBridge uiMode override without reading or writing settingsService', () => {
+        tourBridge.setState({ uiMode: 'expert' });
+        mockSessionState = { isAuthenticated: true, hasCachedSession: true };
+
+        try {
+            render(
+                <UiModeProvider>
+                    <ModeHarness />
+                </UiModeProvider>
+            );
+
+            expect(screen.getByTestId('mode-value')).toHaveTextContent('expert');
+            fireEvent.click(screen.getByTestId('toggle-mode'));
+            expect(screen.getByTestId('mode-value')).toHaveTextContent('simple');
+            expect(settingsService.getConfig).not.toHaveBeenCalled();
+            expect(settingsService.patchUiPreferences).not.toHaveBeenCalled();
+        } finally {
+            tourBridge.setState({ uiMode: undefined });
+        }
     });
 });

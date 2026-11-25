@@ -1,7 +1,8 @@
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { SessionProvider, useSession } from '../SessionContext';
+import { SessionProvider, useOptionalSession, useSession } from '../SessionContext';
 import { authService } from '../../services/authService';
+import { profileService } from '../../services/profileService';
 import { settingsService } from '../../services/settingsService';
 import { NavigationProvider, useNavigation } from '../NavigationContext';
 import { Sidebar } from '../../components/shell/Sidebar';
@@ -68,6 +69,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('../../services/authService', () => ({
   authService: {
     getSessionStatus: vi.fn(),
+    listProfiles: vi.fn().mockResolvedValue([]),
     unlockSession: vi.fn(),
     unlockSessionWithPin: vi.fn(),
     lockSession: vi.fn().mockResolvedValue(undefined),
@@ -200,6 +202,8 @@ function dailyPayStatus(hasCachedSession: boolean, elevated = false) {
 describe('SessionContext and Session Timeout UX (APP-017)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (profileService.getProfile as Mock).mockReset().mockResolvedValue(null);
+    (authService.listProfiles as Mock).mockReset().mockResolvedValue([]);
     (settingsService.getConfig as Mock).mockReset().mockResolvedValue(makeAppConfig(300, 'public'));
     (authService.lockSession as Mock).mockReset().mockResolvedValue(undefined);
     (authService.unlockSession as Mock).mockReset().mockResolvedValue(fullStatus(true));
@@ -285,10 +289,10 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     });
   });
 
-  it('Sidebar profile header works cleanly when cached session is locked', async () => {
+  it('Sidebar profile header opens unlock modal when cached session is locked', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(fullStatus(false));
 
-    const { container } = render(<SidebarTestApp initialView="wallet" />);
+    render(<SidebarTestApp initialView="wallet" />);
 
     await act(async () => {
       screen.getByText('Login Alice').click();
@@ -309,17 +313,24 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     await act(async () => {
       fireEvent.click(lockedPill);
     });
-    expect(container).toBeInTheDocument();
+
+    expect(await screen.findByText('Authentication Required')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Profile Password')).toBeInTheDocument();
   });
 
   it('App does NOT redirect to needs_login when isAuthenticated is true but hasCachedSession is false', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(fullStatus(false));
-
-    await act(async () => {
-      render(<App />);
+    (profileService.getProfile as Mock).mockResolvedValueOnce({
+      id: 'did:key:z123',
+      firstName: 'Alice',
     });
 
-    expect(document.body).toBeInTheDocument();
+    render(<App />);
+
+    const profileBtn = await screen.findByTestId('sidebar-profile-button');
+    expect(profileBtn).toHaveTextContent('Alice');
+    expect(profileBtn).toHaveTextContent(/Session Locked/i);
+    expect(screen.queryByTestId('needs-login-view')).not.toBeInTheDocument();
   });
 
   it('keeps modal open with error when unlockSession fails in session mode and resolves on valid retry', async () => {
@@ -407,53 +418,55 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
       (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(true, true));
       const lockedSpy = vi.fn();
       window.addEventListener('humoco:session-locked', lockedSpy);
+      try {
+        const { unmount } = render(
+          <SessionProvider>
+            <SessionConsumer />
+          </SessionProvider>
+        );
 
-      const { unmount } = render(
-        <SessionProvider>
-          <SessionConsumer />
-        </SessionProvider>
-      );
+        await act(async () => {
+          screen.getByText('Login Alice').click();
+        });
 
-      await act(async () => {
-        screen.getByText('Login Alice').click();
-      });
+        expect(screen.getByTestId('has-cached-session').textContent).toBe('true');
+        expect(screen.getByTestId('access-mode').textContent).toBe('full');
+        expect(screen.getByTestId('base-access-mode').textContent).toBe('dailyPay');
 
-      expect(screen.getByTestId('has-cached-session').textContent).toBe('true');
-      expect(screen.getByTestId('access-mode').textContent).toBe('full');
-      expect(screen.getByTestId('base-access-mode').textContent).toBe('dailyPay');
+        lockedSpy.mockClear();
 
-      lockedSpy.mockClear();
+        // 1. Explicit lockSession demotes accessMode back to dailyPay and emits SESSION_LOCKED
+        await act(async () => {
+          screen.getByText('Lock Session').click();
+        });
 
-      // 1. Explicit lockSession demotes accessMode back to dailyPay and emits SESSION_LOCKED
-      await act(async () => {
-        screen.getByText('Lock Session').click();
-      });
+        expect(authService.lockSession).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId('access-mode').textContent).toBe('dailyPay');
+        expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
+        expect(lockedSpy).toHaveBeenCalledTimes(1);
 
-      expect(authService.lockSession).toHaveBeenCalledTimes(1);
-      expect(screen.getByTestId('access-mode').textContent).toBe('dailyPay');
-      expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
-      expect(lockedSpy).toHaveBeenCalledTimes(1);
+        // Re-login in elevated dailyPay state and trigger heartbeat expiry
+        await act(async () => {
+          screen.getByText('Login Alice').click();
+        });
+        expect(screen.getByTestId('access-mode').textContent).toBe('full');
 
-      // Re-login in elevated dailyPay state and trigger heartbeat expiry
-      await act(async () => {
-        screen.getByText('Login Alice').click();
-      });
-      expect(screen.getByTestId('access-mode').textContent).toBe('full');
+        lockedSpy.mockClear();
 
-      lockedSpy.mockClear();
+        (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false, false));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(10_000);
+        });
 
-      (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false, false));
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000);
-      });
+        expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
+        expect(screen.getByTestId('access-mode').textContent).toBe('dailyPay');
+        expect(screen.getByTestId('is-authenticated').textContent).toBe('true');
+        expect(lockedSpy).toHaveBeenCalledTimes(1);
 
-      expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
-      expect(screen.getByTestId('access-mode').textContent).toBe('dailyPay');
-      expect(screen.getByTestId('is-authenticated').textContent).toBe('true');
-      expect(lockedSpy).toHaveBeenCalledTimes(1);
-
-      window.removeEventListener('humoco:session-locked', lockedSpy);
-      unmount();
+        unmount();
+      } finally {
+        window.removeEventListener('humoco:session-locked', lockedSpy);
+      }
     } finally {
       vi.useRealTimers();
     }
@@ -465,30 +478,32 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     const lockedSpy = vi.fn();
     window.addEventListener('humoco:session-locked', lockedSpy);
 
-    render(
-      <SessionProvider>
-        <SessionConsumer />
-      </SessionProvider>
-    );
+    try {
+      render(
+        <SessionProvider>
+          <SessionConsumer />
+        </SessionProvider>
+      );
 
-    await act(async () => {
-      screen.getByText('Login Alice').click();
-    });
+      await act(async () => {
+        screen.getByText('Login Alice').click();
+      });
 
-    mockResetIntegrity.mockClear();
-    cooldownClearSpy.mockClear();
-    lockedSpy.mockClear();
+      mockResetIntegrity.mockClear();
+      cooldownClearSpy.mockClear();
+      lockedSpy.mockClear();
 
-    await act(async () => {
-      screen.getByText('Logout').click();
-    });
+      await act(async () => {
+        screen.getByText('Logout').click();
+      });
 
-    expect(mockResetIntegrity).toHaveBeenCalledTimes(1);
-    expect(cooldownClearSpy).toHaveBeenCalledTimes(1);
-    expect(lockedSpy).toHaveBeenCalledTimes(1);
-
-    window.removeEventListener('humoco:session-locked', lockedSpy);
-    cooldownClearSpy.mockRestore();
+      expect(mockResetIntegrity).toHaveBeenCalledTimes(1);
+      expect(cooldownClearSpy).toHaveBeenCalledTimes(1);
+      expect(lockedSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('humoco:session-locked', lockedSpy);
+      cooldownClearSpy.mockRestore();
+    }
   });
 
   it('re-unlocks expired dailyPay session via PIN on timeout > 0 and rejects on wrong PIN', async () => {
@@ -923,5 +938,106 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     expect(staleCallback).not.toHaveBeenCalled();
     expect(screen.getByTestId('is-authenticated').textContent).toBe('false');
     expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
+  });
+
+  it('maps security lockdown errors (handover, clone, fork) and seal recovery errors and clears via clearLocks', async () => {
+    (authService.getSessionStatus as Mock).mockResolvedValue(fullStatus(true));
+
+    let sessionCtx!: ReturnType<typeof useSession>;
+    render(
+      <SessionProvider>
+        <SessionConsumer onContextReady={(ctx) => { sessionCtx = ctx; }} />
+      </SessionProvider>
+    );
+
+    await act(async () => {
+      screen.getByText('Login Alice').click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('has-cached-session').textContent).toBe('true');
+    });
+
+    await act(async () => {
+      await expect(
+        sessionCtx.protectAction(async () => {
+          throw {
+            code: 'error.security.supersededByHandover',
+            message: 'Handover',
+            details: { targetEpoch: '4', isSeedRecovery: 'true' },
+          };
+        })
+      ).rejects.toMatchObject({ code: 'error.security.supersededByHandover' });
+    });
+    expect(sessionCtx.isForkLocked).toBe(true);
+    expect(sessionCtx.lockdownKind).toBe('handover');
+    expect(sessionCtx.lockdownDetails).toEqual({ targetEpoch: 4, isSeedRecovery: true });
+
+    await act(async () => {
+      sessionCtx.clearLocks();
+    });
+    expect(sessionCtx.isForkLocked).toBe(false);
+    expect(sessionCtx.lockdownKind).toBeNull();
+    expect(sessionCtx.lockdownDetails).toBeNull();
+
+    await act(async () => {
+      await expect(
+        sessionCtx.protectAction(async () => {
+          throw { code: 'error.security.concurrentCloneDetected', message: 'Clone' };
+        })
+      ).rejects.toMatchObject({ code: 'error.security.concurrentCloneDetected' });
+    });
+    expect(sessionCtx.isForkLocked).toBe(true);
+    expect(sessionCtx.lockdownKind).toBe('clone');
+
+    await act(async () => {
+      await expect(
+        sessionCtx.protectAction(async () => {
+          throw { code: 'error.security.walletLockedDueToFork', message: 'Fork' };
+        })
+      ).rejects.toMatchObject({ code: 'error.security.walletLockedDueToFork' });
+    });
+    expect(sessionCtx.isForkLocked).toBe(true);
+    expect(sessionCtx.lockdownKind).toBe('fork');
+
+    await act(async () => {
+      await expect(
+        sessionCtx.protectAction(async () => {
+          throw { code: 'error.security.sealRecoveryRequired', message: 'Seal' };
+        })
+      ).rejects.toMatchObject({ code: 'error.security.sealRecoveryRequired' });
+    });
+    expect(sessionCtx.isRecoveryRequired).toBe(true);
+
+    await act(async () => {
+      sessionCtx.clearLocks();
+    });
+    expect(sessionCtx.isForkLocked).toBe(false);
+    expect(sessionCtx.isRecoveryRequired).toBe(false);
+    expect(sessionCtx.lockdownKind).toBeNull();
+  });
+
+  it('throws when useSession is called outside SessionProvider and returns null from useOptionalSession', () => {
+    function InvalidConsumer() {
+      useSession();
+      return null;
+    }
+
+    let capturedOptional: unknown = 'unset';
+    function OptionalConsumer() {
+      capturedOptional = useOptionalSession();
+      return null;
+    }
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => render(<InvalidConsumer />)).toThrow(
+        'useSession must be used within a SessionProvider'
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    render(<OptionalConsumer />);
+    expect(capturedOptional).toBeNull();
   });
 });

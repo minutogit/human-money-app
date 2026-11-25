@@ -420,6 +420,14 @@ describe("Tauri command access policy parity (F3)", () => {
         expect(protectCommandOptions("dismiss_wallet_sync_alert")).toEqual({});
         expect(protectCommandOptions("get_app_config")).toEqual({});
         expect(protectCommandOptions("list_profiles")).toEqual({});
+
+        const policyEntries = Object.entries(COMMAND_ACCESS_POLICY);
+        expect(policyEntries.length).toBeGreaterThan(20);
+        for (const [cmd, tier] of policyEntries) {
+            expect(protectCommandOptions(cmd as keyof typeof COMMAND_ACCESS_POLICY)).toEqual(
+                tier === "full" ? { requireFullAccess: true } : {},
+            );
+        }
     });
 
     it("enforces call-site Full-tier gates, single-call DailyPay protectAction blocks (H1), and explicit deleteProfile re-auth (H3)", () => {

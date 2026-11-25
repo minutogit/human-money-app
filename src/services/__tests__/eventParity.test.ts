@@ -166,4 +166,37 @@ describe("Tauri backend/frontend event parity guard", () => {
         expect(rustSorted.length).toBeGreaterThan(0);
         expect(tsSorted).toEqual(rustSorted);
     });
+
+    it("includes all 5 core background coordinator events in both Rust and TS", () => {
+        const expectedCoreEvents = [
+            "humoco://backup-updated",
+            "humoco://sync-status-updated",
+            "humoco://post-synced",
+            "humoco://market-synced",
+            "humoco://conflicts-updated",
+        ];
+
+        const rustEvents = new Set<string>();
+        const emitRe = /\.emit(?:_to|_filter)?\s*\([^;)]*?"(humoco:\/\/[^"]+)"/g;
+        for (const file of walkFiles(RUST_SRC_ROOT, [".rs"])) {
+            const src = stripRustTestsAndComments(fs.readFileSync(file, "utf-8"));
+            for (const m of src.matchAll(emitRe)) {
+                rustEvents.add(m[1]);
+            }
+        }
+
+        const tsEvents = new Set<string>();
+        const listenRe = /\b(?:listen|register)\s*(?:<[^>]*>)?\s*\(\s*(['"])(humoco:\/\/[^'"]+)\1/g;
+        for (const file of walkFiles(SRC_ROOT, [".ts", ".tsx"], ["__tests__", "node_modules"])) {
+            const src = fs.readFileSync(file, "utf-8");
+            for (const m of src.matchAll(listenRe)) {
+                tsEvents.add(m[2]);
+            }
+        }
+
+        for (const ev of expectedCoreEvents) {
+            expect(rustEvents.has(ev)).toBe(true);
+            expect(tsEvents.has(ev)).toBe(true);
+        }
+    });
 });
