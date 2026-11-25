@@ -124,9 +124,8 @@ export function useVoucherDetails(voucherId: string) {
                 setParsedStandards(parsed);
             } catch (e) {
                 if (!active) return;
-                const msg = `${t('voucher.errorFetchingDetails')}: ${stringifyError(e)}`;
-                logger.error(msg);
-                setErrorMsg(msg);
+                logger.error(`${t('voucher.errorFetchingDetails')}: ${stringifyError(e)}`);
+                setErrorMsg(`${t('voucher.errorFetchingDetails')}: ${translateError(e, t)}`);
             } finally {
                 if (active) setIsLoading(false);
             }
