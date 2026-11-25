@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `333e536`
-- **Total Test Files:** 165 | **Total Test Functions:** 1495
+- **Updated at HEAD:** `f5c105a`
+- **Total Test Files:** 165 | **Total Test Functions:** 1504
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -110,12 +110,12 @@
 | `src/sync/__tests__/syncBridge.test.ts` | P2 | 6 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 6/6 (926 full pass); try/finally cleanup, wotUpdated, runSyncBackupPass/runPostSyncPass cooldown & retryAfter + invoke error swallowing; Revert-Red syncBridge cooldown bypass` |
 | `src/test/browserStorage.test.ts` | P2 | 2 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 2/2 (926 full pass); added multi-key removeItem & clear persistence assertions` |
 | `src/utils/__tests__/walletEvents.test.ts` | P2 | 11 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 11/11 (926 full pass); covered activated/voided/expired/quarantined/unknown, malformed/invalid fallbacks, 60s inclusive & direction matching & expiry/NaN edges; Revert-Red walletEvents < 60_000` |
-| `src/utils/__tests__/humocoUri.test.ts` | P3 | 28 | 4/0/0 | ⚪ Pending | — | — |
-| `src/help/__tests__/helpTopics.test.ts` | P3 | 5 | 3/0/13 | ⚪ Pending | — | — |
-| `src/components/shell/__tests__/StatusChip.test.tsx` | P3 | 8 | 2/0/0 | ⚪ Pending | — | — |
-| `src/locales/__tests__/glossaryLint.test.ts` | P3 | 8 | 1/0/0 | ⚪ Pending | — | — |
+| `src/utils/__tests__/humocoUri.test.ts` | P3 | 30 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 30/30 (98/98 files, 935/935 pass)`, `tsc/lint 0`; Fail-First RED->GREEN Commit 1 `49aa1e2` `humocoUri.ts` reject `javascript:`/userinfo, removed 4 conditional_expect & added `normalizeSyncUrlInput` / URI edge tests |
+| `src/help/__tests__/helpTopics.test.ts` | P3 | 5 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 5/5 (935 pass)`, `tsc/lint 0`; removed 3 conditional_expect & 13 weak_existence_assert, added non-empty/unique related & group-audience checks; Revert-Red `helpTopics.ts` `titleKey` |
+| `src/components/shell/__tests__/StatusChip.test.tsx` | P3 | 12 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 12/12 (935 pass)`, `tsc/lint 0`; removed 2 conditional_expect, reset mock leaks & added witness/override, pull-sync lock, multi-warning & Escape/outside-click tests; Revert-Red `StatusChip.tsx` conflict filter |
+| `src/locales/__tests__/glossaryLint.test.ts` | P3 | 8 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 8/8 (935 pass)`, `tsc/lint 0`; replaced allowlist conditional_expect tautology w/ concrete boundary & EN-parity assertions; Revert-Red `de.json` `Wallet` injection |
 | `src-tauri/src/state/tests.rs` | P3 | 22 | 0/12/26 | ⚪ Pending | — | — |
-| `src/utils/__tests__/imageCompression.test.ts` | P3 | 6 | 0/8/0 | ⚪ Pending | — | — |
+| `src/utils/__tests__/imageCompression.test.ts` | P3 | 9 | 0/0/0 | 🟢 Verified | `f5c105a` | `scan 0/0/0/0`, `vitest 9/9 (935 pass)`, `tsc/lint 0`; replaced 8 `setTimeout(0)` sleeps w/ microtask helper, added portrait crop, error paths, JPEG fallback, `96px` floor & `maxBytes - 64` tests; Revert-Red `imageCompression.ts` threshold |
 | `src-tauri/src/pin_keystore.rs` | P3 | 3 | 0/7/2 | ⚪ Pending | — | — |
 | `src-tauri/src/settings.rs` | P3 | 4 | 0/4/0 | ⚪ Pending | — | — |
 | `src-tauri/src/models/post.rs` | P3 | 1 | 0/3/0 | ⚪ Pending | — | — |
