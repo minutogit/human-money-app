@@ -205,16 +205,23 @@ mod tests {
     use super::*;
     use human_money_core::test_utils::{self, ACTORS};
 
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn s06_f2_f17_standards_authorize_before_fs_and_reject_unsafe_ids() {
-        let dir = crate::test_support::temp_test_dir("s06_f2_f17_standards");
+        let dir = TempDirGuard(crate::test_support::temp_test_dir("s06_f2_f17_standards"));
         let pw = "pw-s06-std";
-        let (mut svc, _) = test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir.0, &ACTORS.alice, "Alice", pw);
         svc.logout();
         let state = AppState::new(svc);
 
         // Locked wallet MUST fail authorization BEFORE creating standards_dir or probing files
-        let standards_dir = dir.join("uncreated_standards_dir");
+        let standards_dir = dir.0.join("uncreated_standards_dir");
         let import_err =
             import_voucher_standard_impl(b"invalid", None, None, &standards_dir, &state)
                 .unwrap_err();
@@ -268,7 +275,83 @@ mod tests {
                 del_err
             );
         }
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    #[test]
+    fn test_standards_export_import_delete_roundtrip_and_missing_or_invalid_utf8() {
+        let dir = TempDirGuard(crate::test_support::temp_test_dir("standards_roundtrip"));
+        let pw = "pw-std-roundtrip";
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir.0, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+        let state = AppState::new(svc);
+
+        let src_dir = dir.0.join("src_standards");
+        std::fs::create_dir_all(src_dir.join("bad_utf8")).unwrap();
+        std::fs::write(src_dir.join("bad_utf8").join("standard.toml"), [0xFF, 0xFE]).unwrap();
+
+        let missing_err = export_voucher_standard_impl(
+            "missing_std",
+            ContainerConfig::Cleartext,
+            Some(pw),
+            &src_dir,
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(
+            missing_err.message,
+            "Standard file standard.toml not found for ID 'missing_std'"
+        );
+
+        let utf8_err = export_voucher_standard_impl(
+            "bad_utf8",
+            ContainerConfig::Cleartext,
+            Some(pw),
+            &src_dir,
+            &state,
+        )
+        .unwrap_err();
+        assert!(
+            utf8_err.message.starts_with("Standard file is not valid UTF-8:"),
+            "unexpected utf8 error: {}",
+            utf8_err.message
+        );
+
+        let minuto_toml =
+            test_utils::generate_signed_standard_toml("voucher_standards/minuto_v1/standard.toml");
+        std::fs::create_dir_all(src_dir.join("minuto_custom")).unwrap();
+        std::fs::write(src_dir.join("minuto_custom").join("standard.toml"), minuto_toml).unwrap();
+
+        let exported = export_voucher_standard_impl(
+            "minuto_custom",
+            ContainerConfig::Cleartext,
+            Some(pw),
+            &src_dir,
+            &state,
+        )
+        .unwrap();
+        assert!(!exported.is_empty());
+
+        let import_dir = dir.0.join("nested").join("imported_standards");
+        assert!(!import_dir.exists());
+        let imported_id =
+            import_voucher_standard_impl(&exported, None, Some(pw), &import_dir, &state).unwrap();
+        assert!(!imported_id.is_empty());
+        assert!(import_dir.join(&imported_id).join("standard.toml").is_file());
+
+        delete_voucher_standard_impl(&imported_id, Some(pw), &import_dir, &state).unwrap();
+        assert!(!import_dir.join(&imported_id).exists());
+
+        let file_as_dir = dir.0.join("not_a_directory");
+        std::fs::write(&file_as_dir, b"occupied").unwrap();
+        let file_err =
+            import_voucher_standard_impl(&exported, None, Some(pw), &file_as_dir, &state)
+                .expect_err("Importing into a regular file path must fail");
+        assert!(
+            !file_err
+                .message
+                .starts_with("Failed to create standards directory:"),
+            "Existing path must not enter create_dir_all guard: {}",
+            file_err.message
+        );
     }
 }

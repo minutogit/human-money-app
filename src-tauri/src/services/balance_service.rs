@@ -569,28 +569,50 @@ pub fn get_event_history_impl(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use human_money_core::app_service::AppService;
     use human_money_core::models::wallet_event::{WalletEvent, WalletEventType};
+    use human_money_core::test_utils::{self, ACTORS};
+
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn test_get_event_history_uses_cache() {
-        use std::path::PathBuf;
-        // Mock AppState
-        let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
-        let state_raw = AppState::new(service);
-        state_raw.set_cached_events(Some(vec![WalletEvent {
-            event_id: "test_event_1".to_string(),
+        let dir = TempDirGuard(crate::test_support::temp_test_dir("balance_event_history"));
+        let pw = "pw-events";
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir.0, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+        let state = AppState::new(svc);
+
+        let mk_event = |id: &str| WalletEvent {
+            event_id: id.to_string(),
             event_type: WalletEventType::VoucherActivated,
             timestamp: Utc::now(),
-            local_instance_id: "voucher_1".to_string(),
-            voucher_id: "vid_1".to_string(),
+            local_instance_id: format!("local_{id}"),
+            voucher_id: format!("vid_{id}"),
             bff_data: Default::default(),
-        }]));
+        };
+        state.set_cached_events(Some(vec![mk_event("ev-1"), mk_event("ev-2"), mk_event("ev-3")]));
 
-        let events = state_raw.cache_events();
-        assert!(events.is_some());
-        assert_eq!(events.as_ref().unwrap().len(), 1);
-        assert_eq!(events.as_ref().unwrap()[0].event_id, "test_event_1");
+        assert!(get_event_history_impl(0, 0, &state).unwrap().is_empty());
+
+        let page = get_event_history_impl(1, 2, &state).unwrap();
+        let ids: Vec<&str> = page.iter().map(|e| e.event_id.as_str()).collect();
+        assert_eq!(ids, vec!["ev-2", "ev-3"]);
+
+        assert!(get_event_history_impl(10, 5, &state).unwrap().is_empty());
+
+        state.set_cached_events(None);
+        let uncached = get_event_history_impl(0, 10, &state).unwrap();
+        assert!(uncached.is_empty());
+
+        state.service.lock().unwrap().logout();
+        let err = get_event_history_impl(0, 2, &state)
+            .expect_err("Locked wallet must be rejected by get_event_history_impl");
+        assert_eq!(err.code, "error.wallet.locked");
     }
 
     #[test]
@@ -612,40 +634,189 @@ mod tests {
 
         assert_eq!(parse_fixed_point("10,50"), Some(1050000000));
         assert_eq!(format_fixed_point(1050000000), "10.5");
+
+        assert_eq!(parse_fixed_point("+12.5"), Some(1250000000));
+        assert_eq!(parse_fixed_point(".5"), Some(50000000));
+        assert_eq!(parse_fixed_point("1.123456789"), Some(112345678));
+        assert_eq!(parse_fixed_point("-"), None);
+        assert_eq!(parse_fixed_point("+"), None);
+        assert_eq!(parse_fixed_point("abc"), None);
+        assert_eq!(parse_fixed_point("1.ab"), None);
+        assert_eq!(parse_fixed_point("++2.1"), None);
+        assert_eq!(parse_fixed_point("1.+2"), None);
+        assert_eq!(parse_fixed_point("9999999999999999999999999999999999"), None);
+        assert_eq!(format_fixed_point(1), "0.00000001");
+        assert_eq!(format_fixed_point(-100_000_000), "-1");
+    }
+
+    fn mint_ft_voucher(
+        svc: &mut human_money_core::app_service::AppService,
+        ft_toml: &str,
+        creator_id: &str,
+        amount: &str,
+        description: Option<&str>,
+        pw: &str,
+    ) -> (String, String, String) {
+        use human_money_core::models::profile::PublicProfile;
+        use human_money_core::models::voucher::ValueDefinition;
+        use human_money_core::NewVoucherData;
+        let v = svc
+            .create_new_voucher(
+                ft_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(creator_id.to_string()),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: amount.into(),
+                        unit: "Taler".into(),
+                        description: description.map(str::to_string),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let local_id =
+            human_money_core::wallet::Wallet::calculate_local_instance_id(&v, creator_id).unwrap();
+        (local_id, v.voucher_id, v.voucher_standard.uuid)
+    }
+
+    fn transfer_ft(
+        sender: &mut human_money_core::app_service::AppService,
+        recipient: &mut human_money_core::app_service::AppService,
+        recipient_id: &str,
+        local_id: &str,
+        amount: &str,
+        standards: &std::collections::HashMap<String, String>,
+        pw: &str,
+    ) {
+        use human_money_core::wallet::types::{MultiTransferRequest, SourceTransfer};
+        let sent = sender
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: recipient_id.to_string(),
+                    sources: vec![SourceTransfer {
+                        local_instance_id: local_id.to_string(),
+                        amount_to_send: amount.into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: Some(false),
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+        recipient
+            .receive_bundle(&sent.bundle_bytes, standards, None, Some(pw), false)
+            .unwrap();
     }
 
     #[test]
     fn test_balance_arithmetic_scenarios() {
-        // Scenario 1: Own voucher minted 1000, not yet spent
-        let nominal = 1000 * FIXED_SCALE;
-        let own_available = 1000 * FIXED_SCALE;
-        let redeemed = 0;
-        let received = 0;
-        let own_circulating = (nominal - redeemed - own_available).max(0);
-        let total = received + own_available;
-        let net = received - own_circulating;
+        use human_money_core::models::voucher::Transaction;
+        use human_money_core::wallet::instance::VoucherStatus;
+        use std::collections::HashMap;
 
-        assert_eq!(own_circulating, 0);
-        assert_eq!(total, 1000 * FIXED_SCALE);
-        assert_eq!(net, 0);
+        let dir = TempDirGuard(crate::test_support::temp_test_dir("balance_scenarios"));
+        let pw = "pw-scenarios";
+        let (mut svc_alice, _) =
+            test_utils::setup_service_with_profile(&dir.0.join("alice"), &ACTORS.alice, "Alice", pw);
+        let (mut svc_bob, _) =
+            test_utils::setup_service_with_profile(&dir.0.join("bob"), &ACTORS.bob, "Bob", pw);
+        svc_alice.unlock_session(pw, 600).unwrap();
+        svc_bob.unlock_session(pw, 600).unwrap();
 
-        // Scenario 2: Spent 300 own vouchers, 700 remaining in wallet
-        let own_available = 700 * FIXED_SCALE;
-        let own_circulating = (nominal - redeemed - own_available).max(0);
-        let total = received + own_available;
-        let net = received - own_circulating;
+        let alice_id = svc_alice.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_id = svc_bob.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let ft_toml =
+            test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
 
-        assert_eq!(own_circulating, 300 * FIXED_SCALE);
-        assert_eq!(total, 700 * FIXED_SCALE);
-        assert_eq!(net, -300 * FIXED_SCALE);
+        let (alice_local_id, alice_voucher_id, std_uuid) =
+            mint_ft_voucher(&mut svc_alice, &ft_toml, &alice_id, "60", None, pw);
+        let mut standards = HashMap::new();
+        standards.insert(std_uuid, ft_toml.clone());
 
-        // Scenario 3: Received 40 from someone else, while 300 own are circulating
-        let received = 40 * FIXED_SCALE;
-        let total = received + own_available;
-        let net = received - own_circulating;
+        // Scenario 1: Own voucher minted 60, not yet spent
+        let b1 = svc_alice
+            .with_wallet_and_identity(calculate_aggregated_balances)
+            .unwrap();
+        assert_eq!(b1.len(), 1);
+        assert_eq!(b1[0].own_available_amount, "60");
+        assert_eq!(b1[0].own_circulating_amount, "0");
+        assert_eq!(b1[0].received_amount, "0");
+        assert_eq!(b1[0].total_amount, "60");
+        assert_eq!(b1[0].net_balance, "0");
 
-        assert_eq!(total, 740 * FIXED_SCALE);
-        assert_eq!(net, -260 * FIXED_SCALE);
+        // Scenario 2: Alice sends 20 to Bob (40 own remaining), Bob mints & sends 15 to Alice
+        transfer_ft(&mut svc_alice, &mut svc_bob, &bob_id, &alice_local_id, "20", &standards, pw);
+        let (bob_local_id, _, _) = mint_ft_voucher(&mut svc_bob, &ft_toml, &bob_id, "15", None, pw);
+        transfer_ft(&mut svc_bob, &mut svc_alice, &alice_id, &bob_local_id, "15", &standards, pw);
+
+        let b2 = svc_alice
+            .with_wallet_and_identity(calculate_aggregated_balances)
+            .unwrap();
+        assert_eq!(b2.len(), 1);
+        assert_eq!(b2[0].own_available_amount, "40");
+        assert_eq!(b2[0].own_circulating_amount, "20");
+        assert_eq!(b2[0].received_amount, "15");
+        assert_eq!(b2[0].total_amount, "55");
+        assert_eq!(b2[0].net_balance, "-5");
+
+        // Scenario 3: Redeem tx (5) reduces own_circulating from 20 to 15 (deduped across instances)
+        let b3 = svc_alice
+            .with_wallet_and_identity(|w, id| {
+                let mut w_redeemed = w.clone();
+                let mut archived_redeem = w_redeemed
+                    .voucher_store
+                    .vouchers
+                    .values()
+                    .find(|v| v.voucher.voucher_id == alice_voucher_id)
+                    .unwrap()
+                    .clone();
+                archived_redeem.status = VoucherStatus::Archived;
+                archived_redeem.voucher.transactions.push(Transaction {
+                    t_id: "redeem-1".into(),
+                    t_type: "redeem".into(),
+                    amount: "5".into(),
+                    ..Default::default()
+                });
+                archived_redeem.voucher.transactions.push(Transaction {
+                    t_id: "non-redeem-1".into(),
+                    t_type: "transfer".into(),
+                    amount: "99".into(),
+                    ..Default::default()
+                });
+                let mut dup_redeem = archived_redeem.clone();
+                dup_redeem.voucher.transactions = vec![Transaction {
+                    t_id: "redeem-1".into(),
+                    t_type: "redeem".into(),
+                    amount: "5".into(),
+                    ..Default::default()
+                }];
+                w_redeemed
+                    .voucher_store
+                    .vouchers
+                    .insert("archived-redeem-a".into(), archived_redeem);
+                w_redeemed
+                    .voucher_store
+                    .vouchers
+                    .insert("archived-redeem-b".into(), dup_redeem);
+                calculate_aggregated_balances(&w_redeemed, id)
+            })
+            .unwrap();
+        assert_eq!(b3.len(), 1);
+        assert_eq!(b3[0].own_available_amount, "40");
+        assert_eq!(b3[0].own_circulating_amount, "15");
+        assert_eq!(b3[0].received_amount, "15");
+        assert_eq!(b3[0].total_amount, "55");
+        assert_eq!(b3[0].net_balance, "0");
     }
 
     #[test]
@@ -676,13 +847,12 @@ mod tests {
 
     #[test]
     fn s06_f6_calculate_aggregated_balances_unit_key_test_prefix_and_expired_handling() {
-        use human_money_core::test_utils::{self, ACTORS};
         use human_money_core::wallet::instance::VoucherStatus;
         use human_money_core::NewVoucherData;
 
-        let dir = crate::test_support::temp_test_dir("s06_f6_balances");
+        let dir = TempDirGuard(crate::test_support::temp_test_dir("s06_f6_balances"));
         let pw = "pw-s06-f6";
-        let (mut svc, _) = test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir.0, &ACTORS.alice, "Alice", pw);
         svc.unlock_session(pw, 600).unwrap();
 
         let minuto_toml =
@@ -805,7 +975,116 @@ mod tests {
             test_entries[0].own_circulating_amount, "50",
             "Expired and corrupt-date vouchers must NOT inflate own_circulating_amount"
         );
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    #[test]
+    fn test_voucher_summary_and_details_archive_zero_amount_and_canonical_unit() {
+        use human_money_core::models::profile::PublicProfile;
+        use human_money_core::models::voucher::ValueDefinition;
+        use human_money_core::wallet::instance::VoucherStatus;
+        use human_money_core::NewVoucherData;
+
+        assert_eq!(
+            canonical_asset_unit(&ValueDefinition {
+                unit: "  Minuto  ".into(),
+                abbreviation: Some("MIN".into()),
+                ..Default::default()
+            }),
+            "Minuto"
+        );
+        assert_eq!(
+            canonical_asset_unit(&ValueDefinition {
+                unit: "   ".into(),
+                abbreviation: Some("  FT ".into()),
+                ..Default::default()
+            }),
+            "FT"
+        );
+        assert_eq!(
+            canonical_asset_unit(&ValueDefinition {
+                unit: "".into(),
+                abbreviation: None,
+                ..Default::default()
+            }),
+            ""
+        );
+
+        let dir = TempDirGuard(crate::test_support::temp_test_dir("balance_zero_archive"));
+        let pw = "pw-zero-archive";
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir.0, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+        let user_id = svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let ft_toml =
+            test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+
+        let active_v = svc
+            .create_new_voucher(
+                &ft_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(user_id.clone()),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "25".into(),
+                        unit: "Taler".into(),
+                        description: Some("Baking Hours".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let active_id =
+            human_money_core::wallet::Wallet::calculate_local_instance_id(&active_v, &user_id)
+                .unwrap();
+
+        let zero_id = "zero-active-local".to_string();
+        {
+            let wallet = svc.get_wallet_mut().unwrap();
+            let mut zero_inst = wallet.voucher_store.vouchers.get(&active_id).unwrap().clone();
+            zero_inst.status = VoucherStatus::Active;
+            zero_inst.voucher.voucher_id = "vid-zero-active".into();
+            zero_inst.voucher.nominal_value.amount = "0".into();
+            zero_inst.voucher.nominal_value.description = None;
+            zero_inst.voucher.creator_profile.service_offer = Some("Repair Fallback".into());
+            zero_inst.voucher.transactions.clear();
+            wallet.voucher_store.vouchers.insert(zero_id.clone(), zero_inst);
+        }
+
+        let state = AppState::new(svc);
+
+        let summaries = get_voucher_summaries_impl(None, &state).unwrap();
+        assert_eq!(summaries.len(), 2);
+        let active_s = summaries
+            .iter()
+            .find(|s| s.local_instance_id == active_id)
+            .unwrap();
+        assert_eq!(active_s.status, "active");
+        assert_eq!(active_s.current_amount, "25.00");
+        assert_eq!(active_s.description, "Baking Hours");
+        assert!(!active_s.has_layer2_anchor);
+
+        let zero_s = summaries
+            .iter()
+            .find(|s| s.local_instance_id == zero_id)
+            .unwrap();
+        assert_eq!(zero_s.status, "archived");
+        assert_eq!(zero_s.current_amount, "0");
+        assert_eq!(zero_s.description, "Repair Fallback");
+
+        let zero_details = get_voucher_details_impl(zero_id, &state).unwrap();
+        assert_eq!(zero_details.status, "archived");
+        assert_eq!(zero_details.current_amount, "0");
+
+        let active_details = get_voucher_details_impl(active_id, &state).unwrap();
+        assert_eq!(active_details.status, "active");
+        assert_eq!(active_details.current_amount, "25.00");
+
+        state.service.lock().unwrap().logout();
+        let err = get_voucher_summaries_impl(None, &state)
+            .expect_err("Locked wallet must be rejected by get_voucher_summaries_impl");
+        assert_eq!(err.code, "error.wallet.locked");
     }
 }

@@ -450,83 +450,56 @@ fn build_pkzip_archive(entries: &[ZipEntry]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_pkzip_builder_and_extraction() {
-        let admin_pubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let data_dir = "d-test1234";
-        let max_members = 250;
-        let max_total_storage_mb = 2048;
-        let max_user_storage_mb = 25;
-        let register_url = Some("https://example.com/register");
-
-        let zip_bytes = build_sync_zip_bytes(
-            admin_pubkey,
-            data_dir,
-            max_members,
-            max_total_storage_mb,
-            max_user_storage_mb,
-            register_url,
-        );
-        assert!(!zip_bytes.is_empty());
-
-        // Check local header magic of first file
-        assert_eq!(&zip_bytes[0..4], &[0x50, 0x4b, 0x03, 0x04]);
-
-        // Parse archive manually to verify PKZIP structure
+    fn extract_local_zip_entries(
+        zip_bytes: &[u8],
+    ) -> (std::collections::HashMap<String, Vec<u8>>, usize) {
         let mut offset = 0;
         let mut extracted_files = std::collections::HashMap::new();
-
         while offset + 30 <= zip_bytes.len() {
             let sig = &zip_bytes[offset..offset + 4];
             if sig == [0x50, 0x4b, 0x01, 0x02] || sig == [0x50, 0x4b, 0x05, 0x06] {
-                // Central directory or EOCD reached
                 break;
             }
-            assert_eq!(
-                sig,
-                [0x50, 0x4b, 0x03, 0x04],
-                "Invalid local header signature at {}",
-                offset
-            );
-
+            assert_eq!(sig, [0x50, 0x4b, 0x03, 0x04], "Invalid local header at {offset}");
             let crc = u32::from_le_bytes(zip_bytes[offset + 14..offset + 18].try_into().unwrap());
-            let c_size = u32::from_le_bytes(zip_bytes[offset + 18..offset + 22].try_into().unwrap())
-                as usize;
-            let u_size = u32::from_le_bytes(zip_bytes[offset + 22..offset + 26].try_into().unwrap())
-                as usize;
+            let c_size =
+                u32::from_le_bytes(zip_bytes[offset + 18..offset + 22].try_into().unwrap()) as usize;
+            let u_size =
+                u32::from_le_bytes(zip_bytes[offset + 22..offset + 26].try_into().unwrap()) as usize;
             let name_len =
-                u16::from_le_bytes(zip_bytes[offset + 26..offset + 28].try_into().unwrap())
-                    as usize;
+                u16::from_le_bytes(zip_bytes[offset + 26..offset + 28].try_into().unwrap()) as usize;
             let extra_len =
-                u16::from_le_bytes(zip_bytes[offset + 28..offset + 30].try_into().unwrap())
-                    as usize;
-
+                u16::from_le_bytes(zip_bytes[offset + 28..offset + 30].try_into().unwrap()) as usize;
             assert_eq!(c_size, u_size);
             let name_start = offset + 30;
             let name = std::str::from_utf8(&zip_bytes[name_start..name_start + name_len]).unwrap();
             let data_start = name_start + name_len + extra_len;
             let data = &zip_bytes[data_start..data_start + c_size];
-
             let mut hasher = Hasher::new();
             hasher.update(data);
-            assert_eq!(crc, hasher.finalize(), "CRC mismatch for {}", name);
-
+            assert_eq!(crc, hasher.finalize(), "CRC mismatch for {name}");
             extracted_files.insert(name.to_string(), data.to_vec());
             offset = data_start + c_size;
         }
+        (extracted_files, offset)
+    }
 
-        // Verify all 8 files are present
+    #[test]
+    fn test_pkzip_builder_local_headers_and_embedded_files() {
+        let admin_pubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let data_dir = "d-test1234";
+        let zip_bytes = build_sync_zip_bytes(
+            admin_pubkey,
+            data_dir,
+            250,
+            2048,
+            25,
+            Some("https://example.com/register"),
+        );
+        assert_eq!(&zip_bytes[0..4], &[0x50, 0x4b, 0x03, 0x04]);
+
+        let (extracted_files, _) = extract_local_zip_entries(&zip_bytes);
         assert_eq!(extracted_files.len(), 8);
-        assert!(extracted_files.contains_key("sync.php"));
-        assert!(extracted_files.contains_key("lock_handler.php"));
-        assert!(extracted_files.contains_key("lock_rotation.php"));
-        assert!(extracted_files.contains_key("config.php"));
-        assert!(extracted_files.contains_key(".htaccess"));
-        assert!(extracted_files.contains_key("robots.txt"));
-        assert!(extracted_files.contains_key("index.html"));
-        assert!(extracted_files.contains_key("README.md"));
-
-        // Verify embedded files equality
         assert_eq!(extracted_files["sync.php"], SYNC_PHP);
         assert_eq!(extracted_files["lock_handler.php"], LOCK_HANDLER_PHP);
         assert_eq!(extracted_files["lock_rotation.php"], LOCK_ROTATION_PHP);
@@ -535,163 +508,96 @@ mod tests {
         assert_eq!(extracted_files["index.html"], INDEX_HTML);
         assert_eq!(extracted_files["README.md"], README_MD);
 
-        // Verify config.php contents
         let cfg_str = std::str::from_utf8(&extracted_files["config.php"]).unwrap();
         assert!(cfg_str.contains(admin_pubkey));
         assert!(cfg_str.contains(data_dir));
-        assert!(cfg_str.contains("250"));
-        assert!(cfg_str.contains("2048"));
+        assert!(cfg_str.contains("'max_members'          => 250"));
+        assert!(cfg_str.contains("'max_total_storage_mb' => 2048"));
         assert!(cfg_str.contains("'max_user_storage_mb'  => 25"));
+        assert!(cfg_str.contains("'max_user_bytes' => 6291456"));
         assert!(cfg_str.contains("'disable_rate_limit'"));
         assert!(cfg_str.contains("https://example.com/register"));
-        assert!(cfg_str.contains("'card'"));
-        assert!(cfg_str.contains("524288"));
-        assert!(cfg_str.contains("'wot'"));
-        assert!(cfg_str.contains("'backup'"));
-        assert!(cfg_str.contains("'post'"));
-        assert!(cfg_str.contains("'media'"));
-        assert!(cfg_str.contains("'lock'"));
-        assert!(cfg_str.contains("'max_retention_quarter'"));
+        for marker in ["'card'", "'wot'", "'backup'", "'post'", "'media'", "'lock'"] {
+            assert!(cfg_str.contains(marker), "missing {marker}");
+        }
+    }
 
-        // Verify Central Directory entries & EOCD structure
-        let cd_start = offset;
+    #[test]
+    fn test_pkzip_central_directory_and_eocd_structure() {
+        let zip_bytes = build_sync_zip_bytes("aa".repeat(32).as_str(), "d-cd", 50, 100, 10, None);
+        let (extracted_files, cd_start) = extract_local_zip_entries(&zip_bytes);
         let mut cd_offset = cd_start;
         let mut cd_count = 0usize;
         while cd_offset + 46 <= zip_bytes.len()
             && zip_bytes[cd_offset..cd_offset + 4] == [0x50, 0x4b, 0x01, 0x02]
         {
-            assert_eq!(
-                &zip_bytes[cd_offset + 4..cd_offset + 6],
-                &[0x14, 0x03],
-                "CD version made by must be ZIP 2.0 / Unix (0x14, 0x03)"
-            );
-            assert_eq!(
-                &zip_bytes[cd_offset + 14..cd_offset + 16],
-                &[0x21, 0x00],
-                "CD DOS date must be 1980-01-01 (0x21, 0x00)"
-            );
+            assert_eq!(&zip_bytes[cd_offset + 4..cd_offset + 6], &[0x14, 0x03]);
+            assert_eq!(&zip_bytes[cd_offset + 14..cd_offset + 16], &[0x21, 0x00]);
             assert_eq!(
                 &zip_bytes[cd_offset + 38..cd_offset + 42],
-                &[0x00, 0x00, 0xa4, 0x81],
-                "CD external attributes must encode 0o100644"
+                &[0x00, 0x00, 0xa4, 0x81]
             );
-            let cd_crc = u32::from_le_bytes(
-                zip_bytes[cd_offset + 16..cd_offset + 20]
-                    .try_into()
-                    .unwrap(),
-            );
-            let cd_csize = u32::from_le_bytes(
-                zip_bytes[cd_offset + 20..cd_offset + 24]
-                    .try_into()
-                    .unwrap(),
-            );
-            let cd_usize = u32::from_le_bytes(
-                zip_bytes[cd_offset + 24..cd_offset + 28]
-                    .try_into()
-                    .unwrap(),
-            );
-            let cd_name_len = u16::from_le_bytes(
-                zip_bytes[cd_offset + 28..cd_offset + 30]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
-            let cd_extra_len = u16::from_le_bytes(
-                zip_bytes[cd_offset + 30..cd_offset + 32]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
-            let cd_comment_len = u16::from_le_bytes(
-                zip_bytes[cd_offset + 32..cd_offset + 34]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
-            let local_off = u32::from_le_bytes(
-                zip_bytes[cd_offset + 42..cd_offset + 46]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
-            let name =
-                std::str::from_utf8(&zip_bytes[cd_offset + 46..cd_offset + 46 + cd_name_len])
-                    .unwrap();
-            let file_data = extracted_files
-                .get(name)
-                .expect("CD name must match local entry");
+            let cd_crc = u32::from_le_bytes(zip_bytes[cd_offset + 16..cd_offset + 20].try_into().unwrap());
+            let cd_csize = u32::from_le_bytes(zip_bytes[cd_offset + 20..cd_offset + 24].try_into().unwrap());
+            let cd_usize = u32::from_le_bytes(zip_bytes[cd_offset + 24..cd_offset + 28].try_into().unwrap());
+            let cd_name_len = u16::from_le_bytes(zip_bytes[cd_offset + 28..cd_offset + 30].try_into().unwrap()) as usize;
+            let cd_extra_len = u16::from_le_bytes(zip_bytes[cd_offset + 30..cd_offset + 32].try_into().unwrap()) as usize;
+            let cd_comment_len = u16::from_le_bytes(zip_bytes[cd_offset + 32..cd_offset + 34].try_into().unwrap()) as usize;
+            let local_off = u32::from_le_bytes(zip_bytes[cd_offset + 42..cd_offset + 46].try_into().unwrap()) as usize;
+            let name = std::str::from_utf8(&zip_bytes[cd_offset + 46..cd_offset + 46 + cd_name_len]).unwrap();
+            let file_data = extracted_files.get(name).expect("CD name must match local entry");
             assert_eq!(cd_csize, file_data.len() as u32);
             assert_eq!(cd_usize, file_data.len() as u32);
             let mut hasher = Hasher::new();
             hasher.update(file_data);
             assert_eq!(cd_crc, hasher.finalize());
-            assert_eq!(
-                &zip_bytes[local_off..local_off + 4],
-                &[0x50, 0x4b, 0x03, 0x04]
-            );
-
+            assert_eq!(&zip_bytes[local_off..local_off + 4], &[0x50, 0x4b, 0x03, 0x04]);
             cd_offset += 46 + cd_name_len + cd_extra_len + cd_comment_len;
             cd_count += 1;
         }
         assert_eq!(cd_count, 8);
         assert_eq!(cd_offset + 22, zip_bytes.len());
+        assert_eq!(&zip_bytes[cd_offset..cd_offset + 4], &[0x50, 0x4b, 0x05, 0x06]);
+        assert_eq!(u16::from_le_bytes(zip_bytes[cd_offset + 8..cd_offset + 10].try_into().unwrap()), 8);
+        assert_eq!(u16::from_le_bytes(zip_bytes[cd_offset + 10..cd_offset + 12].try_into().unwrap()), 8);
         assert_eq!(
-            &zip_bytes[cd_offset..cd_offset + 4],
-            &[0x50, 0x4b, 0x05, 0x06]
-        );
-        assert_eq!(
-            u16::from_le_bytes(zip_bytes[cd_offset + 8..cd_offset + 10].try_into().unwrap()),
-            8
-        );
-        assert_eq!(
-            u16::from_le_bytes(
-                zip_bytes[cd_offset + 10..cd_offset + 12]
-                    .try_into()
-                    .unwrap()
-            ),
-            8
-        );
-        assert_eq!(
-            u32::from_le_bytes(
-                zip_bytes[cd_offset + 12..cd_offset + 16]
-                    .try_into()
-                    .unwrap()
-            ) as usize,
+            u32::from_le_bytes(zip_bytes[cd_offset + 12..cd_offset + 16].try_into().unwrap()) as usize,
             cd_offset - cd_start
         );
         assert_eq!(
-            u32::from_le_bytes(
-                zip_bytes[cd_offset + 16..cd_offset + 20]
-                    .try_into()
-                    .unwrap()
-            ) as usize,
+            u32::from_le_bytes(zip_bytes[cd_offset + 16..cd_offset + 20].try_into().unwrap()) as usize,
             cd_start
         );
     }
 
     #[test]
     fn test_s08_f8_php_toml_escaping_and_origin_validation() {
-        // 1. PHP escaping: \' and trailing \ and control chars and blank register_url
         let php_cfg = generate_sync_config_php(
             "aa\n';phpinfo();//",
             "d-1\r\\'",
             50,
             100,
-            10,
+            2,
             Some("https://evil.example/\\'<?php system('id'); ?>\\"),
         );
         assert!(!php_cfg.contains("aa\n"));
         assert!(php_cfg.contains("'admin_pubkey'         => 'aa\\';phpinfo();//'"));
         assert!(php_cfg.contains("'data_dir'             => 'd-1\\\\\\''"));
+        assert!(php_cfg.contains("'max_user_bytes' => 2097152"));
         assert!(php_cfg.contains(
             "'register_url'         => 'https://evil.example/\\\\\\'<?php system(\\'id\\'); ?>\\\\'"
         ));
 
-        let php_blank = generate_sync_config_php("aa", "d-1", 50, 100, 10, Some("   "));
-        assert!(php_blank.contains("'register_url'         => null"));
+        for reg in [None, Some(""), Some("   ")] {
+            let php_blank = generate_sync_config_php("aa", "d-1", 50, 100, 10, reg);
+            assert!(php_blank.contains("'register_url'         => null"));
+        }
 
-        // 2. TOML control-char escaping + URL origin extraction + max_free_pool_mb clamp
         let toml_ctrl = generate_rust_sync_config_toml(
-            "ab\x00\x07\x08\x0c\x1b\x7fcd",
+            "ab\\\"\x00\x07\x08\x0c\n\r\t\x1b\x7fcd",
             "d-\x1b[31m",
             10,
-            0,
+            3,
             10,
             Some("https://sync.example.org:8443/register?ref=1#frag"),
         );
@@ -701,15 +607,35 @@ mod tests {
                 .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t'),
             "TOML output must not contain unescaped control chars"
         );
-        assert!(toml_ctrl.contains(r#"admin_pubkey = "ab\u0000\u0007\b\f\u001B\u007Fcd""#));
+        assert!(toml_ctrl.contains(r#"admin_pubkey = "ab\\\"\u0000\u0007\b\f\n\r\t\u001B\u007Fcd""#));
         assert!(toml_ctrl.contains(r#"data_dir = "d-\u001B[31m""#));
         assert!(toml_ctrl.contains(r#"public_base_url = "https://sync.example.org:8443""#));
-        assert!(toml_ctrl.contains("max_total_storage_mb = 0"));
-        assert!(toml_ctrl.contains("max_free_pool_mb = 0"));
+        assert!(toml_ctrl.contains("max_total_storage_mb = 3"));
+        assert!(toml_ctrl.contains("max_free_pool_mb = 1\n"));
+        assert!(toml_ctrl.contains("max_total_bytes = 10485760\n"));
+        assert!(toml_ctrl.contains("max_user_bytes = 6291456\n"));
+
+        let toml_20 = generate_rust_sync_config_toml(
+            "aa",
+            "d-20",
+            10,
+            20,
+            4,
+            Some("http://local.example/reg"),
+        );
+        assert!(toml_20.contains("max_free_pool_mb = 5\n"));
+        assert!(toml_20.contains("max_total_bytes = 4194304\n"));
+        assert!(toml_20.contains("max_user_bytes = 4194304\n"));
+        assert!(toml_20.contains(r#"public_base_url = "http://local.example""#));
 
         for bad_reg in [
-            "javascript://foo/bar",
-            "https://user:pass@sync.example.org/reg",
+            "",
+            "https://evil.example/ reg",
+            "https://evil.example/\x07reg",
+            "javascript://evil.example/bar",
+            "https://user@evil.example/reg",
+            "https://:pass@evil.example/reg",
+            "https://user:pass@evil.example/reg",
         ] {
             let toml_bad = generate_rust_sync_config_toml("aa", "d-1", 10, 100, 10, Some(bad_reg));
             assert!(

@@ -151,15 +151,22 @@ pub fn encode_text_qr_svg(text: String) -> Result<String, FrontendError> {
 mod tests {
     use super::*;
 
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn test_get_my_quick_contact_formats_uri_and_svg() {
-        let temp_dir = std::env::temp_dir().join(format!(
+        let temp_dir = TempDirGuard(std::env::temp_dir().join(format!(
             "humoco_quick_contact_test_{}",
             uuid::Uuid::new_v4()
-        ));
+        )));
         let password = "test-password-123";
         let mut alice_service = crate::test_support::setup_test_app(
-            &temp_dir,
+            &temp_dir.0,
             "Alice Schnell",
             crate::test_support::ALICE_PHRASE,
             password,
@@ -223,9 +230,10 @@ mod tests {
         assert!(quick.uri.contains("sync=sync.example.com"));
         assert!(!quick.uri.contains("d-own12345"));
         assert!(!quick.uri.contains("d-pub67890"));
-        assert!(quick.qr_svg.is_some());
-        let svg = quick.qr_svg.unwrap();
-        assert!(svg.contains("<svg"));
+        let svg = quick
+            .qr_svg
+            .expect("quick contact must produce QR SVG");
+        assert!(svg.contains("<svg") && svg.contains("</svg>"));
     }
 
     #[test]
@@ -233,6 +241,10 @@ mod tests {
         let valid = encode_text_qr_svg("humoco://pay?to=did:key:z6MkpAlice&amount=10".to_string())
             .expect("valid URI should encode as QR SVG");
         assert!(valid.contains("<svg"));
+
+        let max_valid = encode_text_qr_svg("a".repeat(humoco_market::MAX_QR_SHARE_BYTES))
+            .expect("exact MAX_QR_SHARE_BYTES boundary must succeed");
+        assert!(max_valid.contains("<svg"));
 
         let empty_err = encode_text_qr_svg("   ".to_string()).unwrap_err();
         assert!(empty_err.message.contains("empty"));
@@ -244,10 +256,11 @@ mod tests {
 
     #[test]
     fn test_get_my_quick_contact_preserves_subaccount_prefix() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("humoco_quick_sub_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir = TempDirGuard(
+            std::env::temp_dir().join(format!("humoco_quick_sub_test_{}", uuid::Uuid::new_v4())),
+        );
         let password = "test-password-123";
-        let mut service = human_money_core::app_service::AppService::new(&temp_dir).unwrap();
+        let mut service = human_money_core::app_service::AppService::new(&temp_dir.0).unwrap();
         service
             .create_profile(
                 "Alice Laden",
@@ -276,12 +289,12 @@ mod tests {
             "Expected URL-encoded prefix in URI, got {}",
             quick.uri
         );
-        let _ = std::fs::remove_dir_all(temp_dir);
 
         // Also explicitly verify a pure root profile (prefix = None) exports bare did:key:...
-        let root_dir =
-            std::env::temp_dir().join(format!("humoco_quick_root_test_{}", uuid::Uuid::new_v4()));
-        let mut root_service = human_money_core::app_service::AppService::new(&root_dir).unwrap();
+        let root_dir = TempDirGuard(
+            std::env::temp_dir().join(format!("humoco_quick_root_test_{}", uuid::Uuid::new_v4())),
+        );
+        let mut root_service = human_money_core::app_service::AppService::new(&root_dir.0).unwrap();
         root_service
             .create_profile(
                 "Alice Pure Root",
@@ -303,15 +316,15 @@ mod tests {
             "Root profile must export bare did:key, got {}",
             root_quick.did
         );
-        let _ = std::fs::remove_dir_all(root_dir);
     }
 
     #[test]
     fn s11_f2_quick_contact_excludes_revoked_and_accepts_uppercase_scheme() {
-        let dir =
-            std::env::temp_dir().join(format!("humoco_quick_revoked_{}", uuid::Uuid::new_v4()));
+        let dir = TempDirGuard(
+            std::env::temp_dir().join(format!("humoco_quick_revoked_{}", uuid::Uuid::new_v4())),
+        );
         let pw = "pw123";
-        let mut service = human_money_core::app_service::AppService::new(&dir).unwrap();
+        let mut service = human_money_core::app_service::AppService::new(&dir.0).unwrap();
         service
             .create_profile(
                 "Alice Quick",
@@ -376,7 +389,94 @@ mod tests {
                 "active-public.example".to_string()
             ]
         );
+    }
 
-        let _ = std::fs::remove_dir_all(dir);
+    #[test]
+    fn test_compact_sync_url_and_quick_contact_dedup_cap_and_org_fallback() {
+        assert_eq!(
+            compact_sync_url_for_contact_uri(" https://a.example/sync.php/ "),
+            "a.example"
+        );
+        assert_eq!(
+            compact_sync_url_for_contact_uri("HTTPS://B.EXAMPLE/sub/sync.php"),
+            "B.EXAMPLE/sub"
+        );
+        assert_eq!(
+            compact_sync_url_for_contact_uri("http://c.example/path///"),
+            "http://c.example/path"
+        );
+
+        let dir = TempDirGuard(crate::test_support::temp_test_dir("quick_contact_dedup_org"));
+        let pw = "pw-dedup";
+        let mut svc = crate::test_support::setup_test_app(
+            &dir.0,
+            "Org User",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        svc.update_public_profile(
+            human_money_core::models::profile::PublicProfile {
+                first_name: Some("  ".to_string()),
+                last_name: None,
+                organization: Some(" Bakery Co ".to_string()),
+                ..Default::default()
+            },
+            Some(pw),
+        )
+        .unwrap();
+        let state = crate::test_support::create_test_state(svc);
+        state.set_cached_security_policy(Some(crate::settings::SecurityPolicy {
+            market_selected_syncs: vec![
+                crate::models::FrontendSyncDescriptor {
+                    write_url: "https://one.example/sync.php".to_string(),
+                    read_url: "https://one.example/d".to_string(),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+            ],
+            public_syncs: vec![
+                crate::settings::StoredPublicSync {
+                    write_url: "https://disabled.example/sync.php".to_string(),
+                    read_url: "https://disabled.example/d".to_string(),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x12),
+                    enabled: false,
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+                crate::settings::StoredPublicSync {
+                    write_url: "https://one.example/sync.php/".to_string(),
+                    read_url: "https://one.example/d".to_string(),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
+                    enabled: true,
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+                crate::settings::StoredPublicSync {
+                    write_url: "https://two.example/sync.php".to_string(),
+                    read_url: "https://two.example/d".to_string(),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x13),
+                    enabled: true,
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+                crate::settings::StoredPublicSync {
+                    write_url: "https://three.example/sync.php".to_string(),
+                    read_url: "https://three.example/d".to_string(),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x14),
+                    enabled: true,
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }));
+
+        let quick = get_my_quick_contact_impl(&state).unwrap();
+        assert_eq!(quick.name, "Bakery Co");
+        assert_eq!(
+            quick.sync_urls,
+            vec!["one.example".to_string(), "two.example".to_string()]
+        );
     }
 }

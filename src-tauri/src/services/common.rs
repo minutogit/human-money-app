@@ -1046,4 +1046,110 @@ mod tests {
         assert_eq!(targets[0].slot_id, Some(format!("{}_pc", valid_acc)));
         assert_eq!(targets[0].drop_pub, valid_pub);
     }
+
+    #[test]
+    fn test_common_did_equality_pow_bits_and_locator_delegation_resolution() {
+        let sk1 = SigningKey::from_bytes(&[0x15u8; 32]);
+        let sk2 = SigningKey::from_bytes(&[0x16u8; 32]);
+        let did1 = human_money_core::crypto::create_user_id(&sk1.verifying_key(), None).unwrap();
+        let did1_sub =
+            human_money_core::crypto::create_user_id(&sk1.verifying_key(), Some("shop")).unwrap();
+        let did2 = human_money_core::crypto::create_user_id(&sk2.verifying_key(), None).unwrap();
+        assert!(are_dids_equal(&did1, &did1_sub));
+        assert!(!are_dids_equal(&did1, &did2));
+        assert!(!are_dids_equal(&did1, "not-a-did"));
+
+        let admin_sk = SigningKey::from_bytes(&[0x33u8; 32]);
+        let admin_hex = hex::encode(admin_sk.verifying_key().as_bytes());
+        let lock_bytes = SigningKey::from_bytes(&[0x44u8; 32]).verifying_key().to_bytes();
+        let lock_hex = hex::encode(lock_bytes);
+        let lock2_bytes = SigningKey::from_bytes(&[0x45u8; 32]).verifying_key().to_bytes();
+        let lock2_hex = hex::encode(lock2_bytes);
+        let lock3_bytes = SigningKey::from_bytes(&[0x46u8; 32]).verifying_key().to_bytes();
+        let lock3_hex = hex::encode(lock3_bytes);
+        let w_url = "https://sync.example.org/sync.php";
+        let r_url = "https://sync.example.org/data";
+
+        let valid_del = make_signed_delegation(&admin_sk, &lock_hex, w_url, r_url, 200);
+        let manifest_entry = ServerEntry {
+            lock_pub: lock_bytes,
+            admin_pub: admin_sk.verifying_key().to_bytes(),
+            write_url: "https://fallback.example/sync.php".to_string(),
+            read_url: "https://fallback.example/data".to_string(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let manifest = AnchorManifest {
+            revision: 0,
+            threshold: 1,
+            servers: vec![manifest_entry.clone()],
+            successors: vec![],
+            authority: human_money_core::humoco_proto::manifest::AnchorAuthority {
+                creator_mig_pub: [0x11u8; 32],
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: 20284,
+        };
+
+        // is_valid_delegation_for_entry: valid vs lock/admin/sig/url mismatches
+        assert!(is_valid_delegation_for_entry(&manifest_entry, &valid_del));
+        let mut bad_lock = valid_del.clone();
+        bad_lock.lock_pub = lock2_hex.clone();
+        assert!(!is_valid_delegation_for_entry(&manifest_entry, &bad_lock));
+        let mut bad_admin = valid_del.clone();
+        bad_admin.admin_pub = lock2_hex.clone();
+        assert!(!is_valid_delegation_for_entry(&manifest_entry, &bad_admin));
+        let mut bad_sig = valid_del.clone();
+        bad_sig.sig = "00".repeat(64);
+        assert!(!is_valid_delegation_for_entry(&manifest_entry, &bad_sig));
+        let mut bad_scheme = make_signed_delegation(&admin_sk, &lock_hex, "http://10.0.0.1/s", r_url, 200);
+        assert!(!is_valid_delegation_for_entry(&manifest_entry, &bad_scheme));
+        bad_scheme = make_signed_delegation(&admin_sk, &lock_hex, w_url, "http://10.0.0.1/d", 200);
+        assert!(!is_valid_delegation_for_entry(&manifest_entry, &bad_scheme));
+
+        let mut cache = std::collections::BTreeMap::new();
+        assert_eq!(collect_verified_delegations_for_manifest(&manifest, &cache), None);
+        assert_eq!(resolve_verified_server_locator(&manifest_entry, &cache), None);
+        assert_eq!(
+            resolve_server_locator(&manifest_entry, &cache),
+            ("https://fallback.example/sync.php".to_string(), "https://fallback.example/data".to_string())
+        );
+
+        let embedded = std::collections::BTreeMap::from([(lock_hex.clone(), valid_del.clone())]);
+        assert_eq!(
+            resolve_locator_with_delegations(&manifest_entry, &cache, &embedded),
+            Some((w_url.to_string(), r_url.to_string()))
+        );
+
+        // Cache entry resolution + URL/delegation mismatch guards
+        cache.insert(lock_hex.clone(), make_probe(&lock_hex, &admin_hex, w_url, r_url, true, 500, 20304, 14, 8, Some(valid_del.clone())));
+        assert_eq!(
+            resolve_verified_server_locator(&manifest_entry, &cache),
+            Some((w_url.to_string(), r_url.to_string()))
+        );
+        let collected = collect_verified_delegations_for_manifest(&manifest, &cache)
+            .expect("valid probe yields delegation JSON");
+        assert!(collected.contains(w_url));
+
+        let mut url_mismatch_cache = cache.clone();
+        url_mismatch_cache.get_mut(&lock_hex).unwrap().write_url = "https://other.example/sync.php".into();
+        assert_eq!(resolve_verified_server_locator(&manifest_entry, &url_mismatch_cache), None);
+        assert_eq!(collect_verified_delegations_for_manifest(&manifest, &url_mismatch_cache), None);
+
+        let mut del_invalid_cache = cache.clone();
+        del_invalid_cache.get_mut(&lock_hex).unwrap().delegation_valid = false;
+        assert_eq!(resolve_verified_server_locator(&manifest_entry, &del_invalid_cache), None);
+        assert_eq!(collect_verified_delegations_for_manifest(&manifest, &del_invalid_cache), None);
+
+        // max_pow_base_bits_for_servers: ignores !passed or !delegation_valid, clamps at MAX_LOCK_POW_BITS
+        let mut lc = InternalLifecycleState::default();
+        assert_eq!(max_pow_base_bits_for_servers(&lc, [lock_bytes]), DEFAULT_LOCK_POW_BASE_BITS);
+        lc.l2_probe_cache.insert(lock_hex.clone(), make_probe(&lock_hex, &admin_hex, w_url, r_url, true, 1, 1, 14, 8, Some(valid_del.clone())));
+        let mut no_del = make_probe(&lock2_hex, &admin_hex, w_url, r_url, true, 1, 1, 20, 8, None);
+        no_del.delegation_valid = false;
+        lc.l2_probe_cache.insert(lock2_hex, no_del);
+        lc.l2_probe_cache.insert(lock3_hex.clone(), make_probe(&lock3_hex, &admin_hex, w_url, r_url, false, 1, 1, 20, 8, Some(valid_del)));
+        assert_eq!(max_pow_base_bits_for_servers(&lc, [lock_bytes, lock2_bytes, lock3_bytes]), 14);
+    }
 }

@@ -535,15 +535,18 @@ mod tests {
     };
     use std::path::{Path, PathBuf};
 
-    fn temp_path() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "human-money-app-intent-reconciliation-{}",
-            uuid::Uuid::new_v4()
-        ))
+    struct TempDirGuard(PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
-    fn cleanup(path: &Path) {
-        let _ = std::fs::remove_dir_all(path);
+    fn temp_guard() -> TempDirGuard {
+        TempDirGuard(std::env::temp_dir().join(format!(
+            "human-money-app-intent-reconciliation-{}",
+            uuid::Uuid::new_v4()
+        )))
     }
 
     fn state_with(service: AppService, lifecycle: Option<InternalLifecycleState>) -> AppState {
@@ -652,8 +655,8 @@ mod tests {
 
     #[tokio::test]
     async fn skips_locked_wallets() {
-        let path = temp_path();
-        let state = state_with(AppService::new(&path).unwrap(), None);
+        let path = temp_guard();
+        let state = state_with(AppService::new(&path.0).unwrap(), None);
         let in_flight = Arc::new(Mutex::new(HashSet::new()));
 
         let handled = reconcile_due_intents(&state, &in_flight)
@@ -662,15 +665,13 @@ mod tests {
 
         assert_eq!(handled, 0);
         assert!(in_flight.lock().unwrap().is_empty());
-        drop(state);
-        cleanup(&path);
     }
 
     #[tokio::test]
     async fn skips_intents_younger_than_thirty_seconds() {
-        let path = temp_path();
+        let path = temp_guard();
         let password = "young-intent-password";
-        let (state, local_id) = unlocked_fixture(&path, password);
+        let (state, local_id) = unlocked_fixture(&path.0, password);
         let in_flight = Arc::new(Mutex::new(HashSet::new()));
 
         let handled = reconcile_due_intents(&state, &in_flight).await.unwrap();
@@ -680,16 +681,31 @@ mod tests {
         let intent = service.pending_l2_send_intent(&local_id).unwrap();
         assert!(intent.terminal_resolution.is_none());
         assert!(now_ms().unwrap() < intent.created_at_ms.saturating_add(RECONCILIATION_DELAY_MS));
-        drop(service);
-        drop(state);
-        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn skips_intent_already_in_flight() {
+        let path = temp_guard();
+        let password = "in-flight-intent-password";
+        let (state, local_id) = unlocked_fixture(&path.0, password);
+        {
+            let mut service = state.service.lock().unwrap();
+            let wallet = service.get_wallet_mut().unwrap();
+            let intent = wallet.profile.l2_send_intents.get_mut(&local_id).unwrap();
+            intent.created_at_ms = now_ms().unwrap().saturating_sub(60_000);
+        }
+        let in_flight = Arc::new(Mutex::new(HashSet::from([local_id.clone()])));
+
+        let handled = reconcile_due_intents(&state, &in_flight).await.unwrap();
+        assert_eq!(handled, 0);
+        assert!(in_flight.lock().unwrap().contains(&local_id));
     }
 
     #[tokio::test]
     async fn handles_expired_intents() {
-        let path = temp_path();
+        let path = temp_guard();
         let password = "expired-intent-password";
-        let (state, local_id) = unlocked_fixture(&path, password);
+        let (state, local_id) = unlocked_fixture(&path.0, password);
 
         {
             let mut service = state.service.lock().unwrap();
@@ -712,16 +728,13 @@ mod tests {
             intent.terminal_resolution,
             Some(IntentTerminalResolution::Expired { .. })
         ));
-        drop(service);
-        drop(state);
-        cleanup(&path);
     }
 
     #[tokio::test]
     async fn cleans_up_terminal_intents_without_unresolved_intents() {
-        let path = temp_path();
+        let path = temp_guard();
         let password = "terminal-intent-password";
-        let (state, local_id) = unlocked_fixture(&path, password);
+        let (state, local_id) = unlocked_fixture(&path.0, password);
         let now = now_ms().unwrap();
 
         {
@@ -750,16 +763,13 @@ mod tests {
         assert!(!service
             .with_wallet(|wallet| wallet.profile.l2_send_intents.contains_key(&local_id))
             .unwrap());
-        drop(service);
-        drop(state);
-        cleanup(&path);
     }
 
     #[tokio::test]
     async fn test_s04_f5_expires_overdue_intent_even_when_lifecycle_cache_empty() {
-        let path = temp_path();
+        let path = temp_guard();
         let password = "s04-f5-expired-no-cache";
-        let (state, local_id) = unlocked_fixture(&path, password);
+        let (state, local_id) = unlocked_fixture(&path.0, password);
 
         state.set_cached_internal_lifecycle(None);
         {
@@ -785,45 +795,58 @@ mod tests {
             intent.terminal_resolution,
             Some(IntentTerminalResolution::Expired { .. })
         ));
-        drop(service);
-        drop(state);
-        cleanup(&path);
     }
 
-    #[tokio::test]
-    async fn test_s04_f5_skips_forged_competing_entry_and_reconciles_valid_conflict_at_default_pow()
-    {
-        use human_money_core::humoco_proto::{
-            causal::LOCK_ENTRY_WIRE_LEN,
-            decode_hex_fixed,
-            types::{LockReceipt, LockReceiptKind},
-        };
-        use human_money_core::models::layer2_api::{
-            SyncLockBatchRequest, SyncLockBatchResponse, SyncLockConflict,
-        };
+    fn copy_recursive(src: &Path, dst: &Path) {
+        std::fs::create_dir_all(dst).unwrap();
+        for e in std::fs::read_dir(src).unwrap() {
+            let e = e.unwrap();
+            let target = dst.join(e.file_name());
+            if e.file_type().unwrap().is_dir() {
+                copy_recursive(&e.path(), &target);
+            } else {
+                std::fs::copy(e.path(), target).unwrap();
+            }
+        }
+    }
+
+    struct ConflictFixture {
+        _dir_alice: TempDirGuard,
+        _dir_alice_clone: TempDirGuard,
+        _dir_bob: TempDirGuard,
+        svc_alice: AppService,
+        _svc_clone: AppService,
+        _svc_bob: AppService,
+        sk1: SigningKey,
+        sk2: SigningKey,
+        l1: tokio::net::TcpListener,
+        l2: tokio::net::TcpListener,
+        p1: u16,
+        retain_q: u16,
+        forged_comp: LockEntry,
+        valid_comp: LockEntry,
+        intent_id: String,
+    }
+
+    async fn setup_two_server_conflict_fixture() -> ConflictFixture {
         use human_money_core::models::voucher_standard_definition::VoucherStandardDefinition;
         use human_money_core::wallet::types::{MultiTransferRequest, SourceTransfer};
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let dir_alice = temp_path();
-        let dir_alice_clone = temp_path();
-        let dir_bob = temp_path();
+        let dir_alice = temp_guard();
+        let dir_alice_clone = temp_guard();
+        let dir_bob = temp_guard();
         let pw = "s04-f5-forged-conflict-pw";
 
         let (mut svc_alice, _) =
-            test_utils::setup_service_with_profile(&dir_alice, &ACTORS.alice, "Alice", pw);
-        let (svc_bob, _) = test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+            test_utils::setup_service_with_profile(&dir_alice.0, &ACTORS.alice, "Alice", pw);
+        let (svc_bob, _) =
+            test_utils::setup_service_with_profile(&dir_bob.0, &ACTORS.bob, "Bob", pw);
         svc_alice.unlock_session(pw, 600).unwrap();
 
-        let alice_id = svc_alice
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
-        let bob_id = svc_bob
-            .with_wallet(|w| w.get_user_id().to_string())
-            .unwrap();
-        let std_toml = test_utils::generate_signed_standard_toml(
-            "voucher_standards/freetaler_v1/standard.toml",
-        );
+        let alice_id = svc_alice.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_id = svc_bob.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let std_toml =
+            test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
         let (std_def, _) = VoucherStandardDefinition::from_toml(&std_toml).unwrap();
         let standards = HashMap::from([(std_def.immutable.identity.uuid, std_toml.clone())]);
 
@@ -846,7 +869,7 @@ mod tests {
         let manifest = AnchorManifest {
             revision: 1,
             threshold: 2,
-            servers: vec![(&sk1, p1), (&sk2, p2)]
+            servers: [(&sk1, p1), (&sk2, p2)]
                 .into_iter()
                 .map(|(sk, port)| ServerEntry {
                     write_url: format!("http://127.0.0.1:{}/sync.php", port),
@@ -881,25 +904,14 @@ mod tests {
             })
             .collect();
         svc_alice
-            .register_l2_anchor_template_with_nonce(
-                manifest.clone(),
-                tickets,
-                Some(&anchor_nonce),
-                Some(pw),
-            )
+            .register_l2_anchor_template_with_nonce(manifest, tickets, Some(&anchor_nonce), Some(pw))
             .unwrap();
         svc_alice
             .create_new_voucher(
                 &std_toml,
                 NewVoucherData {
-                    creator_profile: PublicProfile {
-                        id: Some(alice_id),
-                        ..Default::default()
-                    },
-                    nominal_value: ValueDefinition {
-                        amount: "50".into(),
-                        ..Default::default()
-                    },
+                    creator_profile: PublicProfile { id: Some(alice_id), ..Default::default() },
+                    nominal_value: ValueDefinition { amount: "50".into(), ..Default::default() },
                     layer2_anchor: Some(anchor_id),
                     ..Default::default()
                 },
@@ -912,25 +924,10 @@ mod tests {
             .local_instance_id
             .clone();
 
-        // Snapshot Alice before send to create a genuine conflicting LockEntry mined at DEFAULT_LOCK_POW_BASE_BITS (8)
-        fn copy_recursive(src: &Path, dst: &Path) {
-            std::fs::create_dir_all(dst).unwrap();
-            for e in std::fs::read_dir(src).unwrap() {
-                let e = e.unwrap();
-                let target = dst.join(e.file_name());
-                if e.file_type().unwrap().is_dir() {
-                    copy_recursive(&e.path(), &target);
-                } else {
-                    std::fs::copy(e.path(), target).unwrap();
-                }
-            }
-        }
-        copy_recursive(&dir_alice, &dir_alice_clone);
-        let mut svc_clone = AppService::new(&dir_alice_clone).unwrap();
+        copy_recursive(&dir_alice.0, &dir_alice_clone.0);
+        let mut svc_clone = AppService::new(&dir_alice_clone.0).unwrap();
         let folder = svc_alice.list_profiles().unwrap()[0].folder_name.clone();
-        svc_clone
-            .login(&folder, pw, false, "test-id".into())
-            .unwrap();
+        svc_clone.login(&folder, pw, false, "test-id".into()).unwrap();
 
         let alt_bundle = svc_clone
             .create_transfer_bundle(
@@ -973,8 +970,7 @@ mod tests {
         let mut forged_comp = valid_comp.clone();
         forged_comp.causal_sig = [0x42u8; 64];
 
-        // Create outbound DurableIntent on Alice (sent to Bob), aged past 30s delay
-        let _ = svc_alice
+        let created = svc_alice
             .create_transfer_bundle_with_l2_intents_and_companions(
                 MultiTransferRequest {
                     recipient_id: bob_id,
@@ -995,78 +991,146 @@ mod tests {
                 |_, _| Ok(vec![]),
             )
             .unwrap();
+        assert!(!created.bundle_bytes.is_empty());
         let intent_id = svc_alice.unresolved_l2_send_intents().unwrap()[0]
             .local_instance_id
             .clone();
-        {
-            let wallet = svc_alice.get_wallet_mut().unwrap();
-            wallet
-                .profile
-                .l2_send_intents
-                .get_mut(&intent_id)
-                .unwrap()
-                .created_at_ms = now_ms().unwrap().saturating_sub(60_000);
+        svc_alice
+            .get_wallet_mut()
+            .unwrap()
+            .profile
+            .l2_send_intents
+            .get_mut(&intent_id)
+            .unwrap()
+            .created_at_ms = now_ms().unwrap().saturating_sub(60_000);
+
+        ConflictFixture {
+            _dir_alice: dir_alice,
+            _dir_alice_clone: dir_alice_clone,
+            _dir_bob: dir_bob,
+            svc_alice,
+            _svc_clone: svc_clone,
+            _svc_bob: svc_bob,
+            sk1,
+            sk2,
+            l1,
+            l2,
+            p1,
+            retain_q,
+            forged_comp,
+            valid_comp,
+            intent_id,
         }
+    }
 
-        // Server 1 returns FORGED competing entry; Server 2 returns VALID competing entry (8-bit PoW)
-        let spawn_conflict = |listener: tokio::net::TcpListener,
-                              sk: SigningKey,
-                              comp: LockEntry| {
-            tokio::spawn(async move {
-                if let Ok((mut stream, _)) = listener.accept().await {
-                    let mut buf = [0u8; 65_536];
-                    let n = stream.read(&mut buf).await.unwrap_or(0);
-                    let raw = String::from_utf8_lossy(&buf[..n]);
-                    let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
-                    let req: SyncLockBatchRequest = serde_json::from_str(body_str).unwrap();
-                    let _ = decode_hex_fixed::<LOCK_ENTRY_WIRE_LEN>(&req.entries[0]).unwrap();
-                    let mut r = LockReceipt {
-                        kind: LockReceiptKind::ConflictSeen,
-                        lock_pub: sk.verifying_key().to_bytes(),
-                        bucket: req.bucket,
-                        slot: comp.slot,
-                        child_lock: comp.child_lock,
-                        entry_hash: comp.entry_hash().unwrap(),
-                        retain_until_quarter: retain_q,
-                        write_seq: 1,
-                        bucket_head: [7u8; 32],
-                        recipient_nonce: req.recipient_nonce,
-                        sig: [0u8; 64],
-                    };
-                    r.sig = sk.sign(&r.digest()).to_bytes();
-                    let resp = serde_json::to_string(&SyncLockBatchResponse {
-                        status: "conflict".to_string(),
-                        bucket: req.bucket,
-                        retain_until_quarter: retain_q,
-                        receipts: vec![],
-                        conflict: Some(SyncLockConflict {
-                            entry_index: 0,
-                            slot: comp.slot,
-                            receipt: r,
-                            competing_entry: comp.to_wire_hex().unwrap(),
-                        }),
-                    })
-                    .unwrap();
-                    let http = format!(
-                        "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                        resp.len(),
-                        resp
-                    );
-                    let _ = stream.write_all(http.as_bytes()).await;
-                }
-            })
+    fn spawn_conflict_lock_server(
+        listener: tokio::net::TcpListener,
+        sk: SigningKey,
+        comp: LockEntry,
+        retain_q: u16,
+    ) -> tokio::task::JoinHandle<()> {
+        use human_money_core::humoco_proto::{
+            causal::LOCK_ENTRY_WIRE_LEN,
+            decode_hex_fixed,
+            types::{LockReceipt, LockReceiptKind},
         };
-        let h1 = spawn_conflict(l1, sk1.clone(), forged_comp);
-        let h2 = spawn_conflict(l2, sk2.clone(), valid_comp);
+        use human_money_core::models::layer2_api::{
+            SyncLockBatchRequest, SyncLockBatchResponse, SyncLockConflict,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        // High live pow_base_bits=18 in probe cache must NOT prevent verifying 8-bit historical conflict
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut raw_bytes = Vec::with_capacity(4096);
+                let mut chunk = [0u8; 4096];
+                let header_end = loop {
+                    if let Some(pos) = raw_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(pos + 4);
+                    }
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break None,
+                        Ok(n) => raw_bytes.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                .expect("HTTP request headers must terminate cleanly");
+                let headers = String::from_utf8_lossy(&raw_bytes[..header_end]);
+                let content_len = headers
+                    .lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        if k.eq_ignore_ascii_case("content-length") {
+                            v.trim().parse::<usize>().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                while raw_bytes.len() < header_end + content_len {
+                    let n = stream.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    raw_bytes.extend_from_slice(&chunk[..n]);
+                }
+                let body_slice = &raw_bytes[header_end..(header_end + content_len).min(raw_bytes.len())];
+                let req: SyncLockBatchRequest = serde_json::from_slice(body_slice).unwrap();
+                let entry_bytes = decode_hex_fixed::<LOCK_ENTRY_WIRE_LEN>(&req.entries[0]).unwrap();
+                assert_eq!(entry_bytes.len(), LOCK_ENTRY_WIRE_LEN);
+                let mut r = LockReceipt {
+                    kind: LockReceiptKind::ConflictSeen,
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    bucket: req.bucket,
+                    slot: comp.slot,
+                    child_lock: comp.child_lock,
+                    entry_hash: comp.entry_hash().unwrap(),
+                    retain_until_quarter: retain_q,
+                    write_seq: 1,
+                    bucket_head: [7u8; 32],
+                    recipient_nonce: req.recipient_nonce,
+                    sig: [0u8; 64],
+                };
+                r.sig = sk.sign(&r.digest()).to_bytes();
+                let resp = serde_json::to_string(&SyncLockBatchResponse {
+                    status: "conflict".to_string(),
+                    bucket: req.bucket,
+                    retain_until_quarter: retain_q,
+                    receipts: vec![],
+                    conflict: Some(SyncLockConflict {
+                        entry_index: 0,
+                        slot: comp.slot,
+                        receipt: r,
+                        competing_entry: comp.to_wire_hex().unwrap(),
+                    }),
+                })
+                .unwrap();
+                let http = format!(
+                    "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp.len(),
+                    resp
+                );
+                stream
+                    .write_all(http.as_bytes())
+                    .await
+                    .expect("mock conflict HTTP write must succeed");
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn test_s04_f5_skips_forged_competing_entry_and_reconciles_valid_conflict_at_default_pow()
+    {
+        let fx = setup_two_server_conflict_fixture().await;
+        let h1 = spawn_conflict_lock_server(fx.l1, fx.sk1.clone(), fx.forged_comp, fx.retain_q);
+        let h2 = spawn_conflict_lock_server(fx.l2, fx.sk2, fx.valid_comp, fx.retain_q);
+
+        // High live pow_base_bits=18 in probe cache must NOT prevent verifying 8-bit historical conflict.
         let mut lc = InternalLifecycleState::default();
-        let sk1_hex = hex::encode(sk1.verifying_key().as_bytes());
+        let sk1_hex = hex::encode(fx.sk1.verifying_key().as_bytes());
         lc.l2_probe_cache.insert(
             sk1_hex.clone(),
             sync_client::FrontendLockServerProbeResult {
-                write_url: format!("http://127.0.0.1:{}/sync.php", p1),
-                read_url: format!("http://127.0.0.1:{}/d", p1),
+                write_url: format!("http://127.0.0.1:{}/sync.php", fx.p1),
+                read_url: format!("http://127.0.0.1:{}/d", fx.p1),
                 drop_pub: sk1_hex.clone(),
                 admin_pub: sk1_hex.clone(),
                 lock_pub: sk1_hex,
@@ -1076,7 +1140,7 @@ mod tests {
                 key_leak_safe: true,
                 passed: true,
                 latency_ms: 5,
-                max_retention_quarter: retain_q,
+                max_retention_quarter: fx.retain_q,
                 pow_base_bits: 18,
                 allow_pow_tickets: true,
                 ticket_pow_bits: 16,
@@ -1088,14 +1152,14 @@ mod tests {
                 error: None,
             },
         );
-        let state = state_with(svc_alice, Some(lc));
+        let state = state_with(fx.svc_alice, Some(lc));
         let in_flight = Arc::new(Mutex::new(HashSet::new()));
 
         let handled = reconcile_due_intents(&state, &in_flight).await.unwrap();
         assert_eq!(handled, 1);
 
         let service = state.service.lock().unwrap();
-        let intent = service.pending_l2_send_intent(&intent_id).unwrap();
+        let intent = service.pending_l2_send_intent(&fx.intent_id).unwrap();
         assert!(
             matches!(
                 intent.terminal_resolution,
@@ -1107,12 +1171,5 @@ mod tests {
 
         h1.abort();
         h2.abort();
-        drop(service);
-        drop(state);
-        drop(svc_clone);
-        drop(svc_bob);
-        cleanup(&dir_alice);
-        cleanup(&dir_alice_clone);
-        cleanup(&dir_bob);
     }
 }

@@ -386,4 +386,96 @@ mod tests {
         assert!(!obj.contains_key("blindedId"));
         assert!(!obj.contains_key("ds_tag"));
     }
+
+    #[test]
+    fn test_wallet_dto_conversions_and_integrity_report_serde() {
+        use super::{
+            FrontendInvolvedVoucherInfo, FrontendTransferSummary, IntegrityReport,
+            MnemonicLanguage,
+        };
+        use human_money_core::models::storage_integrity::IntegrityReport as CoreIntegrity;
+        use human_money_core::wallet::types::{InvolvedVoucherInfo, TransferSummary};
+        use std::collections::HashMap;
+
+        for lang in [
+            MnemonicLanguage::English,
+            MnemonicLanguage::German,
+            MnemonicLanguage::Spanish,
+            MnemonicLanguage::French,
+            MnemonicLanguage::Italian,
+            MnemonicLanguage::Japanese,
+            MnemonicLanguage::Korean,
+            MnemonicLanguage::Portuguese,
+            MnemonicLanguage::Czech,
+            MnemonicLanguage::ChineseSimplified,
+            MnemonicLanguage::ChineseTraditional,
+        ] {
+            let core: human_money_core::MnemonicLanguage = lang.into();
+            assert_eq!(MnemonicLanguage::from(core), lang);
+        }
+
+        let reports = [
+            (CoreIntegrity::Valid, serde_json::json!({"type": "valid"})),
+            (
+                CoreIntegrity::MissingItems(vec!["a".into()]),
+                serde_json::json!({"type": "missingItems", "items": ["a"]}),
+            ),
+            (
+                CoreIntegrity::ManipulatedItems(vec!["b".into()]),
+                serde_json::json!({"type": "manipulatedItems", "items": ["b"]}),
+            ),
+            (
+                CoreIntegrity::UnknownItems(vec!["c".into()]),
+                serde_json::json!({"type": "unknownItems", "items": ["c"]}),
+            ),
+            (
+                CoreIntegrity::IntegrityOutdated,
+                serde_json::json!({"type": "integrityOutdated"}),
+            ),
+            (
+                CoreIntegrity::InvalidSignature,
+                serde_json::json!({"type": "invalidSignature"}),
+            ),
+            (
+                CoreIntegrity::MissingIntegrityRecord,
+                serde_json::json!({"type": "missingIntegrityRecord"}),
+            ),
+        ];
+        for (core_rep, expected_json) in reports {
+            let fe = IntegrityReport::from(core_rep);
+            assert_eq!(serde_json::to_value(&fe).unwrap(), expected_json);
+        }
+
+        let sum = FrontendTransferSummary::from(TransferSummary {
+            summable_amounts: HashMap::from([("Minuto".into(), "12.5".into())]),
+            countable_items: HashMap::from([("Coupon".into(), 2)]),
+        });
+        assert_eq!(sum.summable_amounts.get("Minuto").map(String::as_str), Some("12.5"));
+        assert_eq!(sum.countable_items.get("Coupon"), Some(&2));
+
+        let info = FrontendInvolvedVoucherInfo::from(InvolvedVoucherInfo {
+            local_instance_id: "loc-1".into(),
+            voucher_id: "vid-1".into(),
+            standard_name: "Minuto".into(),
+            unit: "Minutos".into(),
+            amount: "25".into(),
+            allow_partial_transfers: true,
+            is_test_voucher: false,
+            display_currency: "Minutos".into(),
+            display_standard_name: "Minuto".into(),
+            counterparty_id: Some("did:key:z6MkPeer".into()),
+            counterparty_name: Some("Bob".into()),
+        });
+        assert_eq!(info.local_instance_id, "loc-1");
+        assert_eq!(info.voucher_id, "vid-1");
+        assert_eq!(info.standard_name, "Minuto");
+        assert_eq!(info.unit, "Minutos");
+        assert_eq!(info.amount, "25");
+        assert!(info.allow_partial_transfers);
+        assert!(!info.is_test_voucher);
+        assert_eq!(info.display_currency, "Minutos");
+        assert_eq!(info.display_standard_name, "Minuto");
+        assert_eq!(info.counterparty_id.as_deref(), Some("did:key:z6MkPeer"));
+        assert_eq!(info.counterparty_name.as_deref(), Some("Bob"));
+    }
 }
