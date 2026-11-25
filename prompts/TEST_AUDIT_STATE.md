@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `a3ca8b0`
-- **Total Test Files:** 165 | **Total Test Functions:** 1488
+- **Updated at HEAD:** `333e536`
+- **Total Test Files:** 165 | **Total Test Functions:** 1495
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -81,18 +81,18 @@
 | `src-tauri/src/services/sync_coordinator.rs` | P2 | 6 | 0/0/0 | 🟢 Verified | `a3ca8b0` | `scan 0/0/0/0`, `6/6` + `420/420` lib, `clippy` clean, `cargo mutants` `17/17` viable caught (`CoordinatorSchedule`) |
 | `src-tauri/src/services/sync_engine/card_sync.rs` | P2 | 6 | 0/0/0 | 🟢 Verified | `a3ca8b0` | `scan 0/0/0/0`, `41/41` sync_engine + `420/420` lib, `clippy` clean, Fail-First RED->GREEN Commit 1 `00650d2` sticky `revoked`, `cargo mutants` `42/42` (`41 caught, 1 timeout`) |
 | `src/components/settings/__tests__/SyncServiceSettingsCard.test.tsx` | P2 | 18 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 18/18 (906 full pass); replaced setTimeout(20) w/ deferred probe + SYNC_STATUS_UPDATED_EVENT dedup, removed eslint-disable/require/any, tested unauthorized enabled=false & toggle rollback; Revert-Red useSyncServiceAdmin enabled=hasAuth` |
-| `src-tauri/src/commands/profile.rs` | P2 | 4 | 0/0/4 | ⚪ Pending | — | — |
-| `src-tauri/src/commands/standards.rs` | P2 | 1 | 0/0/1 | ⚪ Pending | — | — |
-| `src-tauri/src/intent_reconciliation.rs` | P2 | 6 | 0/0/2 | ⚪ Pending | — | — |
-| `src-tauri/src/models/wallet.rs` | P2 | 1 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/services/balance_service.rs` | P2 | 6 | 0/0/2 | ⚪ Pending | — | — |
-| `src-tauri/src/services/common.rs` | P2 | 3 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/commands/profile.rs` | P2 | 5 | 0/0/0 | 🟢 Verified | `333e536` | `scan 0/0/0/0`, `5/5` + `427/427` lib, `clippy` clean, `cargo mutants` `7/7` caught (`compact_sync_url_for_contact_uri\|encode_text_qr_svg`) |
+| `src-tauri/src/commands/standards.rs` | P2 | 2 | 0/0/0 | 🟢 Verified | `333e536` | `scan 0/0/0/0`, `2/2` + `427/427` lib, `clippy` clean, `cargo mutants` `10/10` caught (`export_voucher_standard_impl\|import_voucher_standard_impl\|delete_voucher_standard_impl`) |
+| `src-tauri/src/intent_reconciliation.rs` | P2 | 7 | 0/0/0 | 🟢 Verified | `333e536` | `scan 0/0/0/0`, `7/7` + `427/427` lib, `clippy` clean, fixed TCP split-read race in mock server, `cargo mutants` `11/12` caught (`reconcile_due_intents`, 1 live wall-clock `< -> <=` boundary) |
+| `src-tauri/src/models/wallet.rs` | P2 | 2 | 0/0/0 | 🟢 Verified | `333e536` | `scan 0/0/0/0`, `2/2` + `427/427` lib, `clippy` clean, added 11-lang & 7-variant IntegrityReport DTO tests, `cargo mutants` `6 unviable` (DTO `From` impls) |
+| `src-tauri/src/services/balance_service.rs` | P2 | 7 | 0/0/0 | 🟢 Verified | `333e536` | `scan 0/0/0/0`, `7/7` + `427/427` lib, `clippy` clean, replaced 2 placebos w/ real cache/wallet/redeem/zero-archive tests, `cargo mutants` `27/27` viable caught (`parse_fixed_point` `12/12` recheck + 1 equiv `< -> <=`) |
+| `src-tauri/src/services/common.rs` | P2 | 4 | 0/0/0 | 🟢 Verified | `333e536` | `scan 0/0/0/0`, `4/4` + `427/427` lib, `clippy` clean, `cargo mutants` `34/34` caught (`are_dids_equal\|max_pow_base_bits_for_servers\|resolve_verified_server_locator\|is_valid_delegation_for_entry\|collect_verified_delegations_for_manifest`) |
 | `src-tauri/src/services/post_service/handlers.rs` | P2 | 4 | 0/0/0 | 🟢 Verified | `95bf67b` | `4/4 pass (410/410 lib); TempDirGuard replaces remove_dir_all discards, added extract_payment_uri_recipient & handle_guardian_revoke mismatch/revoke tests; cargo mutants extract_payment_uri_recipient|handle_guardian_revoke 10/10 caught` |
 | `src-tauri/src/services/post_service/mod.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `95bf67b` | `0 inline tests; helpers & pub API covered by verified sibling tests.rs; cargo mutants mod.rs helpers 15/15 caught` |
 | `src-tauri/src/services/post_service/outbox.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `95bf67b` | `0 inline tests; covered by verified sibling tests.rs; cargo mutants verify_outgoing_post_container 4/4 caught` |
 | `src-tauri/src/services/sync_engine/admin.rs` | P2 | 1 | 0/0/0 | 🟢 Verified | `a3ca8b0` | `scan 0/0/0/0`, `41/41` sync_engine + `420/420` lib, `clippy` clean, `cargo mutants` `32/32` viable caught (`admin` helpers) |
 | `src-tauri/src/sync_client/mod.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
-| `src-tauri/src/sync_zip.rs` | P2 | 3 | 0/0/1 | ⚪ Pending | — | — |
+| `src-tauri/src/sync_zip.rs` | P2 | 4 | 0/0/0 | 🟢 Verified | `333e536` | `scan 0/0/0/0`, `4/4` + `427/427` lib, `clippy` clean, split mega-test & tightened `evil.example` + line-ended byte asserts, `cargo mutants` `23/23` caught (`escape_*\|generate_sync_config_php\|generate_rust_sync_config_toml` `12/12` recheck) |
 | `src/components/profile/__tests__/QuickContactModal.test.tsx` | P2 | 8 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 8/8 (906 full pass); deferred loading state, exact .hmcard bytes, isOpen=false, publish error & Sync badge states; Revert-Red QuickContactModal setPublishError` |
 | `src/components/settings/__tests__/AutoSyncSummaryCard.test.tsx` | P2 | 7 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 7/7 (906 full pass); error rollback/refresh, revoked/host dedup, partial-active badge, unsafe scheme block, replacement adoption & WiFi/media patches; Revert-Red AutoSyncSummaryCard isSafeExternalSyncUrl` |
 | `src/components/wallet/__tests__/CreateVoucher.test.tsx` | P2 | 16 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 16/16 (906 full pass); negative create invoke guard, l2CommitteeChanged diff & empty fallback, forceReprobe retry & error modal close; Revert-Red CreateVoucher empty actualPubs fallback` |
