@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `670118a`
-- **Total Test Files:** 165 | **Total Test Functions:** 1470
+- **Updated at HEAD:** `95bf67b`
+- **Total Test Files:** 165 | **Total Test Functions:** 1478
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -71,7 +71,7 @@
 | `src/components/wallet/__tests__/Dashboard.test.tsx` | P2 | 11 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 11/11 (98/98 files, 906 tests full pass); removed conditional_expect if(bannerCard), checked copyable TechId & popover amounts + FirstStepsChecklist/invalidSignature; Revert-Red DashboardBanners initialFilter` |
 | `src-tauri/src/commands/contacts.rs` | P2 | 8 | 0/0/0 | 🟢 Verified | `c4bc457` | `8/8 pass; hardened roundtrip, get_cached_contacts & exact descriptor validation errors + DID norm & delete tests; cargo mutants validate_contact_sync_descriptor(s) 7/7 caught` |
 | `src-tauri/src/services/fs_helpers.rs` | P2 | 8 | 0/0/0 | 🟢 Verified | `c4bc457` | `8/8 pass; Fail-First RED->GREEN collect_custom_standards_from_dir symlinks/1MiB guard, RAII TempDirGuard & exact errors; cargo mutants 15/17 caught (+2 equiv is_symlink||!is_dir)` |
-| `src-tauri/src/services/post_service/tests.rs` | P2 | 27 | 0/5/40 | ⚪ Pending | — | — |
+| `src-tauri/src/services/post_service/tests.rs` | P2 | 33 | 0/0/0 | 🟢 Verified | `95bf67b` | `33/33 pass (410/410 lib, clippy clean); replaced 5 .is_err() w/ BundleAlreadyProcessed/KnownOffenderTransactionBlocked/exact FrontendError msgs, fixed bare is_some & TempDir/call discards, split/refactored 15 mega-tests & added time-window/tombstone unit test; cargo mutants mod.rs helpers 15/15 (+9 unrelated delete field) & outbox verify_outgoing_post_container 4/4 (+2 unrelated delete field) caught` |
 | `src-tauri/src/services/sync_endpoints.rs` | P2 | 6 | 0/0/0 | 🟢 Verified | `c4bc457` | `6/6 pass; split into focused unit tests with exact errors & single-field/overlap/sanitize boundary checks; cargo mutants 58/63 + recheck 25/25 caught (63/63 total)` |
 | `src-tauri/src/services/transfer_service.rs` | P2 | 9 | 0/4/15 | ⚪ Pending | — | — |
 | `src-tauri/src/services/settings_service.rs` | P2 | 10 | 0/0/0 | 🟢 Verified | `1ab2edd` | `10/10 pass (402/402 lib); split 2 mega-tests, TempDirGuard, exact preset/fault errors, wake parity incl. wifi-unlock & DailyPay/Full/conflict override gates; cargo mutants presets 13/13, patch_ui_preferences_impl 18/18 & patch_security_policy_impl 22/22 caught (53/53 total)` |
@@ -87,9 +87,9 @@
 | `src-tauri/src/models/wallet.rs` | P2 | 1 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/services/balance_service.rs` | P2 | 6 | 0/0/2 | ⚪ Pending | — | — |
 | `src-tauri/src/services/common.rs` | P2 | 3 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/services/post_service/handlers.rs` | P2 | 2 | 0/0/2 | ⚪ Pending | — | — |
-| `src-tauri/src/services/post_service/mod.rs` | P2 | 0 | 0/0/0 | ⚪ Pending | — | — |
-| `src-tauri/src/services/post_service/outbox.rs` | P2 | 0 | 0/0/0 | ⚪ Pending | — | — |
+| `src-tauri/src/services/post_service/handlers.rs` | P2 | 4 | 0/0/0 | 🟢 Verified | `95bf67b` | `4/4 pass (410/410 lib); TempDirGuard replaces remove_dir_all discards, added extract_payment_uri_recipient & handle_guardian_revoke mismatch/revoke tests; cargo mutants extract_payment_uri_recipient|handle_guardian_revoke 10/10 caught` |
+| `src-tauri/src/services/post_service/mod.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `95bf67b` | `0 inline tests; helpers & pub API covered by verified sibling tests.rs; cargo mutants mod.rs helpers 15/15 caught` |
+| `src-tauri/src/services/post_service/outbox.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `95bf67b` | `0 inline tests; covered by verified sibling tests.rs; cargo mutants verify_outgoing_post_container 4/4 caught` |
 | `src-tauri/src/services/sync_engine/admin.rs` | P2 | 0 | 0/0/0 | ⚪ Pending | — | — |
 | `src-tauri/src/sync_client/mod.rs` | P2 | 0 | 0/0/0 | 🟢 Verified | `c4bc457` | `0 inline tests; #[cfg(test)] mod tests covered by verified sibling tests.rs` |
 | `src-tauri/src/sync_zip.rs` | P2 | 3 | 0/0/1 | ⚪ Pending | — | — |
