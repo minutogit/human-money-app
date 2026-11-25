@@ -249,32 +249,15 @@ pub fn set_conflict_local_override_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::fs_helpers::TempDirGuard;
     use crate::settings::{
         InternalLifecycleState, INTERNAL_LIFECYCLE_STATE_KEY, SECURITY_POLICY_KEY,
         UI_PREFERENCES_KEY,
     };
 
-    #[test]
-    fn test_reach_preset_values_and_detection() {
-        assert_eq!(preset_values("near").unwrap(), (1, 2, 1, 1));
-        assert_eq!(preset_values("medium").unwrap(), (2, 1, 2, 2));
-        assert_eq!(preset_values("far").unwrap(), (3, 1, 3, 2));
-        assert!(preset_values("ultra").is_err());
-
-        assert_eq!(detect_reach_preset(1, 2, 1, 1), "near");
-        assert_eq!(detect_reach_preset(2, 1, 2, 2), "medium");
-        assert_eq!(detect_reach_preset(3, 1, 3, 2), "far");
-
-        assert_eq!(detect_reach_preset(1, 1, 1, 1), "custom");
-        assert_eq!(detect_reach_preset(2, 1, 3, 2), "custom");
-        assert_eq!(detect_reach_preset(2, 2, 2, 2), "custom");
-        assert_eq!(detect_reach_preset(2, 1, 2, 0), "custom");
-        assert_eq!(detect_reach_preset(3, 1, 3, 3), "custom");
-    }
-
-    #[test]
-    fn test_split_patch_role_isolation_timeout_zero_double_option_and_lifecycle_intact() {
-        let dir = crate::test_support::temp_test_dir("settings_guard_test");
+    fn setup_dailypay_pin_fixture(tag: &str) -> (TempDirGuard, AppState, String) {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir(tag));
+        let dir = &dir_guard.0;
         let keystore_dir = dir.join("keystore");
         let master_pw = "MasterPass-Settings-2026!";
 
@@ -309,6 +292,7 @@ mod tests {
             None,
         )
         .unwrap();
+
         let ui_base = UiPreferences::default();
         let sec_base = SecurityPolicy {
             session_timeout_seconds: 300,
@@ -320,7 +304,6 @@ mod tests {
             ..Default::default()
         };
         state.set_cached_security_policy(Some(sec_base.clone()));
-        // Activate timed PIN session
         crate::commands::auth::unlock_session_with_pin_impl(
             &folder,
             "246810",
@@ -357,7 +340,79 @@ mod tests {
         state.set_cached_security_policy(Some(sec_base));
         state.set_cached_internal_lifecycle(Some(lc_base));
 
-        // 1. DailyPay can patch UiPreferences (clamping works) while InternalLifecycleState stays intact
+        (dir_guard, state, master_pw.to_string())
+    }
+
+    fn setup_s11_settings_fixture(tag: &str) -> (TempDirGuard, AppState, String) {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir(tag));
+        let pw = "MasterPass-S11-2026!";
+        let service = crate::test_support::setup_test_app(
+            &dir_guard.0.join("wallet"),
+            "S11 Settings Tester",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(service);
+
+        {
+            let mut svc = state.service.lock().unwrap();
+            let ui_init = UiPreferences {
+                market_sync_enabled: false,
+                wot_share_via_sync: false,
+                post_accept_from_contacts: false,
+                market_poll_wifi_only: true,
+                ..Default::default()
+            };
+            let sec_init = SecurityPolicy {
+                session_timeout_seconds: 600,
+                sync_backup_enabled: false,
+                auto_backup_enabled: false,
+                backup_sync_folder: None,
+                ..Default::default()
+            };
+            state
+                .save_ui_preferences(&mut svc, ui_init, Some(pw))
+                .unwrap();
+            state
+                .save_security_policy(&mut svc, sec_init, Some(pw))
+                .unwrap();
+            let reg = state.load_wot_register(&mut svc, Some(pw)).unwrap();
+            state.save_wot_register(&mut svc, &reg, Some(pw)).unwrap();
+        }
+
+        (dir_guard, state, pw.to_string())
+    }
+
+    fn reset_wake(st: &AppState) {
+        let mut guard = st.sync_control.lock().unwrap();
+        guard.pending_wake = Default::default();
+    }
+
+    #[test]
+    fn test_reach_preset_values_and_detection() {
+        assert_eq!(preset_values("near").unwrap(), (1, 2, 1, 1));
+        assert_eq!(preset_values("medium").unwrap(), (2, 1, 2, 2));
+        assert_eq!(preset_values("far").unwrap(), (3, 1, 3, 2));
+        let invalid_err = preset_values("ultra").unwrap_err();
+        assert_eq!(invalid_err.message, "Invalid reach preset: ultra");
+
+        assert_eq!(detect_reach_preset(1, 2, 1, 1), "near");
+        assert_eq!(detect_reach_preset(2, 1, 2, 2), "medium");
+        assert_eq!(detect_reach_preset(3, 1, 3, 2), "far");
+
+        assert_eq!(detect_reach_preset(1, 1, 1, 1), "custom");
+        assert_eq!(detect_reach_preset(2, 1, 3, 2), "custom");
+        assert_eq!(detect_reach_preset(2, 2, 2, 2), "custom");
+        assert_eq!(detect_reach_preset(2, 1, 2, 0), "custom");
+        assert_eq!(detect_reach_preset(3, 1, 3, 3), "custom");
+    }
+
+    #[test]
+    fn test_dailypay_can_patch_ui_preferences_with_clamping_and_preserves_lifecycle() {
+        let (dir_guard, state, master_pw) = setup_dailypay_pin_fixture("settings_ui_patch");
+        assert!(dir_guard.0.exists());
+        assert!(!master_pw.is_empty());
+
         let updated_ui = patch_ui_preferences_impl(
             UiPreferencesPatch {
                 ui_mode: Some("expert".to_string()),
@@ -372,11 +427,30 @@ mod tests {
         assert_eq!(updated_ui.ui_mode, "expert");
         assert_eq!(updated_ui.share_min_level, 3);
         assert_eq!(updated_ui.media_auto_load_max_hops, 3);
+
         let cfg = get_app_config_impl(&state).unwrap();
         assert_eq!(cfg.ui_preferences.ui_mode, "expert");
+        assert_eq!(cfg.ui_preferences.share_min_level, 3);
+        assert_eq!(cfg.ui_preferences.media_auto_load_max_hops, 3);
         assert!(cfg.lifecycle.pending_restore_l2_reconciliation);
 
-        // 2. DailyPay is rejected when patching SecurityPolicy without master password
+        let bad_dir_err = patch_ui_preferences_impl(
+            UiPreferencesPatch {
+                last_used_directory: Some(Some("/tmp/bad\ndir".to_string())),
+                ..Default::default()
+            },
+            None,
+            &state,
+        )
+        .unwrap_err();
+        assert!(bad_dir_err.message.contains("control characters"));
+    }
+
+    #[test]
+    fn test_dailypay_rejected_for_security_policy_and_conflict_override_full_gates() {
+        let (dir_guard, state, master_pw) = setup_dailypay_pin_fixture("settings_full_gates");
+        assert!(dir_guard.0.exists());
+
         for patch in [
             SecurityPolicyPatch {
                 auto_backup_enabled: Some(false),
@@ -399,13 +473,39 @@ mod tests {
             assert_eq!(err.code, "error.auth.insufficientAccessMode");
         }
 
-        // 3. Full access succeeds; omitted backup_sync_folder preserves existing, explicit Some(None) clears it
+        let override_daily_err = set_conflict_local_override_impl(
+            "missing-proof-id".to_string(),
+            true,
+            Some("review note".to_string()),
+            None,
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(override_daily_err.code, "error.auth.insufficientAccessMode");
+
+        let override_full_err = set_conflict_local_override_impl(
+            "missing-proof-id".to_string(),
+            true,
+            Some("review note".to_string()),
+            Some(master_pw),
+            &state,
+        )
+        .unwrap_err();
+        assert_ne!(override_full_err.code, "error.auth.insufficientAccessMode");
+        assert!(override_full_err.message.contains("missing-proof-id"));
+    }
+
+    #[test]
+    fn test_full_access_patch_security_policy_double_option_and_timeout_zero_clears_session() {
+        let (dir_guard, state, master_pw) = setup_dailypay_pin_fixture("settings_sec_patch");
+        assert!(dir_guard.0.exists());
+
         let sec_after_omit = patch_security_policy_impl(
             SecurityPolicyPatch {
                 auto_backup_enabled: Some(false),
                 ..Default::default()
             },
-            Some(master_pw.to_string()),
+            Some(master_pw.clone()),
             &state,
         )
         .unwrap();
@@ -420,7 +520,7 @@ mod tests {
                 backup_sync_folder: Some(None),
                 ..Default::default()
             },
-            Some(master_pw.to_string()),
+            Some(master_pw.clone()),
             &state,
         )
         .unwrap();
@@ -432,15 +532,14 @@ mod tests {
                 .pending_restore_l2_reconciliation
         );
 
-        // 4. Saving session_timeout_seconds == 0 immediately clears active session cache & demotes timed elevation
-        crate::commands::auth::elevate_session_with_password_impl(master_pw, &state).unwrap();
+        crate::commands::auth::elevate_session_with_password_impl(&master_pw, &state).unwrap();
         assert!(state.service.lock().unwrap().is_session_active());
         let sec_zero = patch_security_policy_impl(
             SecurityPolicyPatch {
                 session_timeout_seconds: Some(0),
                 ..Default::default()
             },
-            Some(master_pw.to_string()),
+            Some(master_pw),
             &state,
         )
         .unwrap();
@@ -450,63 +549,36 @@ mod tests {
         assert!(!status_after.has_cached_session);
         assert_eq!(status_after.access_mode, "dailyPay");
         assert_eq!(status_after.base_access_mode, "dailyPay");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn s11_f3_atomic_reach_preset_rollback_wake_parity_and_one_shot_pin() {
-        let dir = crate::test_support::temp_test_dir("s11_f3_settings");
-        let pw = "MasterPass-S11-2026!";
-        let service = crate::test_support::setup_test_app(
-            &dir.join("wallet"),
-            "S11 Settings Tester",
-            crate::test_support::ALICE_PHRASE,
-            pw,
-        );
-        let state = crate::test_support::create_test_state(service);
+    fn test_apply_reach_preset_atomic_rollback_and_clean_apply() {
+        let (dir_guard, state, pw) = setup_s11_settings_fixture("s11_f3_reach_preset");
+        assert!(dir_guard.0.exists());
 
-        {
-            let mut svc = state.service.lock().unwrap();
-            let ui_init = UiPreferences {
-                market_sync_enabled: false,
-                wot_share_via_sync: false,
-                post_accept_from_contacts: false,
-                ..Default::default()
-            };
-            let sec_init = SecurityPolicy {
-                session_timeout_seconds: 600,
-                sync_backup_enabled: false,
-                auto_backup_enabled: false,
-                backup_sync_folder: None,
-                ..Default::default()
-            };
-            state
-                .save_ui_preferences(&mut svc, ui_init, Some(pw))
-                .unwrap();
-            state
-                .save_security_policy(&mut svc, sec_init, Some(pw))
-                .unwrap();
-            let reg = state.load_wot_register(&mut svc, Some(pw)).unwrap();
-            state.save_wot_register(&mut svc, &reg, Some(pw)).unwrap();
-        }
+        let invalid_err =
+            apply_reach_preset_impl("ultra".to_string(), Some(pw.clone()), &state).unwrap_err();
+        assert_eq!(invalid_err.message, "Invalid reach preset: ultra");
 
-        // 1. Atomic rollback when seal.enc write fails during apply_reach_preset_impl
-        let before_preset = get_reach_preset_impl(Some(pw.to_string()), &state).unwrap();
+        let before_preset = get_reach_preset_impl(Some(pw.clone()), &state).unwrap();
         assert_eq!(before_preset.preset, "medium");
 
-        {
-            let _fault_guard = crate::test_support::WRITE_FAULT_TEST_LOCK
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
-            assert!(
-                apply_reach_preset_impl("near".to_string(), Some(pw.to_string()), &state).is_err(),
-                "fault must fail apply_reach_preset_impl"
-            );
-        }
+        let fault_guard = crate::test_support::WRITE_FAULT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
+        let fault_err =
+            apply_reach_preset_impl("near".to_string(), Some(pw.clone()), &state).unwrap_err();
+        drop(fault_guard);
+        assert!(
+            fault_err
+                .message
+                .starts_with("Failed to persist reach preset:"),
+            "unexpected fault error: {}",
+            fault_err.message
+        );
 
-        let after_fault = get_reach_preset_impl(Some(pw.to_string()), &state).unwrap();
+        let after_fault = get_reach_preset_impl(Some(pw.clone()), &state).unwrap();
         assert_eq!(after_fault, before_preset);
         assert_eq!(
             state.get_cached_ui_preferences().unwrap().share_min_level,
@@ -514,21 +586,94 @@ mod tests {
         );
         assert_eq!(state.cache_wot().unwrap().policy.own_list_max_hops, 2);
 
-        // 2. Clean apply updates all 3 stores + caches atomically
-        let applied =
-            apply_reach_preset_impl("near".to_string(), Some(pw.to_string()), &state).unwrap();
-        assert_eq!(applied.preset, "near");
-        assert_eq!(applied.own_list_max_hops, 1);
-        assert_eq!(applied.card_max_hops, 1);
-        assert_eq!(applied.share_min_level, 2);
-        assert_eq!(applied.media_auto_load_max_hops, 1);
+        let applied_near = apply_reach_preset_impl("near".to_string(), Some(pw.clone()), &state)
+            .unwrap();
+        assert_eq!(applied_near.preset, "near");
+        assert_eq!(applied_near.own_list_max_hops, 1);
+        assert_eq!(applied_near.card_max_hops, 1);
+        assert_eq!(applied_near.share_min_level, 2);
+        assert_eq!(applied_near.media_auto_load_max_hops, 1);
+        assert_eq!(
+            get_reach_preset_impl(Some(pw.clone()), &state).unwrap(),
+            applied_near
+        );
 
-        // 3. OneShotPinGrant works on cold cache + locked session in get_reach_preset_impl
+        let applied_far = apply_reach_preset_impl("far".to_string(), Some(pw.clone()), &state)
+            .unwrap();
+        assert_eq!(applied_far.preset, "far");
+        assert_eq!(applied_far.own_list_max_hops, 3);
+        assert_eq!(applied_far.card_max_hops, 3);
+        assert_eq!(applied_far.share_min_level, 1);
+        assert_eq!(applied_far.media_auto_load_max_hops, 2);
+        assert_eq!(get_reach_preset_impl(Some(pw), &state).unwrap(), applied_far);
+    }
+
+    #[test]
+    fn test_apply_reach_preset_bumps_unpublished_tombstone_only_on_share_min_increase() {
+        let (dir_guard, state, pw) = setup_s11_settings_fixture("s11_f3_tombstone_bump");
+        assert!(dir_guard.0.exists());
+
+        let v0 = {
+            let mut svc = state.service.lock().unwrap();
+            let mut prof = crate::services::market_service::load_own_market_profile_state(
+                &state,
+                &mut svc,
+                Some(&pw),
+            )
+            .unwrap();
+            let now = chrono::Utc::now().timestamp().max(0) as u64;
+            crate::services::market_service::rebuild_and_sign_own_card(&mut svc, &mut prof, now)
+                .unwrap();
+            prof.published = false;
+            let v = prof.last_card.as_ref().unwrap().payload.v;
+            let mut batch = crate::state::EncryptedBatchCommit::new();
+            batch.own_market_profile(prof);
+            batch.commit(&state, &mut svc, Some(&pw)).unwrap();
+            v
+        };
+
+        let read_v = || -> u64 {
+            let mut svc = state.service.lock().unwrap();
+            crate::services::market_service::load_own_market_profile_state(
+                &state,
+                &mut svc,
+                Some(&pw),
+            )
+            .unwrap()
+            .last_card
+            .unwrap()
+            .payload
+            .v
+        };
+
+        // share_min_level increases (1 -> 2): MUST bump unpublished tombstone card version
+        apply_reach_preset_impl("near".to_string(), Some(pw.clone()), &state).unwrap();
+        let v_after_inc = read_v();
+        assert!(
+            v_after_inc > v0,
+            "increasing share_min_level (1 -> 2) must bump tombstone version ({v_after_inc} vs {v0})"
+        );
+
+        // Equal share_min_level (2 -> 2): MUST NOT bump tombstone version
+        apply_reach_preset_impl("near".to_string(), Some(pw.clone()), &state).unwrap();
+        assert_eq!(read_v(), v_after_inc);
+
+        // Decreasing share_min_level (2 -> 1): MUST NOT bump tombstone version
+        apply_reach_preset_impl("far".to_string(), Some(pw.clone()), &state).unwrap();
+        assert_eq!(read_v(), v_after_inc);
+    }
+
+    #[test]
+    fn test_get_reach_preset_via_one_shot_pin_grant_on_cold_cache() {
+        let (dir_guard, state, pw) = setup_s11_settings_fixture("s11_f3_one_shot");
+        assert!(dir_guard.0.exists());
+
+        apply_reach_preset_impl("near".to_string(), Some(pw.clone()), &state).unwrap();
         let grant = {
             let mut svc = state.service.lock().unwrap();
             svc.lock_session();
             state
-                .issue_one_shot_pin_grant(&svc, zeroize::Zeroizing::new(pw.to_string()))
+                .issue_one_shot_pin_grant(&svc, zeroize::Zeroizing::new(pw))
                 .unwrap()
         };
         state.set_cached_ui_preferences(None);
@@ -537,20 +682,20 @@ mod tests {
             state.set_cached_wot_for_service(&svc, None);
             state.set_cached_own_market_profile_for_service(&svc, None);
         }
-        let via_grant = get_reach_preset_impl(Some(grant), &state).unwrap();
+
+        let via_grant = get_reach_preset_impl(Some(grant.clone()), &state).unwrap();
         assert_eq!(via_grant.preset, "near");
+        assert_eq!(via_grant.own_list_max_hops, 1);
+        assert_eq!(via_grant.share_min_level, 2);
 
-        // Re-unlock session for coordinator wake parity checks
-        {
-            let mut svc = state.service.lock().unwrap();
-            svc.unlock_session(pw, 600).unwrap();
-        }
-        state.clear_one_shot_pin_grant();
+        let reuse_err = get_reach_preset_impl(Some(grant), &state).unwrap_err();
+        assert_eq!(reuse_err.code, "error.auth.sessionTimeout");
+    }
 
-        let reset_wake = |st: &AppState| {
-            let mut guard = st.sync_control.lock().unwrap();
-            guard.pending_wake = Default::default();
-        };
+    #[test]
+    fn test_patch_ui_preferences_wake_flags_including_wifi_unlock() {
+        let (dir_guard, state, pw) = setup_s11_settings_fixture("s11_f3_ui_wake");
+        assert!(dir_guard.0.exists());
 
         reset_wake(&state);
         patch_ui_preferences_impl(
@@ -558,11 +703,13 @@ mod tests {
                 market_sync_enabled: Some(true),
                 ..Default::default()
             },
-            Some(pw.to_string()),
+            Some(pw.clone()),
             &state,
         )
         .unwrap();
-        assert!(state.sync_control_snapshot().pending_wake.market);
+        let wake_market = state.sync_control_snapshot().pending_wake;
+        assert!(wake_market.market);
+        assert!(!wake_market.seal && !wake_market.sync_backup && !wake_market.post);
 
         reset_wake(&state);
         patch_ui_preferences_impl(
@@ -570,11 +717,13 @@ mod tests {
                 wot_share_via_sync: Some(true),
                 ..Default::default()
             },
-            Some(pw.to_string()),
+            Some(pw.clone()),
             &state,
         )
         .unwrap();
-        assert!(state.sync_control_snapshot().pending_wake.market);
+        let wake_wot = state.sync_control_snapshot().pending_wake;
+        assert!(wake_wot.market);
+        assert!(!wake_wot.seal && !wake_wot.sync_backup && !wake_wot.post);
 
         reset_wake(&state);
         patch_ui_preferences_impl(
@@ -582,11 +731,48 @@ mod tests {
                 post_accept_from_contacts: Some(true),
                 ..Default::default()
             },
-            Some(pw.to_string()),
+            Some(pw.clone()),
             &state,
         )
         .unwrap();
-        assert!(state.sync_control_snapshot().pending_wake.post);
+        let wake_post = state.sync_control_snapshot().pending_wake;
+        assert!(wake_post.post);
+        assert!(!wake_post.seal && !wake_post.sync_backup && !wake_post.market);
+
+        reset_wake(&state);
+        patch_ui_preferences_impl(
+            UiPreferencesPatch {
+                market_poll_wifi_only: Some(true),
+                ..Default::default()
+            },
+            Some(pw.clone()),
+            &state,
+        )
+        .unwrap();
+        assert!(state.sync_control_snapshot().pending_wake.is_empty());
+
+        reset_wake(&state);
+        patch_ui_preferences_impl(
+            UiPreferencesPatch {
+                market_poll_wifi_only: Some(false),
+                ..Default::default()
+            },
+            Some(pw),
+            &state,
+        )
+        .unwrap();
+        let wake_wifi = state.sync_control_snapshot().pending_wake;
+        assert!(wake_wifi.seal);
+        assert!(wake_wifi.sync_backup);
+        assert!(wake_wifi.market);
+        assert!(wake_wifi.post);
+    }
+
+    #[test]
+    fn test_patch_security_policy_wake_flags_and_locked_session_suppression() {
+        let (dir_guard, state, pw) = setup_s11_settings_fixture("s11_f3_sec_wake");
+        assert!(dir_guard.0.exists());
+        state.service.lock().unwrap().unlock_session(&pw, 600).unwrap();
 
         reset_wake(&state);
         patch_security_policy_impl(
@@ -594,11 +780,13 @@ mod tests {
                 sync_backup_enabled: Some(true),
                 ..Default::default()
             },
-            Some(pw.to_string()),
+            Some(pw.clone()),
             &state,
         )
         .unwrap();
-        assert!(state.sync_control_snapshot().pending_wake.sync_backup);
+        let wake_sync_backup = state.sync_control_snapshot().pending_wake;
+        assert!(wake_sync_backup.sync_backup);
+        assert!(!wake_sync_backup.local_backup);
 
         reset_wake(&state);
         patch_security_policy_impl(
@@ -606,7 +794,21 @@ mod tests {
                 auto_backup_enabled: Some(true),
                 ..Default::default()
             },
-            Some(pw.to_string()),
+            Some(pw.clone()),
+            &state,
+        )
+        .unwrap();
+        let wake_auto = state.sync_control_snapshot().pending_wake;
+        assert!(wake_auto.local_backup);
+        assert!(!wake_auto.sync_backup);
+
+        reset_wake(&state);
+        patch_security_policy_impl(
+            SecurityPolicyPatch {
+                backup_sync_folder: Some(Some("/tmp/s11-new-backup".to_string())),
+                ..Default::default()
+            },
+            Some(pw.clone()),
             &state,
         )
         .unwrap();
@@ -618,21 +820,32 @@ mod tests {
                 backup_sync_folder: Some(Some("/tmp/s11-new-backup".to_string())),
                 ..Default::default()
             },
-            Some(pw.to_string()),
+            Some(pw.clone()),
             &state,
         )
         .unwrap();
-        assert!(state.sync_control_snapshot().pending_wake.local_backup);
+        assert!(state.sync_control_snapshot().pending_wake.is_empty());
 
-        let _ = std::fs::remove_dir_all(&dir);
+        reset_wake(&state);
+        state.service.lock().unwrap().lock_session();
+        patch_security_policy_impl(
+            SecurityPolicyPatch {
+                backup_sync_folder: Some(Some("/tmp/s11-locked-backup".to_string())),
+                ..Default::default()
+            },
+            Some(pw),
+            &state,
+        )
+        .unwrap();
+        assert!(state.sync_control_snapshot().pending_wake.is_empty());
     }
 
     #[test]
     fn s11_q3_shortening_nonzero_session_timeout_takes_effect_immediately() {
-        let dir = crate::test_support::temp_test_dir("s11_q3_shorten_timeout");
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("s11_q3_shorten_timeout"));
         let pw = "MasterPass-Timeout-2026!";
         let state = AppState::new(crate::test_support::setup_test_app(
-            &dir.join("wallet"),
+            &dir_guard.0.join("wallet"),
             "Timeout Tester",
             crate::test_support::ALICE_PHRASE,
             pw,
@@ -649,7 +862,22 @@ mod tests {
             assert!(svc.is_session_active());
         }
 
-        // 1. Lengthening timeout without password leaves active session untouched
+        // 1. Lengthening or keeping equal timeout without password leaves active session untouched
+        let unchanged = patch_security_policy_impl(
+            SecurityPolicyPatch {
+                session_timeout_seconds: Some(3600),
+                ..Default::default()
+            },
+            None,
+            &state,
+        )
+        .unwrap();
+        assert_eq!(unchanged.session_timeout_seconds, 3600);
+        assert!(
+            state.service.lock().unwrap().is_session_active(),
+            "Equal non-zero timeout without password must keep active session open"
+        );
+
         let longer = patch_security_policy_impl(
             SecurityPolicyPatch {
                 session_timeout_seconds: Some(7200),
@@ -690,7 +918,5 @@ mod tests {
             !state.service.lock().unwrap().is_session_active(),
             "Shortening timeout without password must lock session immediately"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

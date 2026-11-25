@@ -1665,7 +1665,265 @@ pub async fn remove_public_sync_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::fs_helpers::TempDirGuard;
+    use ed25519_dalek::SigningKey;
     use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn read_http_request_head(stream: &mut tokio::net::TcpStream) -> Option<String> {
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).await.expect("read mock HTTP request");
+        if n == 0 {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&buf[..n]).into_owned())
+    }
+
+    async fn write_http_response(
+        stream: &mut tokio::net::TcpStream,
+        status: &str,
+        extra_headers: &str,
+        content_type: &str,
+        body: &str,
+    ) {
+        let resp = format!(
+            "HTTP/1.1 {status}\r\n{extra_headers}Content-Type: {content_type}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(resp.as_bytes())
+            .await
+            .expect("write mock HTTP response");
+    }
+
+    async fn spawn_public_sync_mock_server(
+        admin_sk: SigningKey,
+        drop_pub: String,
+        mode: Arc<Mutex<&'static str>>,
+        now_secs: u64,
+    ) -> (
+        String,
+        String,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let write_url = format!("http://127.0.0.1:{}/sync.php", port);
+        let read_url = format!("http://127.0.0.1:{}/d", port);
+        let read_url_srv = read_url.clone();
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let srv = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    sig = &mut shutdown_rx => {
+                        sig.expect("mock server shutdown signal");
+                        break;
+                    }
+                    accepted = listener.accept() => {
+                        let (mut stream, peer_addr) = accepted.expect("accept mock client");
+                        assert!(peer_addr.ip().is_loopback());
+                        let mode_req = Arc::clone(&mode);
+                        let dp = drop_pub.clone();
+                        let ru = read_url_srv.clone();
+                        let sk = admin_sk.clone();
+                        tokio::spawn(async move {
+                            let Some(req) = read_http_request_head(&mut stream).await else {
+                                return;
+                            };
+                            let first_line = req.lines().next().unwrap_or("");
+                            let cur_mode = *mode_req.lock().unwrap();
+                            if first_line.starts_with("GET ") && first_line.contains("?info") {
+                                if cur_mode == "fail_info" {
+                                    write_http_response(
+                                        &mut stream,
+                                        "500 Internal Server Error",
+                                        "",
+                                        "text/plain",
+                                        "fail",
+                                    )
+                                    .await;
+                                    return;
+                                }
+                                let revocation_json = match cur_mode {
+                                    "postpone_future" => serde_json::to_value(
+                                        sync_client::sign_revocation_notice(
+                                            &sk,
+                                            now_secs,
+                                            now_secs + 86_400 * 30,
+                                            Some("Postponed".to_string()),
+                                            None,
+                                        )
+                                        .unwrap(),
+                                    )
+                                    .unwrap(),
+                                    "overwrite_immediate" => {
+                                        let attacker_pub = hex::encode(
+                                            SigningKey::from_bytes(&[0x57u8; 32])
+                                                .verifying_key()
+                                                .as_bytes(),
+                                        );
+                                        serde_json::to_value(
+                                            sync_client::sign_revocation_notice(
+                                                &sk,
+                                                now_secs,
+                                                now_secs - 10,
+                                                Some("Routine migration".to_string()),
+                                                Some(sync_client::SyncReplacementTarget {
+                                                    write_url: "https://attacker-overwrite.example.org/sync.php".to_string(),
+                                                    read_url: "https://attacker-overwrite.example.org/d".to_string(),
+                                                    drop_pub: attacker_pub,
+                                                }),
+                                            )
+                                            .unwrap(),
+                                        )
+                                        .unwrap()
+                                    }
+                                    _ => serde_json::Value::Null,
+                                };
+                                let body = serde_json::json!({
+                                    "drop_pub": dp,
+                                    "read_url": ru,
+                                    "channels": ["card", "wot", "backup", "post"],
+                                    "revocation": revocation_json,
+                                })
+                                .to_string();
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    "",
+                                    "application/json",
+                                    &body,
+                                )
+                                .await;
+                            } else {
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    "X-Drop-Authorized: true\r\n",
+                                    "text/plain",
+                                    "",
+                                )
+                                .await;
+                            }
+                        });
+                    }
+                }
+            }
+        });
+
+        (write_url, read_url, shutdown_tx, srv)
+    }
+
+    async fn spawn_revocation_mock_server(
+        notice: sync_client::SyncRevocationNotice,
+    ) -> (
+        String,
+        String,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let write_url = format!("http://127.0.0.1:{}/sync.php", port);
+        let read_url = format!("http://127.0.0.1:{}/d", port);
+        let body = serde_json::to_string(&notice).unwrap();
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let srv = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    sig = &mut shutdown_rx => {
+                        sig.expect("revocation server shutdown");
+                        break;
+                    }
+                    accepted = listener.accept() => {
+                        let (mut stream, peer_addr) = accepted.expect("accept revocation client");
+                        assert!(peer_addr.ip().is_loopback());
+                        let b = body.clone();
+                        tokio::spawn(async move {
+                            if read_http_request_head(&mut stream).await.is_some() {
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    "",
+                                    "application/json",
+                                    &b,
+                                )
+                                .await;
+                            }
+                        });
+                    }
+                }
+            }
+        });
+
+        (write_url, read_url, shutdown_tx, srv)
+    }
+
+    fn make_active_public_sync(
+        write_url: &str,
+        read_url: &str,
+        drop_pub: &str,
+        access_seed: u8,
+    ) -> StoredPublicSync {
+        StoredPublicSync {
+            write_url: write_url.to_string(),
+            read_url: read_url.to_string(),
+            drop_pub: drop_pub.to_string(),
+            register_url: None,
+            access_pubkey: crate::test_support::test_ed25519_pub_hex(access_seed),
+            enabled: true,
+            authorized_channels: vec!["card".to_string()],
+            status: "active".to_string(),
+            sunset_at: None,
+            revocation_reason: None,
+            replacement: None,
+        }
+    }
+
+    fn make_revoked_public_sync(
+        write_url: &str,
+        read_url: &str,
+        drop_pub: &str,
+        access_seed: u8,
+        status: &str,
+        meta: (
+            u64,
+            Option<&str>,
+            Option<crate::models::FrontendSyncReplacementTarget>,
+        ),
+    ) -> StoredPublicSync {
+        StoredPublicSync {
+            enabled: status != "revoked",
+            status: status.to_string(),
+            sunset_at: Some(meta.0),
+            revocation_reason: meta.1.map(str::to_string),
+            replacement: meta.2,
+            ..make_active_public_sync(write_url, read_url, drop_pub, access_seed)
+        }
+    }
+
+    fn make_test_contact(
+        did: &str,
+        syncs: Vec<FrontendSyncDescriptor>,
+    ) -> crate::models::FrontendContact {
+        crate::models::FrontendContact {
+            did: did.to_string(),
+            profile: crate::models::FrontendUserProfile::default(),
+            tags: vec![],
+            added_at: "100".to_string(),
+            notes: None,
+            trust_level: None,
+            desired_hops: None,
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs,
+        }
+    }
 
     #[test]
     fn h6_prune_index_slot_etags_preserves_direct_card_and_wot_etags() {
@@ -1712,10 +1970,19 @@ mod tests {
                 size: 64,
                 etag: None,
             },
+            crate::sync_client::SyncIndexEntry {
+                id: "slot-stale".to_string(),
+                channel: "post".to_string(),
+                prefix: Some("p2".to_string()),
+                mtime: 100,
+                size: 32,
+                etag: None,
+            },
         ];
 
         prune_index_slot_etags(&mut etags, url1, &entries);
 
+        assert_eq!(etags.len(), 6);
         assert!(etags.contains_key(&keep_card));
         assert!(!etags.contains_key(&stale_card));
         assert!(etags.contains_key(&keep_wot));
@@ -1728,13 +1995,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_h13_remove_public_sync_preserves_local_state_on_remote_delete_failure() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let dir = crate::test_support::temp_test_dir("h13_remote_delete_fail");
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("h13_remote_delete_fail"));
         let pw = "StrongPassword123!";
         let svc = crate::test_support::setup_test_app(
-            &dir,
+            &dir_guard.0,
             "Alice",
             crate::test_support::ALICE_PHRASE,
             pw,
@@ -1744,32 +2008,30 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let srv = tokio::spawn(async move {
-            if let Ok((mut stream, _)) = listener.accept().await {
-                let mut buf = [0u8; 2048];
-                let _ = stream.read(&mut buf).await;
-                let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 4\r\n\r\nfail";
-                let _ = stream.write_all(resp.as_bytes()).await;
-            }
+            let (mut stream, peer_addr) =
+                listener.accept().await.expect("accept delete request");
+            assert!(peer_addr.ip().is_loopback());
+            let req = read_http_request_head(&mut stream)
+                .await
+                .expect("non-empty delete HTTP request");
+            let first_line = req.lines().next().unwrap_or("").to_string();
+            write_http_response(&mut stream, "500 Internal Server Error", "", "text/plain", "fail")
+                .await;
+            first_line
         });
 
         let write_url = format!("http://127.0.0.1:{}/sync.php", port);
+        let drop_pub = crate::test_support::test_ed25519_pub_hex(0x11);
         {
             let mut s = state.lock_service().unwrap();
             state
                 .mutate_security_policy(&mut s, Some(pw), |p| {
-                    p.public_syncs.push(crate::settings::StoredPublicSync {
-                        write_url: write_url.clone(),
-                        read_url: format!("http://127.0.0.1:{}/d", port),
-                        drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
-                        register_url: None,
-                        access_pubkey: crate::test_support::test_ed25519_pub_hex(0x22),
-                        enabled: true,
-                        authorized_channels: vec!["card".into()],
-                        status: "active".into(),
-                        sunset_at: None,
-                        revocation_reason: None,
-                        replacement: None,
-                    });
+                    p.public_syncs.push(make_active_public_sync(
+                        &write_url,
+                        &format!("http://127.0.0.1:{}/d", port),
+                        &drop_pub,
+                        0x22,
+                    ));
                 })
                 .unwrap();
         }
@@ -1778,6 +2040,12 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code, "error.sync.remoteDeleteFailed");
+        assert!(err
+            .message
+            .starts_with("Remote sync deletion failed; local sync settings were preserved:"));
+
+        let req_line = srv.await.expect("join delete mock server");
+        assert!(req_line.starts_with("DELETE "), "unexpected req: {req_line}");
 
         let remaining = {
             let mut s = state.lock_service().unwrap();
@@ -1785,16 +2053,118 @@ mod tests {
         };
         assert_eq!(remaining.public_syncs.len(), 1);
         assert_eq!(remaining.public_syncs[0].write_url, write_url);
+    }
 
-        let _ = srv.await;
-        let _ = std::fs::remove_dir_all(&dir);
+    #[tokio::test]
+    async fn test_remove_public_sync_local_cleanup_purges_policy_sync_post_and_backup_state() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("remove_public_cleanup"));
+        let pw = "StrongPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir_guard.0,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        let rm_write = "https://remove-me.example.org/sync.php";
+        let rm_read = "https://remove-me.example.org/d";
+        let keep_write = "https://keep-me.example.org/sync.php";
+        let keep_read = "https://keep-me.example.org/d";
+
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.public_syncs.push(make_active_public_sync(
+                        rm_write,
+                        rm_read,
+                        &crate::test_support::test_ed25519_pub_hex(0x11),
+                        0x21,
+                    ));
+                    p.public_syncs.push(make_active_public_sync(
+                        keep_write,
+                        keep_read,
+                        &crate::test_support::test_ed25519_pub_hex(0x12),
+                        0x22,
+                    ));
+                })
+                .unwrap();
+
+            let mut sync_state = StoredSyncState::default();
+            sync_state
+                .etags_by_read_url
+                .insert(index_etag_key(rm_read), "e-rm".to_string());
+            sync_state
+                .etags_by_read_url
+                .insert(index_etag_key(keep_read), "e-keep".to_string());
+            state.save_sync_state(&mut s, &sync_state, Some(pw)).unwrap();
+
+            let mut post_state = StoredPostState::default();
+            post_state
+                .slot_etags_by_write_url
+                .insert(format!("{}/", rm_write), "p-rm".to_string());
+            post_state
+                .slot_etags_by_write_url
+                .insert(keep_write.to_string(), "p-keep".to_string());
+            crate::state::save_encrypted_json(&mut s, MARKET_POST_STATE_KEY, &post_state, Some(pw))
+                .unwrap();
+
+            let mut backup_state = StoredBackupSyncState::default();
+            backup_state
+                .mirrors_by_write_url
+                .insert(rm_write.to_string(), Default::default());
+            backup_state
+                .mirrors_by_write_url
+                .insert(keep_write.to_string(), Default::default());
+            crate::state::save_local_sidecar_json(
+                &mut s,
+                BACKUP_SYNC_STATE_KEY,
+                &backup_state,
+                Some(pw),
+            )
+            .unwrap();
+        }
+
+        remove_public_sync_impl(format!("{}/", rm_write), false, Some(pw.into()), &state)
+            .await
+            .unwrap();
+
+        let mut s = state.lock_service().unwrap();
+        let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+        assert_eq!(pol.public_syncs.len(), 1);
+        assert_eq!(pol.public_syncs[0].write_url, keep_write);
+
+        let sync_after: StoredSyncState =
+            crate::state::load_encrypted_json_opt(&mut s, MARKET_SYNC_KEY, Some(pw))
+                .unwrap()
+                .unwrap();
+        assert_eq!(sync_after.etags_by_read_url.len(), 1);
+        assert!(sync_after
+            .etags_by_read_url
+            .contains_key(&index_etag_key(keep_read)));
+
+        let post_after: StoredPostState =
+            crate::state::load_encrypted_json_opt(&mut s, MARKET_POST_STATE_KEY, Some(pw))
+                .unwrap()
+                .unwrap();
+        assert_eq!(post_after.slot_etags_by_write_url.len(), 1);
+        assert!(post_after.slot_etags_by_write_url.contains_key(keep_write));
+
+        let backup_after: StoredBackupSyncState =
+            crate::state::load_local_sidecar_json_opt(&mut s, BACKUP_SYNC_STATE_KEY, Some(pw))
+                .unwrap()
+                .unwrap();
+        assert_eq!(backup_after.mirrors_by_write_url.len(), 1);
+        assert!(backup_after.mirrors_by_write_url.contains_key(keep_write));
     }
 
     #[test]
-    fn s09_f3_f4_f5_purge_urls_and_exclude_revoked_targets() {
+    fn s09_f3_f4_purge_urls_removes_only_matching_urls_and_preserves_siblings() {
         let mut sync_state = StoredSyncState::default();
         let target_read = "https://sync1.example:8443/d";
         let target_write = "https://sync1.example:8443/sync.php";
+        let sibling_read = "https://sync1.example:8443/d2";
         let other_read = "https://other.example/d";
         let other_write = "https://other.example/sync.php";
 
@@ -1803,7 +2173,7 @@ mod tests {
             .insert(index_etag_key(target_read), "etag-1".to_string());
         sync_state
             .etags_by_read_url
-            .insert(index_etag_key(other_read), "etag-2".to_string());
+            .insert(index_etag_key(sibling_read), "etag-sib".to_string());
         sync_state
             .last_modified_by_read_url
             .insert(index_etag_key(target_read), "Mon, 01 Jan 2026".to_string());
@@ -1811,11 +2181,35 @@ mod tests {
             .last_modified_by_read_url
             .insert(index_etag_key(other_read), "Tue, 02 Jan 2026".to_string());
         sync_state
+            .slot_etags
+            .insert(index_card_etag_key(target_read, "s1", "p1"), "se1".into());
+        sync_state
+            .slot_etags
+            .insert(index_card_etag_key(sibling_read, "s1", "p1"), "se2".into());
+        sync_state
             .channel_max_bytes_by_write_url
             .insert(channel_max_bytes_key(target_write, "card"), 1024);
         sync_state
             .channel_max_bytes_by_write_url
             .insert(channel_max_bytes_key(other_write, "card"), 2048);
+        sync_state
+            .card_base_uploaded_at_by_write_url
+            .insert(target_write.to_string(), 42);
+        sync_state
+            .card_base_size_by_write_url
+            .insert(target_write.to_string(), 512);
+        sync_state
+            .card_base_versions_by_write_url
+            .insert(target_write.to_string(), Default::default());
+        sync_state
+            .card_delta_active_by_write_url
+            .insert(target_write.to_string(), true);
+        sync_state
+            .card_last_uploaded_versions_by_write_url
+            .insert(target_write.to_string(), Default::default());
+        sync_state
+            .wot_tombstone_fp_by_write_url
+            .insert(target_write.to_string(), "fp".to_string());
         sync_state.last_revocation_check_at.insert(
             format!(
                 "{}::{}",
@@ -1835,36 +2229,47 @@ mod tests {
         sync_state
             .uploaded_media_blobs
             .insert(format!("{}/::blob1", normalize_sync_url(target_write)));
+        sync_state
+            .uploaded_media_blobs
+            .insert(format!("{}::blob2", normalize_sync_url(other_write)));
 
         purge_urls_from_sync_state(
             &mut sync_state,
             &[format!("{}/", target_read), target_write.to_string()],
         );
 
-        assert!(!sync_state
-            .etags_by_read_url
-            .contains_key(&index_etag_key(target_read)));
+        assert_eq!(sync_state.etags_by_read_url.len(), 1);
         assert!(sync_state
             .etags_by_read_url
-            .contains_key(&index_etag_key(other_read)));
-        assert!(!sync_state
-            .last_modified_by_read_url
-            .contains_key(&index_etag_key(target_read)));
+            .contains_key(&index_etag_key(sibling_read)));
+        assert_eq!(sync_state.slot_etags.len(), 1);
+        assert!(sync_state
+            .slot_etags
+            .contains_key(&index_card_etag_key(sibling_read, "s1", "p1")));
+        assert_eq!(sync_state.last_modified_by_read_url.len(), 1);
         assert!(sync_state
             .last_modified_by_read_url
             .contains_key(&index_etag_key(other_read)));
-        assert!(!sync_state
-            .channel_max_bytes_by_write_url
-            .contains_key(&channel_max_bytes_key(target_write, "card")));
+        assert_eq!(sync_state.channel_max_bytes_by_write_url.len(), 1);
         assert!(sync_state
             .channel_max_bytes_by_write_url
             .contains_key(&channel_max_bytes_key(other_write, "card")));
+        assert!(sync_state.card_base_uploaded_at_by_write_url.is_empty());
+        assert!(sync_state.card_base_size_by_write_url.is_empty());
+        assert!(sync_state.card_base_versions_by_write_url.is_empty());
+        assert!(sync_state.card_delta_active_by_write_url.is_empty());
+        assert!(sync_state.card_last_uploaded_versions_by_write_url.is_empty());
+        assert!(sync_state.wot_tombstone_fp_by_write_url.is_empty());
         assert_eq!(sync_state.last_revocation_check_at.len(), 1);
-        assert!(sync_state
-            .last_revocation_check_at
-            .keys()
-            .all(|k| k.starts_with(other_read)));
-        assert!(sync_state.uploaded_media_blobs.is_empty());
+        assert_eq!(sync_state.uploaded_media_blobs.len(), 1);
+    }
+
+    #[test]
+    fn s09_f5_collect_upload_targets_excludes_revoked_disabled_and_unauthorized_syncs() {
+        let target_write = "https://sync1.example:8443/sync.php";
+        let target_read = "https://sync1.example:8443/d";
+        let other_write = "https://other.example/sync.php";
+        let other_read = "https://other.example/d";
 
         let policy = SecurityPolicy {
             market_selected_syncs: vec![
@@ -1882,48 +2287,81 @@ mod tests {
                     status: "revoked".to_string(),
                     ..Default::default()
                 },
-            ],
-            public_syncs: vec![
-                StoredPublicSync {
-                    write_url: other_write.to_string(),
-                    read_url: other_read.to_string(),
-                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x33),
-                    access_pubkey: crate::test_support::test_ed25519_pub_hex(0x44),
-                    enabled: true,
-                    authorized_channels: vec!["card".to_string()],
+                FrontendSyncDescriptor {
+                    write_url: "https://badpub.example/sync.php".to_string(),
+                    read_url: "https://badpub.example/d".to_string(),
+                    drop_pub: "not-hex".to_string(),
                     status: "active".to_string(),
                     ..Default::default()
                 },
+            ],
+            public_syncs: vec![
+                make_active_public_sync(
+                    other_write,
+                    other_read,
+                    &crate::test_support::test_ed25519_pub_hex(0x33),
+                    0x44,
+                ),
                 StoredPublicSync {
-                    write_url: "https://pub-rev.example/sync.php".to_string(),
-                    read_url: "https://pub-rev.example/d".to_string(),
-                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x55),
-                    access_pubkey: crate::test_support::test_ed25519_pub_hex(0x66),
-                    enabled: true,
-                    authorized_channels: vec!["card".to_string()],
-                    status: "revoked".to_string(),
-                    ..Default::default()
+                    authorized_channels: vec![],
+                    ..make_active_public_sync(
+                        "https://wildcard.example/sync.php",
+                        "https://wildcard.example/d",
+                        &crate::test_support::test_ed25519_pub_hex(0x34),
+                        0x45,
+                    )
                 },
+                StoredPublicSync {
+                    enabled: false,
+                    ..make_active_public_sync(
+                        "https://disabled.example/sync.php",
+                        "https://disabled.example/d",
+                        &crate::test_support::test_ed25519_pub_hex(0x35),
+                        0x46,
+                    )
+                },
+                StoredPublicSync {
+                    authorized_channels: vec!["post".to_string()],
+                    ..make_active_public_sync(
+                        "https://postonly.example/sync.php",
+                        "https://postonly.example/d",
+                        &crate::test_support::test_ed25519_pub_hex(0x36),
+                        0x47,
+                    )
+                },
+                StoredPublicSync {
+                    access_pubkey: "bad-access-hex".to_string(),
+                    ..make_active_public_sync(
+                        "https://badaccess.example/sync.php",
+                        "https://badaccess.example/d",
+                        &crate::test_support::test_ed25519_pub_hex(0x37),
+                        0x48,
+                    )
+                },
+                make_revoked_public_sync(
+                    "https://pub-rev.example/sync.php",
+                    "https://pub-rev.example/d",
+                    &crate::test_support::test_ed25519_pub_hex(0x55),
+                    0x66,
+                    "revoked",
+                    (10, None, None),
+                ),
             ],
             ..Default::default()
         };
         let targets = collect_upload_targets_for_channel(&policy, "card");
-        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.len(), 3);
         assert_eq!(targets[0].write_url, target_write);
         assert_eq!(targets[1].write_url, other_write);
+        assert_eq!(targets[2].write_url, "https://wildcard.example/sync.php");
     }
 
     #[tokio::test]
-    async fn test_s09_1_save_public_sync_preserves_sticky_revocation() {
-        use ed25519_dalek::SigningKey;
-        use std::sync::{Arc, Mutex};
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let dir = crate::test_support::temp_test_dir("s09_1_sticky_rev");
+    async fn test_s09_1_save_public_sync_preserves_sticky_revocation_on_omit_and_postpone() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("s09_1_sticky_rev"));
         let pw = "StrongPassword123!";
         let svc = crate::test_support::setup_test_app(
-            &dir,
+            &dir_guard.0,
             "Alice",
             crate::test_support::ALICE_PHRASE,
             pw,
@@ -1932,73 +2370,11 @@ mod tests {
 
         let admin_sk = SigningKey::from_bytes(&[0x31u8; 32]);
         let drop_pub = hex::encode(admin_sk.verifying_key().as_bytes());
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let write_url = format!("http://127.0.0.1:{}/sync.php", port);
-        let read_url = format!("http://127.0.0.1:{}/d", port);
-
         let mode = Arc::new(Mutex::new("omit_revocation"));
-        let mode_srv = Arc::clone(&mode);
-        let drop_pub_srv = drop_pub.clone();
-        let read_url_srv = read_url.clone();
-        let admin_sk_srv = admin_sk.clone();
-
-        let srv = tokio::spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    break;
-                };
-                let mode_req = Arc::clone(&mode_srv);
-                let dp = drop_pub_srv.clone();
-                let ru = read_url_srv.clone();
-                let sk = admin_sk_srv.clone();
-                tokio::spawn(async move {
-                    let mut buf = [0u8; 4096];
-                    let _ = stream.read(&mut buf).await;
-                    let req = String::from_utf8_lossy(&buf);
-                    let first_line = req.lines().next().unwrap_or("");
-                    let cur_mode = *mode_req.lock().unwrap();
-
-                    if first_line.starts_with("GET ") && first_line.contains("?info") {
-                        if cur_mode == "fail_info" {
-                            let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 4\r\n\r\nfail";
-                            let _ = stream.write_all(resp.as_bytes()).await;
-                            return;
-                        }
-                        let revocation_json = if cur_mode == "postpone_future" {
-                            let now = sync_client::current_unix_timestamp();
-                            let notice = sync_client::sign_revocation_notice(
-                                &sk,
-                                now.max(1),
-                                now + 86_400 * 30,
-                                Some("Postponed".to_string()),
-                                None,
-                            )
-                            .unwrap();
-                            serde_json::to_value(notice).unwrap()
-                        } else {
-                            serde_json::Value::Null
-                        };
-                        let body = serde_json::json!({
-                            "drop_pub": dp,
-                            "read_url": ru,
-                            "channels": ["card", "wot", "backup", "post"],
-                            "revocation": revocation_json,
-                        })
-                        .to_string();
-                        let resp = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                            body.len(),
-                            body
-                        );
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                    } else {
-                        let resp = "HTTP/1.1 200 OK\r\nX-Drop-Authorized: true\r\nContent-Length: 0\r\n\r\n";
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                    }
-                });
-            }
-        });
+        let now_secs = sync_client::current_unix_timestamp().max(2_000_000);
+        let (write_url, read_url, shutdown_tx, srv) =
+            spawn_public_sync_mock_server(admin_sk, drop_pub.clone(), Arc::clone(&mode), now_secs)
+                .await;
 
         let replacement = crate::models::FrontendSyncReplacementTarget {
             write_url: "https://new-sync.example.org/sync.php".to_string(),
@@ -2009,24 +2385,19 @@ mod tests {
             let mut s = state.lock_service().unwrap();
             state
                 .mutate_security_policy(&mut s, Some(pw), |p| {
-                    p.public_syncs.push(StoredPublicSync {
-                        write_url: write_url.clone(),
-                        read_url: read_url.clone(),
-                        drop_pub: drop_pub.clone(),
-                        register_url: None,
-                        access_pubkey: crate::test_support::test_ed25519_pub_hex(0x22),
-                        enabled: false,
-                        authorized_channels: vec!["card".into()],
-                        status: "revoked".into(),
-                        sunset_at: Some(1_000_000),
-                        revocation_reason: Some("Compromised".into()),
-                        replacement: Some(replacement.clone()),
-                    });
+                    p.public_syncs.push(make_revoked_public_sync(
+                        &write_url,
+                        &read_url,
+                        &drop_pub,
+                        0x22,
+                        "revoked",
+                        (1_000_000, Some("Compromised"), Some(replacement.clone())),
+                    ));
                 })
                 .unwrap();
         }
 
-        // Case 1: Compromised server omits ?info.revocation while user toggles/saves public sync
+        // Case 1: Compromised server omits ?info.revocation
         save_public_sync_impl(
             write_url.clone(),
             read_url.clone(),
@@ -2038,7 +2409,6 @@ mod tests {
         )
         .await
         .unwrap();
-
         {
             let mut s = state.lock_service().unwrap();
             let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
@@ -2050,42 +2420,8 @@ mod tests {
             assert_eq!(ps.replacement.as_ref(), Some(&replacement));
         }
 
-        // Case 2: Compromised server tries to postpone effective_at into the future
+        // Case 2: Compromised server tries to postpone effective_at into future
         *mode.lock().unwrap() = "postpone_future";
-        save_public_sync_impl(
-            write_url.clone(),
-            read_url.clone(),
-            drop_pub.clone(),
-            None,
-            true,
-            Some(pw.into()),
-            &state,
-        )
-        .await
-        .unwrap();
-
-        {
-            let mut s = state.lock_service().unwrap();
-            let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
-            let ps = &pol.public_syncs[0];
-            assert_eq!(ps.status, "revoked");
-            assert!(!ps.enabled);
-            assert_eq!(ps.sunset_at, Some(1_000_000));
-            assert_eq!(ps.revocation_reason.as_deref(), Some("Compromised"));
-        }
-
-        // Case 3: Existing entry was "deprecating" with already-elapsed sunset_at and ?info fails
-        *mode.lock().unwrap() = "fail_info";
-        {
-            let mut s = state.lock_service().unwrap();
-            state
-                .mutate_security_policy(&mut s, Some(pw), |p| {
-                    p.public_syncs[0].status = "deprecating".into();
-                    p.public_syncs[0].sunset_at = Some(1_000_000);
-                    p.public_syncs[0].enabled = true;
-                })
-                .unwrap();
-        }
         save_public_sync_impl(
             write_url,
             read_url,
@@ -2097,7 +2433,6 @@ mod tests {
         )
         .await
         .unwrap();
-
         {
             let mut s = state.lock_service().unwrap();
             let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
@@ -2105,109 +2440,63 @@ mod tests {
             assert_eq!(ps.status, "revoked");
             assert!(!ps.enabled);
             assert_eq!(ps.sunset_at, Some(1_000_000));
+            assert_eq!(ps.revocation_reason.as_deref(), Some("Compromised"));
+            assert_eq!(ps.replacement.as_ref(), Some(&replacement));
         }
 
-        srv.abort();
-        let _ = std::fs::remove_dir_all(&dir);
+        shutdown_tx.send(()).expect("shutdown mock server");
+        srv.await.expect("join mock server");
     }
 
     #[tokio::test]
-    async fn test_s09_1_save_public_sync_preserves_deprecating_on_transient_info_failure() {
-        use ed25519_dalek::SigningKey;
-        use std::sync::{Arc, Mutex};
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let dir = crate::test_support::temp_test_dir("s09_1_deprecating");
+    async fn test_s09_1_save_public_sync_rejects_metadata_overwrite_on_revoked_and_upgrades_elapsed_sunset(
+    ) {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir(
+            "s09_1_metadata_overwrite",
+        ));
         let pw = "StrongPassword123!";
         let svc = crate::test_support::setup_test_app(
-            &dir,
+            &dir_guard.0,
             "Alice",
             crate::test_support::ALICE_PHRASE,
             pw,
         );
         let state = crate::test_support::create_test_state(svc);
 
-        let admin_sk = SigningKey::from_bytes(&[0x32u8; 32]);
+        let admin_sk = SigningKey::from_bytes(&[0x55u8; 32]);
         let drop_pub = hex::encode(admin_sk.verifying_key().as_bytes());
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let write_url = format!("http://127.0.0.1:{}/sync.php", port);
-        let read_url = format!("http://127.0.0.1:{}/d", port);
+        let mode = Arc::new(Mutex::new("fail_info"));
+        let now_secs = sync_client::current_unix_timestamp().max(2_000_000);
+        let (write_url, read_url, shutdown_tx, srv) =
+            spawn_public_sync_mock_server(admin_sk, drop_pub.clone(), Arc::clone(&mode), now_secs)
+                .await;
 
-        let fail_info = Arc::new(Mutex::new(true));
-        let fail_info_srv = Arc::clone(&fail_info);
-        let drop_pub_srv = drop_pub.clone();
-        let read_url_srv = read_url.clone();
-
-        let srv = tokio::spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    break;
-                };
-                let fi = Arc::clone(&fail_info_srv);
-                let dp = drop_pub_srv.clone();
-                let ru = read_url_srv.clone();
-                tokio::spawn(async move {
-                    let mut buf = [0u8; 4096];
-                    let _ = stream.read(&mut buf).await;
-                    let req = String::from_utf8_lossy(&buf);
-                    let first_line = req.lines().next().unwrap_or("");
-                    if first_line.starts_with("GET ") && first_line.contains("?info") {
-                        if *fi.lock().unwrap() {
-                            let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 4\r\n\r\nfail";
-                            let _ = stream.write_all(resp.as_bytes()).await;
-                        } else {
-                            let body = serde_json::json!({
-                                "drop_pub": dp,
-                                "read_url": ru,
-                                "channels": ["card", "wot", "backup", "post"],
-                                "revocation": null,
-                            })
-                            .to_string();
-                            let resp = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                                body.len(),
-                                body
-                            );
-                            let _ = stream.write_all(resp.as_bytes()).await;
-                        }
-                    } else {
-                        let resp = "HTTP/1.1 200 OK\r\nX-Drop-Authorized: true\r\nContent-Length: 0\r\n\r\n";
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                    }
-                });
-            }
-        });
-
-        let future_sunset = sync_client::current_unix_timestamp() + 86_400 * 14;
-        let replacement = crate::models::FrontendSyncReplacementTarget {
-            write_url: "https://next-sync.example.org/sync.php".to_string(),
-            read_url: "https://next-sync.example.org/d".to_string(),
-            drop_pub: crate::test_support::test_ed25519_pub_hex(0x45),
+        let legit_replacement = crate::models::FrontendSyncReplacementTarget {
+            write_url: "https://legit-overwrite.example.org/sync.php".to_string(),
+            read_url: "https://legit-overwrite.example.org/d".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x56),
         };
         {
             let mut s = state.lock_service().unwrap();
             state
                 .mutate_security_policy(&mut s, Some(pw), |p| {
-                    p.public_syncs.push(StoredPublicSync {
-                        write_url: write_url.clone(),
-                        read_url: read_url.clone(),
-                        drop_pub: drop_pub.clone(),
-                        register_url: None,
-                        access_pubkey: crate::test_support::test_ed25519_pub_hex(0x23),
-                        enabled: true,
-                        authorized_channels: vec!["card".into()],
-                        status: "deprecating".into(),
-                        sunset_at: Some(future_sunset),
-                        revocation_reason: Some("Planned move".into()),
-                        replacement: Some(replacement.clone()),
-                    });
+                    p.public_syncs.push(make_revoked_public_sync(
+                        &write_url,
+                        &read_url,
+                        &drop_pub,
+                        0x24,
+                        "deprecating",
+                        (
+                            1_000_000,
+                            Some("Compromised"),
+                            Some(legit_replacement.clone()),
+                        ),
+                    ));
                 })
                 .unwrap();
         }
 
-        // Transient ?info failure must preserve active deprecation state
+        // Case 3: "deprecating" with elapsed sunset_at + ?info failure upgrades to "revoked"
         save_public_sync_impl(
             write_url.clone(),
             read_url.clone(),
@@ -2219,7 +2508,99 @@ mod tests {
         )
         .await
         .unwrap();
+        {
+            let mut s = state.lock_service().unwrap();
+            let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+            assert_eq!(pol.public_syncs[0].status, "revoked");
+            assert!(!pol.public_syncs[0].enabled);
+            assert_eq!(pol.public_syncs[0].sunset_at, Some(1_000_000));
+        }
 
+        // Case 4 (Bug 1 regression): freshly signed immediate notice CANNOT overwrite metadata on revoked
+        *mode.lock().unwrap() = "overwrite_immediate";
+        save_public_sync_impl(
+            write_url,
+            read_url,
+            drop_pub,
+            None,
+            true,
+            Some(pw.into()),
+            &state,
+        )
+        .await
+        .unwrap();
+        let pol = {
+            let mut s = state.lock_service().unwrap();
+            state.get_or_load_security_policy(&mut s, Some(pw)).unwrap()
+        };
+        let ps = &pol.public_syncs[0];
+        assert_eq!(ps.status, "revoked");
+        assert!(!ps.enabled);
+        assert_eq!(ps.sunset_at, Some(1_000_000));
+        assert_eq!(ps.revocation_reason.as_deref(), Some("Compromised"));
+        assert_eq!(ps.replacement.as_ref(), Some(&legit_replacement));
+
+        shutdown_tx.send(()).expect("shutdown mock server");
+        srv.await.expect("join mock server");
+    }
+
+    #[tokio::test]
+    async fn test_s09_1_save_public_sync_preserves_deprecating_on_transient_info_failure() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("s09_1_deprecating"));
+        let pw = "StrongPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir_guard.0,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        let admin_sk = SigningKey::from_bytes(&[0x32u8; 32]);
+        let drop_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+        let mode = Arc::new(Mutex::new("fail_info"));
+        let now_secs = sync_client::current_unix_timestamp().max(2_000_000);
+        let (write_url, read_url, shutdown_tx, srv) =
+            spawn_public_sync_mock_server(admin_sk, drop_pub.clone(), Arc::clone(&mode), now_secs)
+                .await;
+
+        let future_sunset = now_secs + 86_400 * 14;
+        let replacement = crate::models::FrontendSyncReplacementTarget {
+            write_url: "https://next-sync.example.org/sync.php".to_string(),
+            read_url: "https://next-sync.example.org/d".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x45),
+        };
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.public_syncs.push(make_revoked_public_sync(
+                        &write_url,
+                        &read_url,
+                        &drop_pub,
+                        0x23,
+                        "deprecating",
+                        (
+                            future_sunset,
+                            Some("Planned move"),
+                            Some(replacement.clone()),
+                        ),
+                    ));
+                })
+                .unwrap();
+        }
+
+        save_public_sync_impl(
+            write_url.clone(),
+            read_url.clone(),
+            drop_pub.clone(),
+            None,
+            true,
+            Some(pw.into()),
+            &state,
+        )
+        .await
+        .unwrap();
         {
             let mut s = state.lock_service().unwrap();
             let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
@@ -2230,8 +2611,7 @@ mod tests {
             assert_eq!(ps.replacement.as_ref(), Some(&replacement));
         }
 
-        // Explicit ?info without revocation before sunset_at clears deprecation
-        *fail_info.lock().unwrap() = false;
+        *mode.lock().unwrap() = "omit_revocation";
         save_public_sync_impl(
             write_url,
             read_url,
@@ -2243,7 +2623,6 @@ mod tests {
         )
         .await
         .unwrap();
-
         {
             let mut s = state.lock_service().unwrap();
             let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
@@ -2254,7 +2633,308 @@ mod tests {
             assert_eq!(ps.replacement, None);
         }
 
-        srv.abort();
-        let _ = std::fs::remove_dir_all(&dir);
+        shutdown_tx.send(()).expect("shutdown mock server");
+        srv.await.expect("join mock server");
+    }
+
+    #[tokio::test]
+    async fn test_check_revocations_disables_newly_revoked_public_sync() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("check_rev_disable_ps"));
+        let pw = "StrongPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir_guard.0,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        let now_secs = sync_client::current_unix_timestamp().max(2_000_000);
+        let active_sk = SigningKey::from_bytes(&[0x51u8; 32]);
+        let active_drop_pub = hex::encode(active_sk.verifying_key().as_bytes());
+        let active_notice = sync_client::sign_revocation_notice(
+            &active_sk,
+            now_secs - 60,
+            now_secs - 10,
+            Some("Server retired".to_string()),
+            None,
+        )
+        .unwrap();
+        let (active_write, active_read, active_tx, active_srv) =
+            spawn_revocation_mock_server(active_notice).await;
+
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.public_syncs.push(make_active_public_sync(
+                        &active_write,
+                        &active_read,
+                        &active_drop_pub,
+                        0x21,
+                    ));
+                })
+                .unwrap();
+        }
+
+        let auth = state
+            .authorize_session(crate::state::RequiredAccess::Unlocked, Some(pw))
+            .unwrap();
+        let mut policy = {
+            let mut s = state.lock_service().unwrap();
+            state.get_or_load_security_policy(&mut s, Some(pw)).unwrap()
+        };
+        let mut sync_state = StoredSyncState::default();
+        let client = sync_client::create_sync_http_client();
+
+        let revoked_own = check_revocations(
+            &client,
+            &state,
+            &auth.token,
+            &mut policy,
+            &mut sync_state,
+            now_secs,
+            Some(pw),
+        )
+        .await;
+        assert_eq!(revoked_own.len(), 1);
+        assert_eq!(revoked_own[0].write_url, active_write);
+
+        let saved_policy = {
+            let mut s = state.lock_service().unwrap();
+            state.get_or_load_security_policy(&mut s, Some(pw)).unwrap()
+        };
+        assert_eq!(saved_policy.public_syncs[0].status, "revoked");
+        assert!(!saved_policy.public_syncs[0].enabled);
+
+        active_tx.send(()).expect("shutdown active server");
+        active_srv.await.expect("join active server");
+    }
+
+    #[tokio::test]
+    async fn test_check_revocations_enforces_sticky_revocation_across_policy_and_contacts() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("check_revocations_sticky"));
+        let pw = "StrongPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir_guard.0,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        let now_secs = sync_client::current_unix_timestamp().max(2_000_000);
+        let sticky_sk = SigningKey::from_bytes(&[0x52u8; 32]);
+        let sticky_drop_pub = hex::encode(sticky_sk.verifying_key().as_bytes());
+        let forged_future_notice = sync_client::sign_revocation_notice(
+            &sticky_sk,
+            now_secs,
+            now_secs + 86_400 * 30,
+            Some("Postponed".to_string()),
+            Some(sync_client::SyncReplacementTarget {
+                write_url: "https://attacker-sync.example.org/sync.php".to_string(),
+                read_url: "https://attacker-sync.example.org/d".to_string(),
+                drop_pub: crate::test_support::test_ed25519_pub_hex(0x53),
+            }),
+        )
+        .unwrap();
+
+        let (sticky_write, sticky_read, sticky_tx, sticky_srv) =
+            spawn_revocation_mock_server(forged_future_notice).await;
+        let legit_replacement = crate::models::FrontendSyncReplacementTarget {
+            write_url: "https://legit-new.example.org/sync.php".to_string(),
+            read_url: "https://legit-new.example.org/d".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x54),
+        };
+
+        let revoked_desc = |slot_id: Option<&str>, rep: Option<crate::models::FrontendSyncReplacementTarget>| FrontendSyncDescriptor {
+            write_url: sticky_write.clone(),
+            read_url: sticky_read.clone(),
+            slot_id: slot_id.map(str::to_string),
+            drop_pub: sticky_drop_pub.clone(),
+            status: "revoked".to_string(),
+            sunset_at: Some(1_000_000),
+            revocation_reason: Some("Compromised".to_string()),
+            replacement: rep,
+            ..Default::default()
+        };
+
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.market_selected_syncs
+                        .push(revoked_desc(None, Some(legit_replacement.clone())));
+                    p.public_syncs.push(make_revoked_public_sync(
+                        &sticky_write,
+                        &sticky_read,
+                        &sticky_drop_pub,
+                        0x22,
+                        "revoked",
+                        (
+                            1_000_000,
+                            Some("Compromised"),
+                            Some(legit_replacement.clone()),
+                        ),
+                    ));
+                })
+                .unwrap();
+
+            let mut ab = FrontendAddressBook::default();
+            ab.contacts.insert(
+                "did:key:zContactSticky".to_string(),
+                make_test_contact(
+                    "did:key:zContactSticky",
+                    vec![revoked_desc(Some("slot-1"), Some(legit_replacement.clone()))],
+                ),
+            );
+            ab.contacts.insert(
+                "did:key:zContactNoRep".to_string(),
+                make_test_contact(
+                    "did:key:zContactNoRep",
+                    vec![revoked_desc(Some("slot-2"), None)],
+                ),
+            );
+            crate::state::save_encrypted_json(&mut s, CONTACTS_DATA_NAME, &ab, Some(pw)).unwrap();
+        }
+
+        let auth = state
+            .authorize_session(crate::state::RequiredAccess::Unlocked, Some(pw))
+            .unwrap();
+        let mut policy = {
+            let mut s = state.lock_service().unwrap();
+            state.get_or_load_security_policy(&mut s, Some(pw)).unwrap()
+        };
+        let mut sync_state = StoredSyncState::default();
+        let client = sync_client::create_sync_http_client();
+        let revoked_own = check_revocations(
+            &client,
+            &state,
+            &auth.token,
+            &mut policy,
+            &mut sync_state,
+            now_secs,
+            Some(pw),
+        )
+        .await;
+        assert_eq!(revoked_own.len(), 2);
+
+        let saved_policy = {
+            let mut s = state.lock_service().unwrap();
+            state.get_or_load_security_policy(&mut s, Some(pw)).unwrap()
+        };
+        assert_eq!(saved_policy.public_syncs[0].sunset_at, Some(1_000_000));
+        assert_eq!(
+            saved_policy.public_syncs[0].replacement.as_ref(),
+            Some(&legit_replacement)
+        );
+        assert_eq!(
+            saved_policy.market_selected_syncs[0].sunset_at,
+            Some(1_000_000)
+        );
+
+        let saved_contacts = {
+            let mut s = state.lock_service().unwrap();
+            state.load_contacts(&mut s, Some(pw)).unwrap()
+        };
+        let c_rep = saved_contacts
+            .iter()
+            .find(|c| c.did == "did:key:zContactSticky")
+            .unwrap();
+        assert_eq!(c_rep.syncs[0].write_url, legit_replacement.write_url);
+        assert_eq!(c_rep.syncs[0].read_url, legit_replacement.read_url);
+        assert_eq!(c_rep.syncs[0].drop_pub, legit_replacement.drop_pub);
+        assert_eq!(c_rep.syncs[0].slot_id, None);
+        assert_eq!(c_rep.syncs[0].status, "unverified");
+
+        let c_norep = saved_contacts
+            .iter()
+            .find(|c| c.did == "did:key:zContactNoRep")
+            .unwrap();
+        assert_eq!(c_norep.syncs[0].status, "revoked");
+        assert_eq!(c_norep.syncs[0].sunset_at, Some(1_000_000));
+        assert_eq!(c_norep.syncs[0].replacement, None);
+
+        sticky_tx.send(()).expect("shutdown sticky server");
+        sticky_srv.await.expect("join sticky server");
+    }
+
+    #[tokio::test]
+    async fn test_save_public_sync_rejects_drop_pub_pin_mismatch_and_saves_channel_max_bytes() {
+        let dir_guard = TempDirGuard(crate::test_support::temp_test_dir("pin_and_max_bytes"));
+        let pw = "StrongPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir_guard.0,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        let pinned_write = "https://pinned.example.org/sync.php";
+        let pinned_read = "https://pinned.example.org/d";
+        let expected_pub = crate::test_support::test_ed25519_pub_hex(0x61);
+        let wrong_pub = crate::test_support::test_ed25519_pub_hex(0x62);
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.public_syncs.push(make_active_public_sync(
+                        pinned_write,
+                        pinned_read,
+                        &expected_pub,
+                        0x25,
+                    ));
+                })
+                .unwrap();
+        }
+
+        let pin_err = save_public_sync_impl(
+            pinned_write.to_string(),
+            pinned_read.to_string(),
+            wrong_pub,
+            None,
+            true,
+            Some(pw.into()),
+            &state,
+        )
+        .await
+        .unwrap_err();
+        assert!(pin_err
+            .message
+            .starts_with("Public sync key pin mismatch for "));
+
+        let auth = state
+            .authorize_session(crate::state::RequiredAccess::Unlocked, Some(pw))
+            .unwrap();
+        save_channel_max_bytes_updates(
+            &state,
+            &auth.token,
+            Some(pw),
+            &[
+                (format!("{}/", pinned_write), "card".to_string(), 65_536),
+                (pinned_write.to_string(), "wot".to_string(), 0),
+            ],
+        );
+        // Repeating the identical update performs a clean no-op write
+        save_channel_max_bytes_updates(
+            &state,
+            &auth.token,
+            Some(pw),
+            &[(pinned_write.to_string(), "card".to_string(), 65_536)],
+        );
+
+        let mut s = state.lock_service().unwrap();
+        let sync_after: StoredSyncState =
+            crate::state::load_encrypted_json_opt(&mut s, MARKET_SYNC_KEY, Some(pw))
+                .unwrap()
+                .unwrap();
+        assert_eq!(sync_after.channel_max_bytes_by_write_url.len(), 1);
+        assert_eq!(
+            sync_after
+                .channel_max_bytes_by_write_url
+                .get(&channel_max_bytes_key(pinned_write, "card")),
+            Some(&65_536)
+        );
     }
 }
