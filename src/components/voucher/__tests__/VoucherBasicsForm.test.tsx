@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VoucherBasicsForm } from '../VoucherBasicsForm';
@@ -73,7 +73,8 @@ describe('VoucherBasicsForm', () => {
         renderForm();
 
         const option = screen.getByText('FreeTaler');
-        expect(option).toBeDefined();
+        expect(option).toBeInTheDocument();
+        expect(option.tagName).toBe('OPTION');
 
         // Also verify the raw ID is NOT shown as text
         const rawOption = screen.queryByText('freetaler_v1');
@@ -106,5 +107,56 @@ describe('VoucherBasicsForm', () => {
 
         const summary = screen.getByTestId('standard-short-description');
         expect(summary).toHaveTextContent('FreeTaler — Voucher denominated in Taler.');
+    });
+
+    it('propagates standard, amount, and test/real mode callbacks and styles errors', () => {
+        const onStandardChange = vi.fn();
+        const onAmountChange = vi.fn();
+        const onNonRedeemableChange = vi.fn();
+
+        const { container } = renderForm({
+            onStandardChange,
+            onAmountChange,
+            onNonRedeemableChange,
+            nonRedeemable: true,
+            errors: { standard: true, amount: true },
+        });
+
+        const typeSelect = container.querySelector('#voucher-type') as HTMLSelectElement;
+        expect(typeSelect.className).toContain('border-rose-500');
+        fireEvent.change(typeSelect, { target: { value: 'minuto_v1' } });
+        expect(onStandardChange).toHaveBeenCalledWith('minuto_v1');
+
+        const amountInput = container.querySelector('#voucher-amount') as HTMLInputElement;
+        expect(amountInput.className).toContain('border-rose-500');
+        fireEvent.change(amountInput, { target: { value: '12.50' } });
+        expect(onAmountChange).toHaveBeenCalledWith('12.50');
+
+        fireEvent.click(screen.getByTestId('voucher-mode-real'));
+        expect(onNonRedeemableChange).toHaveBeenCalledWith(false);
+    });
+
+    it('expands validity disclosure in expert mode and propagates validity value and unit changes', () => {
+        const onValidityValueChange = vi.fn();
+        const onValidityUnitChange = vi.fn();
+
+        renderForm(
+            {
+                onValidityValueChange,
+                onValidityUnitChange,
+            },
+            'expert',
+        );
+
+        fireEvent.click(screen.getByTestId('voucher-validity-toggle'));
+        const content = screen.getByTestId('voucher-validity-content');
+
+        const valInput = content.querySelector('input[type="number"]') as HTMLInputElement;
+        fireEvent.change(valInput, { target: { value: '3' } });
+        expect(onValidityValueChange).toHaveBeenCalledWith(3);
+
+        const unitSelect = content.querySelector('select') as HTMLSelectElement;
+        fireEvent.change(unitSelect, { target: { value: 'M' } });
+        expect(onValidityUnitChange).toHaveBeenCalledWith('M');
     });
 });

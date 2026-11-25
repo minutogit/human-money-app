@@ -518,8 +518,12 @@ amount_decimal_places = 4`,
 
     // Assert create_transfer_bundle was invoked with senderProfileName: null
     await waitFor(() => {
-      expect(createBundleArgs).toBeDefined();
-      expect(createBundleArgs?.senderProfileName).toBeNull();
+      expect(createBundleArgs).toEqual(
+        expect.objectContaining({
+          recipientId: 'did:key:z456',
+          senderProfileName: null,
+        }),
+      );
     });
   });
 
@@ -537,7 +541,7 @@ amount_decimal_places = 4`,
     const amountInput = document.getElementById('target-amount') as HTMLInputElement | null;
     expect(amountInput).toBeInTheDocument();
 
-    fireEvent.change(amountInput!, { target: { value: '25' } });
+    fireEvent.change(amountInput as HTMLInputElement, { target: { value: '25' } });
     await waitFor(() => {
       expect(amountInput).toHaveValue(25);
       expect(screen.getByText(/1 Vouchers Selected/i)).toBeInTheDocument();

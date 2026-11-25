@@ -159,8 +159,8 @@ describe('TransactionHistoryView', () => {
 
         // Click on Alice's row
         const aliceRow = screen.getByText('Alice Wonder').closest('.p-4');
-        expect(aliceRow).toBeDefined();
-        fireEvent.click(aliceRow!);
+        expect(aliceRow).toBeInstanceOf(HTMLElement);
+        fireEvent.click(aliceRow as HTMLElement);
 
         // Expanded details now visible
         await waitFor(() => {
@@ -169,7 +169,7 @@ describe('TransactionHistoryView', () => {
         });
 
         // Click on the same row again -> closes it
-        fireEvent.click(aliceRow!);
+        fireEvent.click(aliceRow as HTMLElement);
         await waitFor(() => {
             expect(screen.queryByText('bundle-alice-1111')).not.toBeInTheDocument();
         });
@@ -184,7 +184,8 @@ describe('TransactionHistoryView', () => {
 
         // Open Alice's row
         const aliceRow = screen.getByText('Alice Wonder').closest('.p-4');
-        fireEvent.click(aliceRow!);
+        expect(aliceRow).toBeInstanceOf(HTMLElement);
+        fireEvent.click(aliceRow as HTMLElement);
 
         await waitFor(() => {
             expect(screen.getAllByTestId('tech-id-copy')).toHaveLength(2);
@@ -266,7 +267,8 @@ describe('TransactionHistoryView', () => {
 
         // 1. Open Bob's row (Bob is already in mockContacts)
         const bobRow = screen.getByText('Bob Baumeister').closest('.p-4');
-        fireEvent.click(bobRow!);
+        expect(bobRow).toBeInstanceOf(HTMLElement);
+        fireEvent.click(bobRow as HTMLElement);
 
         await waitFor(() => {
             expect(screen.getByText('…b-2222')).toBeInTheDocument();
@@ -275,11 +277,12 @@ describe('TransactionHistoryView', () => {
         expect(screen.queryByText('history.saveAsContact')).not.toBeInTheDocument();
 
         // Close Bob's row
-        fireEvent.click(bobRow!);
+        fireEvent.click(bobRow as HTMLElement);
 
         // 2. Open Alice's row (Alice's DID is NOT in mockContacts)
         const aliceRow = screen.getByText('Alice Wonder').closest('.p-4');
-        fireEvent.click(aliceRow!);
+        expect(aliceRow).toBeInstanceOf(HTMLElement);
+        fireEvent.click(aliceRow as HTMLElement);
 
         await waitFor(() => {
             expect(screen.getByText('history.saveAsContact')).toBeInTheDocument();
@@ -436,9 +439,40 @@ describe('TransactionHistoryView', () => {
         await waitFor(() => {
             const summaryLabel = screen.getByText('history.summaryBookings:2');
             const summaryBar = summaryLabel.parentElement?.parentElement;
-            expect(summaryBar).not.toBeNull();
-            expect(summaryBar!.textContent).toMatch(/\+10[.,]00\s*\/\s*-0[.,]00 FreeTaler/);
-            expect(summaryBar!.textContent).toMatch(/\+0[.,]00\s*\/\s*-60[.,]00 Minuto/);
+            expect(summaryBar).toBeInstanceOf(HTMLElement);
+            const summaryText = (summaryBar as HTMLElement).textContent ?? '';
+            expect(summaryText).toMatch(/\+10[.,]00\s*\/\s*-0[.,]00 FreeTaler/);
+            expect(summaryText).toMatch(/\+0[.,]00\s*\/\s*-60[.,]00 Minuto/);
         });
+    });
+
+    it('renders empty state CTAs when history is empty and surfaces load error when getHistory rejects', async () => {
+        vi.mocked(transferService.getHistory).mockResolvedValue([]);
+
+        const { unmount } = renderWithMode('simple');
+        expect(await screen.findByText('history.noMatchingTx')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'voucher.create' }));
+        expect(mockNavigate).toHaveBeenCalledWith({
+            view: 'create_voucher',
+            previousView: { view: 'transaction_history' },
+        });
+        unmount();
+
+        vi.mocked(transferService.getHistory).mockRejectedValue(new Error('storage failure'));
+        renderWithMode('simple');
+        expect(await screen.findByText('history.loadFailed:storage failure')).toBeInTheDocument();
+    });
+
+    it('skips writeFile when CSV save dialog is cancelled', async () => {
+        vi.mocked(save).mockResolvedValueOnce(null);
+
+        renderWithMode('expert');
+        fireEvent.click(await screen.findByText('history.exportCsv'));
+
+        await waitFor(() => {
+            expect(save).toHaveBeenCalledTimes(1);
+        });
+        expect(writeFile).not.toHaveBeenCalled();
     });
 });

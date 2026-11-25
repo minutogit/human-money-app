@@ -3,6 +3,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TransferSuccessView } from '../TransferSuccessView';
 import { postService } from '../../../services/postService';
 import { invoke } from '@tauri-apps/api/core';
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
 import { UiModeProvider } from '../../../context/UiModeContext';
 import type { AppConfigDto } from '../../../types';
 
@@ -198,5 +200,65 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
 
     fireEvent.click(handoverToggle);
     expect(screen.getByTestId('save-transfer-file-button')).toBeInTheDocument();
+  });
+
+  it('saves transfer bundle bytes via file dialog, skips writeFile on cancel, and calls onDone after save', async () => {
+    const onDone = vi.fn();
+    render(
+      <UiModeProvider initialMode="expert">
+        <TransferSuccessView
+          bundleData={dummyBundleData}
+          recipientId={recipientId}
+          summary="10.00 Minuto"
+          bundleId={bundleId}
+          initialDepositedTo={0}
+          onDone={onDone}
+        />
+      </UiModeProvider>
+    );
+
+    vi.mocked(save).mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByTestId('save-transfer-file-button'));
+    await waitFor(() => {
+      expect(save).toHaveBeenCalledTimes(1);
+    });
+    expect(writeFile).not.toHaveBeenCalled();
+
+    vi.mocked(save).mockResolvedValueOnce('/tmp/exported.transfer');
+    fireEvent.click(screen.getByTestId('save-transfer-file-button'));
+    await waitFor(() => {
+      expect(writeFile).toHaveBeenCalledWith(
+        '/tmp/exported.transfer',
+        new Uint8Array(dummyBundleData),
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Finish & Back to Overview|Abschließen & zurück zur Übersicht/i }));
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces error and stays in pending state when redeposit fails', async () => {
+    vi.mocked(postService.depositTransferToPost).mockRejectedValueOnce(new Error('sync offline'));
+
+    render(
+      <UiModeProvider initialMode="simple">
+        <TransferSuccessView
+          bundleData={dummyBundleData}
+          recipientId={recipientId}
+          summary="10.00 Minuto"
+          bundleId={bundleId}
+          initialDepositedTo={0}
+          onDone={vi.fn()}
+        />
+      </UiModeProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('retry-deposit-button'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/sync offline/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('post-deposit-success-card')).not.toBeInTheDocument();
+    expect(screen.getByTestId('post-deposit-retry-card')).toBeInTheDocument();
   });
 });

@@ -422,4 +422,44 @@ describe('ReceiveSuccessView payment evidence', () => {
     });
     expect(await screen.findByTestId('merchant-approved-badge')).toBeInTheDocument();
   });
+
+  it('calls onDone when clicking Done and surfaces non-tolerance pendingCommit errors without marking approved', async () => {
+    const onDone = vi.fn();
+    (invoke as Mock).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_voucher_summaries') return [];
+      if (cmd === 'receive_bundle') {
+        throw new Error('storage write error');
+      }
+      return undefined;
+    });
+
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          purchaseId: 'bundle-err-1',
+          newlyCommitted: false,
+          isReplay: false,
+          checkoutVerdict: {
+            outcome: 'OfflineOnly',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: true,
+            isGoodsReleaseAuthorized: false,
+          },
+        }}
+        pendingCommit={{
+          bundleData: [9, 8, 7],
+          standardDefinitionsToml: { 'std-1': 'toml' },
+        }}
+        onDone={onDone}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('merchant-approve-btn'));
+    expect(await screen.findByText(/storage write error/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('merchant-approved-badge')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Back to Dashboard|Zurück zur Übersicht/i }));
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
 });

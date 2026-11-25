@@ -47,4 +47,17 @@ describe('SupportView Component', () => {
     expect(screen.getByText('Membership')).toBeInTheDocument();
     expect(screen.getByText('Participation')).toBeInTheDocument();
   });
+
+  it('surfaces error banner when openUrl rejects and triggers onBack when back button is clicked', async () => {
+    const onBack = vi.fn();
+    vi.mocked(openUrl).mockRejectedValueOnce(new Error('opener unavailable'));
+
+    render(<SupportView onBack={onBack} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /To the Association Website/i }));
+    expect(await screen.findByText(/opener unavailable/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle(/Back|Zurück/i));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
 });

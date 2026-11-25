@@ -184,16 +184,27 @@ amount_decimal_places = 4`,
     expect(screen.getByRole('button', { name: /Select File/i })).toBeInTheDocument();
   });
 
-  it('opens file dialog when select button is clicked', async () => {
-    (open as Mock).mockResolvedValue('/path/to/bundle.transfer');
+  it('opens file dialog when select button is clicked and leaves receive_bundle uncalled on cancel', async () => {
+    (open as Mock).mockResolvedValueOnce(null);
 
     render(
       <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
     );
 
+    const selectBtn = await screen.findByRole('button', { name: /Select File/i });
+    fireEvent.click(selectBtn);
+
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Select File/i })).toBeInTheDocument();
+      expect(open).toHaveBeenCalledWith(
+        expect.objectContaining({
+          multiple: false,
+          filters: expect.arrayContaining([
+            expect.objectContaining({ extensions: expect.arrayContaining(['transfer', 'ask', 'sig']) }),
+          ]),
+        }),
+      );
     });
+    expect(invoke).not.toHaveBeenCalledWith('receive_bundle', expect.anything());
   });
 
   it('calls receive_bundle with correct camelCase arguments when importing a transfer', async () => {
@@ -384,5 +395,21 @@ amount_decimal_places = 4`,
     expect(screen.queryByText(/\.transfer/)).not.toBeInTheDocument();
     expect(screen.queryByText(/\.ask/)).not.toBeInTheDocument();
     expect(container.textContent).not.toContain('did:key:');
+  });
+
+  it('calls onBack on header back click and shows error when unsupported file type is chosen', async () => {
+    (open as Mock).mockResolvedValueOnce('/tmp/readme.txt');
+    const { readFile } = await import('@tauri-apps/plugin-fs');
+    (readFile as Mock).mockResolvedValueOnce(new TextEncoder().encode('plain text content'));
+
+    render(
+      <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Select File/i }));
+    expect(await screen.findByText('Invalid file type dropped.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle(/common\.back|Back|Zurück/i));
+    expect(mockOnBack).toHaveBeenCalledTimes(1);
   });
 });
