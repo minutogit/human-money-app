@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `16d34aa`
-- **Total Test Files:** 165 | **Total Test Functions:** 1450
+- **Updated at HEAD:** `670118a`
+- **Total Test Files:** 165 | **Total Test Functions:** 1470
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -99,17 +99,17 @@
 | `src/components/wallet/__tests__/FirstStepsChecklist.test.tsx` | P2 | 7 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 7/7 (906 full pass); fresh-mount localStorage dismiss, hasIdentityRecovery=false->security route, userId/profileScope isolation & Enter/Space keys; Revert-Red FirstStepsChecklist initialSection` |
 | `src/components/wallet/__tests__/SignRequestView.test.tsx` | P2 | 14 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 14/14 (906 full pass); strict bundle/writeFile/dismissPendingPostItem asserts, disallowed role/conflicts, discover_anchor_manifest_cmd, missing-standard L2 block & trust error guard; Revert-Red SignRequestView !standardContent` |
 | `src/components/wallet/__tests__/VoucherDetailsView.test.tsx` | P2 | 6 | 0/0/0 | 🟢 Verified | `16d34aa` | `vitest 10/10 (6 fn, 906 full pass); Fail-First RED->GREEN Commit 1 2669456 useVoucherDetails translateError, unspent/offline_only/unanchored/own-voucher guards, claim-at-guarantor & reducedGuarantorProtection badge` |
-| `src/context/__tests__/NavigationContext.test.tsx` | P2 | 11 | 0/0/0 | ⚪ Pending | — | — |
-| `src/context/__tests__/SessionContext.test.tsx` | P2 | 18 | 0/0/0 | ⚪ Pending | — | — |
-| `src/context/__tests__/SessionContextEvents.test.tsx` | P2 | 2 | 0/0/0 | ⚪ Pending | — | — |
-| `src/context/__tests__/UiModeContext.test.tsx` | P2 | 2 | 0/0/0 | ⚪ Pending | — | — |
-| `src/services/__tests__/commandAccessParity.test.ts` | P2 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/services/__tests__/eventParity.test.ts` | P2 | 1 | 0/0/0 | ⚪ Pending | — | — |
-| `src/services/__tests__/serviceReachability.test.ts` | P2 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/services/__tests__/tauriCommands.test.ts` | P2 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/sync/__tests__/syncBridge.test.ts` | P2 | 3 | 0/0/0 | ⚪ Pending | — | — |
-| `src/test/browserStorage.test.ts` | P2 | 1 | 0/0/0 | ⚪ Pending | — | — |
-| `src/utils/__tests__/walletEvents.test.ts` | P2 | 7 | 0/0/0 | ⚪ Pending | — | — |
+| `src/context/__tests__/NavigationContext.test.tsx` | P2 | 13 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 13/13 (98/98 files, 926 tests full pass); exact 20-entry stack cap assertion, try/finally console spy, navigateToSettingsSection & listProfiles/fallback checks; Revert-Red NavigationContext cap=10` |
+| `src/context/__tests__/SessionContext.test.tsx` | P2 | 20 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 20/20 (926 full pass); fixed Sidebar unlock & App auth-shell placebos, added try/finally cleanup, handover/clone/fork/seal lockdown + useSession/useOptionalSession checks; Revert-Red SessionContext clone lockdown` |
+| `src/context/__tests__/SessionContextEvents.test.tsx` | P2 | 6 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 6/6 (926 full pass); added backup/sync-status cooldown/conflicts bridges, post zero-change guard, selective market events & unmount cleanup; Revert-Red useSessionEventBridge always-emit` |
+| `src/context/__tests__/UiModeContext.test.tsx` | P2 | 5 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 5/5 (926 full pass); covered uncached skip, outside-provider fallback & tourBridge uiMode override w/ try/finally reset; Revert-Red UiModeContext !hasCachedSession` |
+| `src/services/__tests__/commandAccessParity.test.ts` | P2 | 4 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 4/4 (926 full pass); verified protectCommandOptions across all COMMAND_ACCESS_POLICY entries (>20 non-empty); Revert-Red commandPolicy empty options` |
+| `src/services/__tests__/eventParity.test.ts` | P2 | 2 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 2/2 (926 full pass); non-empty 5 coordinator event set assertions in Rust+TS; Revert-Red useSessionEventBridge conflicts-updated-typo` |
+| `src/services/__tests__/serviceReachability.test.ts` | P2 | 4 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 4/4 (926 full pass); non-empty registeredCommands (>20) parser baseline; Revert-Red authService get_session_status_typo` |
+| `src/services/__tests__/tauriCommands.test.ts` | P2 | 4 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 4/4 (926 full pass); positive-baseline size checks (>20) on commands and payloads; Revert-Red authService get_session_status_typo` |
+| `src/sync/__tests__/syncBridge.test.ts` | P2 | 6 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 6/6 (926 full pass); try/finally cleanup, wotUpdated, runSyncBackupPass/runPostSyncPass cooldown & retryAfter + invoke error swallowing; Revert-Red syncBridge cooldown bypass` |
+| `src/test/browserStorage.test.ts` | P2 | 2 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 2/2 (926 full pass); added multi-key removeItem & clear persistence assertions` |
+| `src/utils/__tests__/walletEvents.test.ts` | P2 | 11 | 0/0/0 | 🟢 Verified | `670118a` | `vitest 11/11 (926 full pass); covered activated/voided/expired/quarantined/unknown, malformed/invalid fallbacks, 60s inclusive & direction matching & expiry/NaN edges; Revert-Red walletEvents < 60_000` |
 | `src/utils/__tests__/humocoUri.test.ts` | P3 | 28 | 4/0/0 | ⚪ Pending | — | — |
 | `src/help/__tests__/helpTopics.test.ts` | P3 | 5 | 3/0/13 | ⚪ Pending | — | — |
 | `src/components/shell/__tests__/StatusChip.test.tsx` | P3 | 8 | 2/0/0 | ⚪ Pending | — | — |
