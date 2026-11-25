@@ -127,9 +127,11 @@ export function parseStandardInfo(standard: VoucherStandardInfo): ParsedStandard
             if (key === 'uuid') record.uuid = value;
             else if (key === 'name') record.name = value;
             else if (key === 'abbreviation') record.abbreviation = value;
-        } else if ((inTopLevel || section === 'immutable.blueprint') && typeof value === 'string') {
+        }
+        if ((inTopLevel || section === 'immutable.blueprint') && typeof value === 'string') {
             if (key === 'unit') record.unit = value;
-        } else if (inTopLevel || section === 'immutable.features') {
+        }
+        if (inTopLevel || section === 'immutable.features') {
             if ((key === 'amount_decimal_places' || key === 'amountDecimalPlaces') && typeof value === 'number') {
                 record.decimalPlaces = value;
             } else if ((key === 'allow_partial_transfers' || key === 'allowPartialTransfers') && typeof value === 'boolean') {
@@ -139,11 +141,13 @@ export function parseStandardInfo(standard: VoucherStandardInfo): ParsedStandard
             } else if ((key === 'privacy_mode' || key === 'privacyMode') && typeof value === 'string') {
                 record.privacyMode = value;
             }
-        } else if ((inTopLevel || section === 'mutable.metadata') && typeof value === 'string') {
+        }
+        if ((inTopLevel || section === 'mutable.metadata') && typeof value === 'string') {
             if (key === 'issuer_name' || key === 'issuerName') {
                 record.issuerName = value;
             }
-        } else if (
+        }
+        if (
             (inTopLevel || section === 'mutable.app_config' || section === 'mutable.appConfig') &&
             typeof value === 'string'
         ) {
