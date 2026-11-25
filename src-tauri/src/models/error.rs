@@ -455,4 +455,415 @@ mod tests {
             "error.validation.unsupportedPayloadType"
         );
     }
+
+    #[test]
+    fn test_from_market_error_maps_all_variants() {
+        use humoco_market::MarketError;
+        let cases = [
+            (MarketError::Validation("bad".into()), "error.market.validation"),
+            (MarketError::Identity("id".into()), "error.market.identity"),
+            (
+                MarketError::Serialization("json".into()),
+                "error.market.serialization",
+            ),
+            (MarketError::ParseDate("date".into()), "error.market.parseDate"),
+            (MarketError::Crypto("enc".into()), "error.market.crypto"),
+            (MarketError::InvalidJws("jws".into()), "error.market.invalidCard"),
+            (MarketError::Slot("slot".into()), "error.market.slot"),
+            (
+                MarketError::PayloadTooLarge("big".into()),
+                "error.market.payloadTooLarge",
+            ),
+        ];
+        for (err, expected_code) in cases {
+            let expected_msg = err.to_string();
+            let fe = FrontendError::from(err);
+            assert_eq!(fe.code, expected_code);
+            assert_eq!(fe.message, expected_msg);
+            assert!(fe.details.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_from_wot_error_maps_all_variants() {
+        use humoco_wot::WotError;
+        let cases = [
+            (WotError::InvalidDid("x".into()), "error.wot.invalidDid"),
+            (WotError::WeakPublicKey, "error.wot.invalidSignature"),
+            (WotError::InvalidSignature, "error.wot.invalidSignature"),
+            (
+                WotError::SignerMismatch {
+                    expected: "a".into(),
+                    actual: "b".into(),
+                },
+                "error.wot.invalidSignature",
+            ),
+            (
+                WotError::MalformedSdJwt("sd".into()),
+                "error.wot.malformedPackage",
+            ),
+            (
+                WotError::InvalidTrustLevel(9),
+                "error.wot.invalidTrustLevel",
+            ),
+            (WotError::InvalidHopLimit(0), "error.wot.invalidHopLimit"),
+            (
+                WotError::SelfTrustForbidden,
+                "error.wot.selfTrustForbidden",
+            ),
+            (
+                WotError::FutureTimestamp {
+                    claim_secs: 20,
+                    now_secs: 10,
+                },
+                "error.wot.futureTimestamp",
+            ),
+            (
+                WotError::EquivocationDetected {
+                    issuer: "did:key:z1".into(),
+                    version: 3,
+                },
+                "error.wot.equivocation",
+            ),
+            (
+                WotError::LimitExceeded("max".into()),
+                "error.wot.limitExceeded",
+            ),
+            (
+                WotError::Serialization("ser".into()),
+                "error.wot.serialization",
+            ),
+        ];
+        for (err, expected_code) in cases {
+            let expected_msg = err.to_string();
+            let fe = FrontendError::from(err);
+            assert_eq!(fe.code, expected_code);
+            assert_eq!(fe.message, expected_msg);
+        }
+    }
+
+    #[test]
+    fn test_from_sync_client_error_maps_all_variants_and_details() {
+        use crate::sync_client::SyncClientError;
+
+        let local = FrontendError::from(SyncClientError::LocalValidation("bad url".into()));
+        assert_eq!(local.code, "error.sync.localValidation");
+        assert_eq!(local.message, "bad url");
+        assert!(local.details.is_empty());
+
+        let transport = FrontendError::from(SyncClientError::Transport("timeout".into()));
+        assert_eq!(transport.code, "error.sync.transport");
+        assert_eq!(transport.message, "timeout");
+
+        let rate = FrontendError::from(SyncClientError::RateLimited {
+            status: 429,
+            retry_after_secs: 30,
+            context: "upload".into(),
+            snippet: "slow down".into(),
+        });
+        assert_eq!(rate.code, "error.sync.rateLimited");
+        assert_eq!(rate.details.get("status").map(String::as_str), Some("429"));
+        assert_eq!(
+            rate.details.get("retryAfterSecs").map(String::as_str),
+            Some("30")
+        );
+
+        let http_with_retry = FrontendError::from(SyncClientError::HttpStatus {
+            status: 503,
+            retry_after_secs: Some(12),
+            context: "poll".into(),
+            snippet: "busy".into(),
+        });
+        assert_eq!(http_with_retry.code, "error.sync.httpStatus");
+        assert_eq!(
+            http_with_retry.details.get("status").map(String::as_str),
+            Some("503")
+        );
+        assert_eq!(
+            http_with_retry
+                .details
+                .get("retryAfterSecs")
+                .map(String::as_str),
+            Some("12")
+        );
+
+        let http_no_retry = FrontendError::from(SyncClientError::HttpStatus {
+            status: 404,
+            retry_after_secs: None,
+            context: "get".into(),
+            snippet: "missing".into(),
+        });
+        assert_eq!(http_no_retry.code, "error.sync.httpStatus");
+        assert_eq!(
+            http_no_retry.details.get("status").map(String::as_str),
+            Some("404")
+        );
+        assert!(!http_no_retry.details.contains_key("retryAfterSecs"));
+
+        let too_large = FrontendError::from(SyncClientError::ResponseTooLarge {
+            max_bytes: 4096,
+            context: "slot".into(),
+        });
+        assert_eq!(too_large.code, "error.sync.responseTooLarge");
+        assert_eq!(
+            too_large.details.get("maxBytes").map(String::as_str),
+            Some("4096")
+        );
+
+        let invalid = FrontendError::from(SyncClientError::InvalidPayload("corrupt".into()));
+        assert_eq!(invalid.code, "error.sync.invalidPayload");
+        assert_eq!(invalid.message, "corrupt");
+    }
+
+    #[test]
+    fn test_from_app_facade_error_maps_all_variants() {
+        use human_money_core::error::AppError;
+        use human_money_core::wallet::instance::VoucherStatus;
+
+        assert_eq!(
+            FrontendError::from(AppFacadeError::WalletLocked).code,
+            "error.wallet.locked"
+        );
+        assert_eq!(
+            FrontendError::from(AppFacadeError::SessionExpired("exp".into())).code,
+            "error.auth.sessionTimeout"
+        );
+        assert_eq!(
+            FrontendError::from(AppFacadeError::App(AppError::SessionExpired {
+                reason: "ttl".into(),
+            }))
+            .code,
+            "error.auth.sessionTimeout"
+        );
+        assert_eq!(
+            FrontendError::from(AppFacadeError::SessionNotActive("none".into())).code,
+            "error.auth.sessionNotActive"
+        );
+        assert_eq!(
+            FrontendError::from(AppFacadeError::App(AppError::SessionNotActive {
+                reason: "locked".into(),
+            }))
+            .code,
+            "error.auth.sessionNotActive"
+        );
+
+        let ds = FrontendError::from(AppFacadeError::DoubleSpendAttemptBlocked {
+            local_instance_id: "inst-42".into(),
+        });
+        assert_eq!(ds.code, "error.conflict.doubleSpendBlocked");
+        assert_eq!(
+            ds.details.get("localInstanceId").map(String::as_str),
+            Some("inst-42")
+        );
+
+        assert_eq!(
+            FrontendError::from(AppFacadeError::RequiresSealRecovery).code,
+            "error.security.sealRecoveryRequired"
+        );
+        assert_eq!(
+            FrontendError::from(AppFacadeError::StateRollbackDetected).code,
+            "error.security.rollbackDetected"
+        );
+        assert_eq!(
+            FrontendError::from(AppFacadeError::WalletLockedDueToFork).code,
+            "error.security.walletLockedDueToFork"
+        );
+
+        let mode = FrontendError::from(AppFacadeError::App(AppError::InsufficientAccessMode {
+            required: "Full".into(),
+            current: "ReadOnly".into(),
+        }));
+        assert_eq!(mode.code, "error.auth.insufficientAccessMode");
+        assert_eq!(
+            mode.details.get("required").map(String::as_str),
+            Some("Full")
+        );
+        assert_eq!(
+            mode.details.get("current").map(String::as_str),
+            Some("ReadOnly")
+        );
+
+        assert_eq!(
+            FrontendError::from(AppFacadeError::VoucherNotActive(
+                VoucherStatus::Quarantined {
+                    reason: "fork".into(),
+                }
+            ))
+            .code,
+            "error.conflict.voucherQuarantined"
+        );
+        assert_eq!(
+            FrontendError::from(AppFacadeError::VoucherNotActive(VoucherStatus::Active)).code,
+            "error.validation.voucherNotActive"
+        );
+
+        let generic_val = FrontendError::from(AppFacadeError::Validation(
+            human_money_core::error::ValidationError::InvalidBundleSignature,
+        ));
+        assert_eq!(generic_val.code, "error.validation.generic");
+
+        let fallback_quarantine = FrontendError::from(AppFacadeError::VoucherInQuarantine);
+        assert_eq!(fallback_quarantine.code, "error.conflict.voucherQuarantined");
+
+        let insufficient_facade = FrontendError::from(AppFacadeError::InsufficientFunds {
+            available: "20".parse().unwrap(),
+            needed: "50".parse().unwrap(),
+        });
+        assert_eq!(
+            insufficient_facade.code,
+            "error.validation.insufficientFunds"
+        );
+        assert_eq!(
+            insufficient_facade.details.get("needed").map(String::as_str),
+            Some("50")
+        );
+        assert_eq!(
+            insufficient_facade
+                .details
+                .get("available")
+                .map(String::as_str),
+            Some("20")
+        );
+    }
+
+    #[test]
+    fn test_classify_validation_message_and_value_extractors() {
+        assert_eq!(
+            classify_validation_message("Standard is still in use")
+                .unwrap()
+                .0,
+            "standards.inUseError"
+        );
+        assert_eq!(
+            classify_validation_message("Template in use by 3 vouchers")
+                .unwrap()
+                .0,
+            "standards.inUseError"
+        );
+
+        let (code_init, details_init) = classify_validation_message(
+            "Initial transaction amount must match nominal value. Expected: 100, Found: 50.",
+        )
+        .unwrap();
+        assert_eq!(code_init, "error.validation.initAmountMismatch");
+        assert_eq!(
+            details_init.get("expected").map(String::as_str),
+            Some("100")
+        );
+        assert_eq!(details_init.get("found").map(String::as_str), Some("50"));
+
+        let (code_init_no_labels, details_init_no_labels) =
+            classify_validation_message("Initial transaction amount must match").unwrap();
+        assert_eq!(code_init_no_labels, "error.validation.initAmountMismatch");
+        assert!(details_init_no_labels.is_empty());
+
+        let (code_funds, details_funds) =
+            classify_validation_message("Insufficient funds. Needed: 50, Available: 20. ").unwrap();
+        assert_eq!(code_funds, "error.validation.insufficientFunds");
+        assert_eq!(details_funds.get("needed").map(String::as_str), Some("50"));
+        assert_eq!(
+            details_funds.get("available").map(String::as_str),
+            Some("20")
+        );
+
+        let (code_funds_no_labels, details_funds_no_labels) =
+            classify_validation_message("Insufficient funds").unwrap();
+        assert_eq!(code_funds_no_labels, "error.validation.insufficientFunds");
+        assert!(details_funds_no_labels.is_empty());
+
+        assert_eq!(
+            extract_expected_found("Expected: 100, Found: 50. "),
+            Some(("100".to_string(), "50".to_string()))
+        );
+        assert_eq!(extract_expected_found("Expected: 100 without found"), None);
+        assert_eq!(extract_expected_found("Found: 50 without expected"), None);
+
+        assert_eq!(
+            extract_two_labeled_values("Needed: 75, Available: 12.50.", "Needed:", "Available:"),
+            Some(("75".to_string(), "12.50".to_string()))
+        );
+        assert_eq!(
+            extract_two_labeled_values("Available: 12.50, Needed: 75.", "Needed:", "Available:"),
+            Some(("75".to_string(), "12.50".to_string()))
+        );
+        assert_eq!(
+            extract_two_labeled_values("Needed: 75", "Needed:", "Available:"),
+            None
+        );
+        assert!(classify_validation_message("unrelated error").is_none());
+    }
+
+    #[test]
+    fn test_classify_error_all_string_branches_and_from_string() {
+        let cases = [
+            ("Security Alert: missing seal", "error.security.sealRecoveryRequired"),
+            (
+                "Critical Error: Wallet state manipulation detected",
+                "error.security.rollbackDetected",
+            ),
+            ("Wallet is locked.", "error.wallet.locked"),
+            ("AppService is locked", "error.wallet.locked"),
+            ("Session timed out after idle", "error.auth.sessionTimeout"),
+            ("Password required to unlock", "error.auth.passwordRequired"),
+            ("Seal device mismatch occurred", "error.auth.deviceMismatch"),
+            ("Wallet belongs to a different device", "error.auth.deviceMismatch"),
+            ("Device Mismatch: wrong host", "error.auth.deviceMismatch"),
+            (
+                "Action aborted: quarantined due to a detected double-spend",
+                "error.conflict.voucherQuarantined",
+            ),
+            (
+                "Double spend attempt blocked for v1",
+                "error.conflict.doubleSpendBlocked",
+            ),
+            (
+                "Initial transaction amount must match nominal value. Expected: 10, Found: 5.",
+                "error.validation.initAmountMismatch",
+            ),
+            ("Transaction Rejected: too old", "error.transfer.bundleTooOld"),
+            (
+                "CRITICAL WARNING: recovery zone",
+                "error.transfer.bundleRecoveryZone",
+            ),
+            (
+                "Warning: This transaction occurred shortly before recovery",
+                "error.transfer.bundleToleranceZone",
+            ),
+            (
+                "Recipient sync inbox unreachable at host",
+                "error.post.recipientUnreachable",
+            ),
+            (
+                "Incorrect answers to the security questions",
+                "error.recovery.wrongAnswers",
+            ),
+            (
+                "BIP39_PASSPHRASE_REQUIRED to decrypt",
+                "error.recovery.bip39PassphraseRequired",
+            ),
+            (
+                "SYNC_UNREACHABLE while polling",
+                "error.recovery.syncUnreachable",
+            ),
+            (
+                "Guarantor anchor verification failed for v1",
+                "error.voucher.guarantorAnchorCheckFailed",
+            ),
+            ("Something completely unexpected", "error.internal.unknown"),
+        ];
+        for (input, expected_code) in cases {
+            let (code, _) = classify_error(input);
+            assert_eq!(code, expected_code, "input was: {input}");
+        }
+
+        let from_str = FrontendError::from("Wallet is locked.".to_string());
+        assert_eq!(from_str.code, "error.wallet.locked");
+        assert_eq!(from_str.message, "Wallet is locked.");
+
+        let pubkey_err = FrontendError::from(
+            human_money_core::crypto::GetPubkeyError::InvalidPrefix,
+        );
+        assert_eq!(pubkey_err.code, "error.internal.unknown");
+        assert!(pubkey_err.message.contains("Invalid prefix"));
+    }
 }

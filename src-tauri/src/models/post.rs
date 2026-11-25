@@ -215,17 +215,61 @@ mod tests {
         );
 
         // Zero-Compat: snake_case fields and unknown fields must be rejected.
-        assert!(serde_json::from_str::<FrontendInquiryTarget>(
-            r#"{"kind":"ad","ad_id":"0123456789abcdef","ad_title":"Forest Honey"}"#
+        let snake_ad_err = serde_json::from_str::<FrontendInquiryTarget>(
+            r#"{"kind":"ad","ad_id":"0123456789abcdef","adTitle":"Forest Honey"}"#,
         )
-        .is_err());
-        assert!(serde_json::from_str::<FrontendInquiryTarget>(
-            r#"{"kind":"person","skill_title":"Carpentry"}"#
+        .unwrap_err()
+        .to_string();
+        assert!(
+            snake_ad_err.contains("unknown field") && snake_ad_err.contains("ad_id"),
+            "unexpected snake_case ad error: {snake_ad_err}"
+        );
+
+        let snake_person_err = serde_json::from_str::<FrontendInquiryTarget>(
+            r#"{"kind":"person","skill_title":"Carpentry"}"#,
         )
-        .is_err());
-        assert!(serde_json::from_str::<FrontendInquiryTarget>(
-            r#"{"kind":"ad","adId":"0123456789abcdef","adTitle":"Forest Honey","extra":1}"#
+        .unwrap_err()
+        .to_string();
+        assert!(
+            snake_person_err.contains("unknown field") && snake_person_err.contains("skill_title"),
+            "unexpected snake_case person error: {snake_person_err}"
+        );
+
+        let extra_err = serde_json::from_str::<FrontendInquiryTarget>(
+            r#"{"kind":"ad","adId":"0123456789abcdef","adTitle":"Forest Honey","extra":1}"#,
         )
-        .is_err());
+        .unwrap_err()
+        .to_string();
+        assert!(
+            extra_err.contains("unknown field") && extra_err.contains("extra"),
+            "unexpected extra field error: {extra_err}"
+        );
+    }
+
+    #[test]
+    fn test_frontend_inquiry_target_market_roundtrip() {
+        let ad = FrontendInquiryTarget::Ad {
+            ad_id: "ad-42".into(),
+            ad_title: "Organic Apples".into(),
+        };
+        let market_ad = humoco_market::InquiryTarget::from(ad.clone());
+        assert_eq!(
+            market_ad,
+            humoco_market::InquiryTarget::Ad {
+                ad_id: "ad-42".into(),
+                ad_title: "Organic Apples".into(),
+            }
+        );
+        assert_eq!(FrontendInquiryTarget::from(market_ad), ad);
+
+        for person in [
+            FrontendInquiryTarget::Person {
+                skill_title: Some("Plumbing".into()),
+            },
+            FrontendInquiryTarget::Person { skill_title: None },
+        ] {
+            let market_person = humoco_market::InquiryTarget::from(person.clone());
+            assert_eq!(FrontendInquiryTarget::from(market_person), person);
+        }
     }
 }

@@ -643,15 +643,188 @@ mod tests {
             transactions: vec![],
             signatures: vec![],
         };
-        let err = human_money_core::models::voucher::Voucher::try_from(bad_voucher.clone());
+        let err = human_money_core::models::voucher::Voucher::try_from(bad_voucher.clone())
+            .unwrap_err();
         assert!(
-            err.is_err(),
-            "S06-F3: malformed non-empty layer2_anchor must fail TryFrom instead of becoming None"
+            err.message.starts_with("Invalid layer2_anchor hex:"),
+            "S06-F3: unexpected malformed anchor error: {}",
+            err.message
         );
+        assert_eq!(err.code, "error.internal.unknown");
 
-        let mut empty_anchor = bad_voucher;
+        let mut empty_anchor = bad_voucher.clone();
         empty_anchor.layer2_anchor = Some("   ".into());
         let ok = human_money_core::models::voucher::Voucher::try_from(empty_anchor).unwrap();
         assert_eq!(ok.layer2_anchor, None);
+
+        let mut none_anchor = bad_voucher.clone();
+        none_anchor.layer2_anchor = None;
+        let ok_none = human_money_core::models::voucher::Voucher::try_from(none_anchor).unwrap();
+        assert_eq!(ok_none.layer2_anchor, None);
+
+        let valid_hex = "ab".repeat(32);
+        let mut valid_anchor = bad_voucher;
+        valid_anchor.layer2_anchor = Some(format!("  {}  ", valid_hex));
+        let core_with_anchor =
+            human_money_core::models::voucher::Voucher::try_from(valid_anchor).unwrap();
+        assert_eq!(core_with_anchor.layer2_anchor, Some([0xab; 32]));
+        let back_to_fe = FrontendVoucher::from(core_with_anchor);
+        assert_eq!(back_to_fe.layer2_anchor.as_deref(), Some(valid_hex.as_str()));
+    }
+
+    #[test]
+    fn test_voucher_summary_details_and_subdto_conversions() {
+        use human_money_core::models::voucher::{
+            Collateral, Transaction, TrapData, ValueDefinition, Voucher, VoucherSignature,
+            VoucherStandard,
+        };
+        use human_money_core::services::voucher_validation::SignatureImpact;
+        use human_money_core::wallet::instance::VoucherStatus;
+        use human_money_core::wallet::types::{AssetClassSummary, VoucherDetails, VoucherSummary};
+
+        let status_cases = [
+            (
+                VoucherStatus::Incomplete { reasons: vec![] },
+                "incomplete",
+            ),
+            (VoucherStatus::Active, "active"),
+            (VoucherStatus::Archived, "archived"),
+            (
+                VoucherStatus::Quarantined {
+                    reason: "fork".into(),
+                },
+                "quarantined",
+            ),
+            (
+                VoucherStatus::Endorsed {
+                    role: "guarantor".into(),
+                },
+                "endorsed",
+            ),
+            (VoucherStatus::Expired, "expired"),
+        ];
+
+        for (status, expected_str) in status_cases {
+            let summary = VoucherSummary {
+                local_instance_id: "inst-1".into(),
+                status: status.clone(),
+                creator_id: "did:key:zAlice".into(),
+                valid_until: "2027-01-01T00:00:00Z".into(),
+                current_amount: "10.00".into(),
+                unit: "FT".into(),
+                raw_standard_name: "FreeTaler".into(),
+                voucher_standard_uuid: "uuid-ft".into(),
+                transaction_count: 2,
+                signatures_count: 1,
+                has_collateral: false,
+                creator_first_name: "Alice".into(),
+                creator_last_name: "Smith".into(),
+                creator_coordinates: "48.1,11.5".into(),
+                is_test_voucher: false,
+                display_currency: "FT".into(),
+                display_standard_name: "FreeTaler".into(),
+            };
+            let fe_sum = FrontendVoucherSummary::from(summary);
+            assert_eq!(fe_sum.status, expected_str);
+            assert!(fe_sum.allow_partial_transfers);
+            assert!(!fe_sum.has_layer2_anchor);
+
+            let core_voucher = Voucher {
+                voucher_standard: VoucherStandard {
+                    name: "FreeTaler".into(),
+                    uuid: "uuid-ft".into(),
+                    standard_definition_hash: "h".into(),
+                },
+                voucher_id: "v1".into(),
+                voucher_nonce: "n1".into(),
+                creation_date: "2026-01-01T00:00:00Z".into(),
+                valid_until: "2027-01-01T00:00:00Z".into(),
+                non_redeemable_test_voucher: true,
+                nominal_value: ValueDefinition {
+                    unit: "FT".into(),
+                    amount: "25.00".into(),
+                    abbreviation: Some("F".into()),
+                    description: Some("desc".into()),
+                },
+                collateral: Some(Collateral {
+                    value: ValueDefinition {
+                        unit: "EUR".into(),
+                        amount: "5".into(),
+                        abbreviation: None,
+                        description: None,
+                    },
+                    collateral_type: Some("pledge".into()),
+                    redeem_condition: Some("due".into()),
+                }),
+                creator_profile: Default::default(),
+                layer2_anchor: Some([0x11; 32]),
+                transactions: vec![Transaction {
+                    t_id: "tx-1".into(),
+                    t_type: "init".into(),
+                    t_time: "2026-01-01T00:00:00Z".into(),
+                    prev_hash: "p0".into(),
+                    receiver_ephemeral_pub_hash: Some("rh".into()),
+                    sender_id: Some("did:key:zAlice".into()),
+                    sender_identity_signature: Some("sig".into()),
+                    recipient_id: "did:key:zBob".into(),
+                    amount: "25.00".into(),
+                    sender_remaining_amount: None,
+                    sender_ephemeral_pub: None,
+                    change_ephemeral_pub_hash: None,
+                    privacy_guard: Some("pg".into()),
+                    trap_data: Some(TrapData {
+                        ds_tag: "ds".into(),
+                        trap_r: "r".into(),
+                        trap_s: "s".into(),
+                    }),
+                    layer2_signature: None,
+                    deletable_at: None,
+                }],
+                signatures: vec![VoucherSignature {
+                    voucher_id: "v1".into(),
+                    signature_id: "s1".into(),
+                    signer_id: "did:key:zGuarantor".into(),
+                    signature: "sig-g".into(),
+                    signature_time: "2026-01-02T00:00:00Z".into(),
+                    role: "guarantor".into(),
+                    details: Some(Default::default()),
+                }],
+            };
+
+            let details = VoucherDetails {
+                local_instance_id: "inst-1".into(),
+                status,
+                voucher: core_voucher.clone(),
+                display_currency: "TEST-FT".into(),
+                display_standard_name: "TEST-FreeTaler".into(),
+                is_test_voucher: true,
+            };
+            let fe_det = FrontendVoucherDetails::from(details);
+            assert_eq!(fe_det.status, expected_str);
+            assert_eq!(fe_det.current_amount, "25.00");
+            assert!(!fe_det.reduced_guarantor_protection);
+            let roundtripped = Voucher::try_from(fe_det.voucher).unwrap();
+            assert_eq!(roundtripped, core_voucher);
+        }
+
+        let asset = FrontendAssetClassSummary::from(AssetClassSummary {
+            standard_uuid: "u".into(),
+            is_test_voucher: true,
+            display_standard_name: "TEST-S".into(),
+            display_currency: "TEST-C".into(),
+        });
+        assert_eq!(asset.standard_uuid, "u");
+        assert!(asset.is_test_voucher);
+
+        let impact = FrontendSignatureImpact::from(SignatureImpact {
+            is_allowed_role: true,
+            fatal_conflicts: vec!["f1".into()],
+            resolved_rules: vec!["r1".into()],
+            gentle_hints: vec!["g1".into()],
+        });
+        assert!(impact.is_allowed_role);
+        assert_eq!(impact.fatal_conflicts, vec!["f1"]);
+        assert_eq!(impact.resolved_rules, vec!["r1"]);
+        assert_eq!(impact.gentle_hints, vec!["g1"]);
     }
 }

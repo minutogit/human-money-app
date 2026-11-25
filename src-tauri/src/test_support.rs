@@ -799,12 +799,13 @@ mod s11_tests {
             Some("card")
         );
 
-        assert!(
-            crate::sync_client::put_slot(&client, &write_url, &signed, "post", b"no", None)
-                .await
-                .is_err(),
-            "Alice is not in channel_members['post'] -> must return 403"
-        );
+        match crate::sync_client::put_slot(&client, &write_url, &signed, "post", b"no", None).await
+        {
+            Err(crate::sync_client::SyncClientError::HttpStatus { status, .. }) => {
+                assert_eq!(status, 403, "Alice is not in channel_members['post']");
+            }
+            other => panic!("expected HttpStatus 403 for unauthorized post channel, got {other:?}"),
+        }
         crate::sync_client::put_slot(
             &client,
             &write_url,

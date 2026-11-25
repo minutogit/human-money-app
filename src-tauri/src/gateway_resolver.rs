@@ -387,6 +387,40 @@ mod tests {
     use human_money_core::humoco_proto::manifest::NominatedBy;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 4096];
+        let mut header_end: Option<usize> = None;
+        let mut content_len: usize = 0;
+
+        loop {
+            let n = stream.read(&mut buf).await.unwrap();
+            assert!(n > 0, "expected non-empty HTTP request before EOF");
+            raw.extend_from_slice(&buf[..n]);
+            if header_end.is_none() {
+                if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let end = pos + 4;
+                    let headers_str = String::from_utf8_lossy(&raw[..end]);
+                    content_len = headers_str
+                        .lines()
+                        .find_map(|line| {
+                            let (k, v) = line.split_once(':')?;
+                            k.trim()
+                                .eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    header_end = Some(end);
+                }
+            }
+            if let Some(end) = header_end {
+                if raw.len() >= end + content_len {
+                    return raw;
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_sybil_fold_committee_dedupes_domains_admins_and_asns() {
         let a1 = SybilServerCandidate {
@@ -394,6 +428,13 @@ mod tests {
             lock_pub: [1u8; 32],
             admin_pub: Some([10u8; 32]),
             asn: Some(64500),
+        };
+        // Different URL, admin_pub, ASN, same lock_pub -> folded!
+        let a1_dup_lock = SybilServerCandidate {
+            write_url: "https://completely-different.example/sync.php".into(),
+            lock_pub: [1u8; 32],
+            admin_pub: Some([99u8; 32]),
+            asn: Some(64555),
         };
         // Different lock_pub, different admin_pub, same registrable domain -> folded!
         let a2 = SybilServerCandidate {
@@ -424,10 +465,165 @@ mod tests {
             asn: Some(64599),
         };
 
-        let folded = sybil_fold_committee(&[a1, a2, a3, a4, b1]);
+        let folded = sybil_fold_committee(&[a1, a1_dup_lock, a2, a3, a4, b1]);
         assert_eq!(folded.len(), 2);
         assert_eq!(folded[0].lock_pub, [1u8; 32]);
         assert_eq!(folded[1].lock_pub, [5u8; 32]);
+    }
+
+    #[test]
+    fn test_extract_registrable_domain_edge_cases() {
+        assert_eq!(
+            extract_registrable_domain("http://127.0.0.1:8080/sync.php").as_deref(),
+            Some("127.0.0.1:8080")
+        );
+        assert_eq!(
+            extract_registrable_domain("http://127.0.0.1/sync.php").as_deref(),
+            Some("127.0.0.1:80")
+        );
+        assert_eq!(
+            extract_registrable_domain("http://[::1]:9000/sync.php").as_deref(),
+            Some("::1:9000")
+        );
+        assert_eq!(
+            extract_registrable_domain("https://93.184.216.34:8443/sync.php").as_deref(),
+            Some("93.184.216.34")
+        );
+        assert_eq!(
+            extract_registrable_domain("https://[2001:db8::1]:8443/sync.php").as_deref(),
+            Some("2001:db8::1")
+        );
+        assert_eq!(
+            extract_registrable_domain("http://localhost:3000/sync.php").as_deref(),
+            Some("localhost:3000")
+        );
+        assert_eq!(
+            extract_registrable_domain("http://sub.localhost:3001/sync.php").as_deref(),
+            Some("sub.localhost:3001")
+        );
+        assert_eq!(
+            extract_registrable_domain("https://a.b.co.uk/sync.php").as_deref(),
+            Some("b.co.uk")
+        );
+        assert_eq!(
+            extract_registrable_domain("https://x.y.com.au/sync.php").as_deref(),
+            Some("y.com.au")
+        );
+        assert_eq!(
+            extract_registrable_domain("https://a.b.example.org/sync.php").as_deref(),
+            Some("example.org")
+        );
+        assert_eq!(
+            extract_registrable_domain("HTTPS://Sub.Example.ORG./sync.php").as_deref(),
+            Some("example.org")
+        );
+        assert_eq!(
+            extract_registrable_domain("http://intranet/sync.php").as_deref(),
+            Some("intranet")
+        );
+        assert_eq!(extract_registrable_domain(""), None);
+        assert_eq!(extract_registrable_domain("not-a-valid-url"), None);
+    }
+
+    #[test]
+    fn test_summarize_intent_dispatch_states() {
+        use human_money_core::humoco_proto::causal::{LockEntry, HOP_ENCRYPTED_PAYLOAD_LEN};
+
+        let mut ok_200 = CommitteeDispatchResult::default();
+        ok_200.http_statuses.push(([1u8; 32], Some(200)));
+        let obs_200 = summarize_intent_dispatch("inst-200", &ok_200);
+        assert_eq!(obs_200.local_instance_id, "inst-200");
+        assert_eq!(obs_200.status, "confirmed");
+        assert_eq!(obs_200.http_status, Some(200));
+
+        let mut ok_201 = CommitteeDispatchResult::default();
+        ok_201.http_statuses.push(([1u8; 32], Some(201)));
+        let obs_201 = summarize_intent_dispatch("inst-201", &ok_201);
+        assert_eq!(obs_201.status, "confirmed");
+        assert_eq!(obs_201.http_status, Some(201));
+
+        let mut conflict_entry = ok_200.clone();
+        conflict_entry.competing_entries.push(LockEntry {
+            slot: [1u8; 32],
+            parent_slot: [0u8; 32],
+            output_branch: 0,
+            depth: 0,
+            child_lock: [2u8; 32],
+            sender_pubkey: [3u8; 32],
+            receiver_pubkey_hash: [4u8; 32],
+            change_pubkey_hash: None,
+            causal_sig: [5u8; 64],
+            root_mig_sig: None,
+            encrypted_payload: [0u8; HOP_ENCRYPTED_PAYLOAD_LEN],
+            pow_nonce: 0,
+        });
+        assert_eq!(
+            summarize_intent_dispatch("inst-ce", &conflict_entry).status,
+            "conflicted"
+        );
+
+        let mut conflict_receipt = CommitteeDispatchResult::default();
+        conflict_receipt.receipts.push(LockReceipt {
+            kind: LockReceiptKind::ConflictSeen,
+            lock_pub: [1u8; 32],
+            bucket: [2u8; 32],
+            slot: [3u8; 32],
+            child_lock: [4u8; 32],
+            entry_hash: [5u8; 32],
+            retain_until_quarter: 8159,
+            write_seq: 1,
+            bucket_head: [6u8; 32],
+            recipient_nonce: [7u8; 32],
+            sig: [0u8; 64],
+        });
+        assert_eq!(
+            summarize_intent_dispatch("inst-cr", &conflict_receipt).status,
+            "conflicted"
+        );
+
+        let srv = ServerEntry {
+            write_url: "https://sync.example/sync.php".into(),
+            read_url: "https://sync.example/d".into(),
+            admin_pub: [8u8; 32],
+            lock_pub: [9u8; 32],
+            nominated_by: NominatedBy::Creator,
+        };
+        let req = SyncLockBatchRequest {
+            anchor_id: [1u8; 32],
+            bucket: [2u8; 32],
+            recipient_nonce: [3u8; 32],
+            entries: vec![],
+            manifest: None,
+            genesis_ticket: None,
+            known_head_receipt: None,
+        };
+        let mut with_retry = ok_200.clone();
+        with_retry.pending_retries.push((srv, req));
+        assert_eq!(
+            summarize_intent_dispatch("inst-retry", &with_retry).status,
+            "pending"
+        );
+
+        let mut with_rejected = ok_200;
+        with_rejected
+            .rejected_errors
+            .push(([1u8; 32], 400, "bad".into()));
+        assert_eq!(
+            summarize_intent_dispatch("inst-rej", &with_rejected).status,
+            "pending"
+        );
+
+        let mut mixed_none_500 = CommitteeDispatchResult::default();
+        mixed_none_500.http_statuses.push(([1u8; 32], None));
+        mixed_none_500.http_statuses.push(([2u8; 32], Some(500)));
+        let obs_500 = summarize_intent_dispatch("inst-500", &mixed_none_500);
+        assert_eq!(obs_500.status, "pending");
+        assert_eq!(obs_500.http_status, Some(500));
+
+        let obs_empty =
+            summarize_intent_dispatch("inst-empty", &CommitteeDispatchResult::default());
+        assert_eq!(obs_empty.status, "pending");
+        assert_eq!(obs_empty.http_status, None);
     }
 
     #[tokio::test]
@@ -487,8 +683,8 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 4096];
-            let _ = stream.read(&mut buf).await.unwrap();
+            let req = read_http_request(&mut stream).await;
+            assert!(req.starts_with(b"POST "));
             let http = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                 resp_body.len(),
@@ -615,8 +811,8 @@ mod tests {
 
             let server = tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
-                let mut buf = [0u8; 4096];
-                let _ = stream.read(&mut buf).await.unwrap();
+                let req = read_http_request(&mut stream).await;
+                assert!(req.starts_with(b"POST "));
                 let http = format!(
                     "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                     resp_body.len(),
@@ -802,8 +998,8 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 8192];
-            let _ = stream.read(&mut buf).await.unwrap();
+            let req = read_http_request(&mut stream).await;
+            assert!(req.starts_with(b"POST "));
             let http = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                 resp_body.len(),

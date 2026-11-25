@@ -768,10 +768,19 @@ pub fn run() {
 #[cfg(test)]
 mod launch_tests {
     use super::{
-        extract_launch_items_from_args, format_linux_desktop_entry, has_allow_multiple_flag,
-        parse_authenticated_ipc_frame, parse_ipc_addr_file, read_bounded_ipc_frame,
-        write_ipc_addr_file, MAX_STARTUP_LAUNCH_ITEMS,
+        constant_time_eq, extract_launch_items_from_args, format_linux_desktop_entry,
+        has_allow_multiple_flag, parse_authenticated_ipc_frame, parse_ipc_addr_file,
+        read_bounded_ipc_frame, write_ipc_addr_file, MAX_LAUNCH_FILE_BYTES,
+        MAX_STARTUP_LAUNCH_ITEMS,
     };
+
+    struct TempDirGuard(std::path::PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn test_has_allow_multiple_flag() {
@@ -787,25 +796,51 @@ mod launch_tests {
 
     #[test]
     fn test_extract_launch_items_accepts_humoco_links_and_file_urls() {
-        let dir = std::env::temp_dir().join(format!("launch-args-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file_path = dir.join("sample.transfer");
+        let dir = TempDirGuard(
+            std::env::temp_dir().join(format!("launch-args-{}", uuid::Uuid::new_v4())),
+        );
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let file_path = dir.0.join("sample.transfer");
         std::fs::write(&file_path, b"dummy").unwrap();
         let file_url = url::Url::from_file_path(&file_path).unwrap().to_string();
 
-        let txt_path = dir.join("secret.txt");
+        let upper_path = dir.0.join("UPPER.HMCARD");
+        std::fs::write(&upper_path, b"card").unwrap();
+
+        let sub_dir = dir.0.join("dir.transfer");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+
+        let exact_max_path = dir.0.join("exact_max.humoco");
+        std::fs::File::create(&exact_max_path)
+            .unwrap()
+            .set_len(MAX_LAUNCH_FILE_BYTES)
+            .unwrap();
+
+        let over_max_path = dir.0.join("over_max.humoco");
+        std::fs::File::create(&over_max_path)
+            .unwrap()
+            .set_len(MAX_LAUNCH_FILE_BYTES + 1)
+            .unwrap();
+
+        let txt_path = dir.0.join("secret.txt");
         std::fs::write(&txt_path, b"secret").unwrap();
-        let json_path = dir.join("keys.json");
+        let json_path = dir.0.join("keys.json");
         std::fs::write(&json_path, b"{}").unwrap();
-        let extless_path = dir.join("passwd");
+        let extless_path = dir.0.join("passwd");
         std::fs::write(&extless_path, b"root").unwrap();
         let txt_url = url::Url::from_file_path(&txt_path).unwrap().to_string();
 
         let extracted = extract_launch_items_from_args([
+            "",
+            "   ",
             "  humoco://pay?to=did:key:abc&amount=5 ",
             "HUMOCO://RECOVERY-REPLY?v=1&data=xyz",
             &file_url,
             file_path.to_str().unwrap(),
+            upper_path.to_str().unwrap(),
+            exact_max_path.to_str().unwrap(),
+            over_max_path.to_str().unwrap(),
+            sub_dir.to_str().unwrap(),
             txt_path.to_str().unwrap(),
             json_path.to_str().unwrap(),
             extless_path.to_str().unwrap(),
@@ -815,13 +850,23 @@ mod launch_tests {
             "/nonexistent/path/to/file.transfer",
         ]);
 
-        assert_eq!(extracted.len(), 4);
+        assert_eq!(extracted.len(), 6);
         assert_eq!(extracted[0], "humoco://pay?to=did:key:abc&amount=5");
         assert_eq!(extracted[1], "HUMOCO://RECOVERY-REPLY?v=1&data=xyz");
         assert_eq!(extracted[2], file_path.to_string_lossy());
         assert_eq!(extracted[3], file_path.to_string_lossy());
+        assert_eq!(extracted[4], upper_path.to_string_lossy());
+        assert_eq!(extracted[5], exact_max_path.to_string_lossy());
+    }
 
-        let _ = std::fs::remove_dir_all(dir);
+    #[test]
+    fn test_constant_time_eq_semantics() {
+        assert!(constant_time_eq(b"", b""));
+        assert!(constant_time_eq(b"secret-token", b"secret-token"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(&[0x00, 0xFF], &[0x00, 0xFE]));
+        assert!(!constant_time_eq(&[0x01], &[0x00]));
+        assert!(!constant_time_eq(&[0x00; 4], &[0x00, 0x00, 0x01, 0x00]));
     }
 
     #[test]
@@ -837,8 +882,10 @@ mod launch_tests {
         // Extra trailing field rejected
         assert!(parse_ipc_addr_file(&format!("127.0.0.1:12345 {} extra", valid_token)).is_none());
 
-        let dir = std::env::temp_dir().join(format!("ipc-addr-{}", uuid::Uuid::new_v4()));
-        let path = dir.join("instance_ipc.addr");
+        let dir = TempDirGuard(
+            std::env::temp_dir().join(format!("ipc-addr-{}", uuid::Uuid::new_v4())),
+        );
+        let path = dir.0.join("instance_ipc.addr");
         let addr: std::net::SocketAddr = "127.0.0.1:45678".parse().unwrap();
         write_ipc_addr_file(&path, addr, valid_token).unwrap();
 
@@ -853,12 +900,44 @@ mod launch_tests {
         let (parsed_addr, parsed_token) = parse_ipc_addr_file(&raw).unwrap();
         assert_eq!(parsed_addr, addr);
         assert_eq!(parsed_token, valid_token);
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn test_parse_authenticated_ipc_frame_and_bounded_reader() {
+        struct InterruptedOnceReader {
+            data: Vec<u8>,
+            offset: usize,
+            interrupted: bool,
+        }
+        impl std::io::Read for InterruptedOnceReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "transient signal",
+                    ));
+                }
+                let rem = self.data.len() - self.offset;
+                if rem == 0 {
+                    return Ok(0);
+                }
+                let n = rem.min(buf.len());
+                buf[..n].copy_from_slice(&self.data[self.offset..self.offset + n]);
+                self.offset += n;
+                Ok(n)
+            }
+        }
+        struct BrokenPipeReader;
+        impl std::io::Read for BrokenPipeReader {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "pipe broken",
+                ))
+            }
+        }
+
         let token = "abcdef0123456789abcdef0123456789";
         let wrong_token = "11111111111111111111111111111111";
         let payload = serde_json::to_vec(&vec!["humoco://pay?to=did:key:zAlice"]).unwrap();
@@ -870,14 +949,34 @@ mod launch_tests {
             vec!["humoco://pay?to=did:key:zAlice".to_string()]
         );
 
-        // Wrong token rejected
+        // Wrong token, missing newline, and invalid JSON rejected
         assert!(parse_authenticated_ipc_frame(&valid_frame, wrong_token).is_none());
+        assert!(
+            parse_authenticated_ipc_frame(format!("HUMOCO_IPC_V1 {}", token).as_bytes(), token)
+                .is_none()
+        );
+        assert!(parse_authenticated_ipc_frame(
+            format!("HUMOCO_IPC_V1 {}\n{{not-json", token).as_bytes(),
+            token
+        )
+        .is_none());
+
         // Missing token (legacy header) rejected
         let mut legacy_frame = b"HUMOCO_IPC_V1\n".to_vec();
         legacy_frame.extend_from_slice(&payload);
         assert!(parse_authenticated_ipc_frame(&legacy_frame, token).is_none());
 
-        // > MAX_STARTUP_LAUNCH_ITEMS rejected
+        // Exact MAX_STARTUP_LAUNCH_ITEMS boundary is accepted; +1 is rejected
+        let exact_max: Vec<String> = (0..MAX_STARTUP_LAUNCH_ITEMS)
+            .map(|i| format!("humoco://pay?i={i}"))
+            .collect();
+        let mut max_frame = format!("HUMOCO_IPC_V1 {}\n", token).into_bytes();
+        max_frame.extend_from_slice(&serde_json::to_vec(&exact_max).unwrap());
+        assert_eq!(
+            parse_authenticated_ipc_frame(&max_frame, token).unwrap(),
+            exact_max
+        );
+
         let too_many: Vec<String> = (0..=MAX_STARTUP_LAUNCH_ITEMS)
             .map(|i| format!("humoco://pay?i={i}"))
             .collect();
@@ -885,7 +984,38 @@ mod launch_tests {
         big_frame.extend_from_slice(&serde_json::to_vec(&too_many).unwrap());
         assert!(parse_authenticated_ipc_frame(&big_frame, token).is_none());
 
-        // Bounded reader rejects oversized input and expired deadline
+        // Bounded reader accepts exact max_bytes, retries Interrupted, fails BrokenPipe, rejects oversized & expired deadline
+        let exact_bytes = vec![0x42u8; 64];
+        let mut exact_cursor = std::io::Cursor::new(exact_bytes.clone());
+        let read_exact = read_bounded_ipc_frame(
+            &mut exact_cursor,
+            64,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(read_exact, exact_bytes);
+
+        let mut interrupted_reader = InterruptedOnceReader {
+            data: b"resumed-payload".to_vec(),
+            offset: 0,
+            interrupted: false,
+        };
+        let resumed = read_bounded_ipc_frame(
+            &mut interrupted_reader,
+            64,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(resumed, b"resumed-payload");
+
+        let broken_err = read_bounded_ipc_frame(
+            &mut BrokenPipeReader,
+            64,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert_eq!(broken_err.kind(), std::io::ErrorKind::BrokenPipe);
+
         let mut cursor = std::io::Cursor::new(vec![b'a'; 128]);
         let err = read_bounded_ipc_frame(
             &mut cursor,
@@ -913,6 +1043,11 @@ mod launch_tests {
 
         let entry = format_linux_desktop_entry(r#"/opt/hu"mo\co/$bin/`x`/%f"#).unwrap();
         assert!(entry.contains(r#"Exec="/opt/hu\"mo\\co/\$bin/\`x\`/%%f" %u"#));
+
+        let plain = format_linux_desktop_entry("/opt/humoco/app").unwrap();
+        assert!(plain.starts_with("[Desktop Entry]\n"));
+        assert!(plain.contains("Exec=\"/opt/humoco/app\" %u\n"));
+        assert!(plain.contains("MimeType=x-scheme-handler/humoco;\n"));
     }
 }
 
