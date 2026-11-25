@@ -132,6 +132,18 @@ export type ParsedHumocoInput =
 const DEEPLINK_PATTERN =
   /(?<![A-Za-z0-9/._-])(humoco:\/\/(?:recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'`<>„“”‚‘’«»‹›)#]+)/i;
 
+function hasAllowedSyncSchemeOrHost(raw: string): boolean {
+  if (raw.includes('://')) {
+    return /^https?:\/\//i.test(raw);
+  }
+  // Reject non-HTTP URI schemes without slashes (e.g. javascript:, data:, mailto:, file:/...)
+  // while preserving bare host:port inputs like sync.example.org:8443 or localhost:8080.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) && !/^[a-zA-Z0-9.-]+:\d+(?:[/?#]|$)/.test(raw)) {
+    return false;
+  }
+  return true;
+}
+
 function compactSyncUrlForUri(raw: string): string {
   const trimmed = raw.trim();
   const withoutHttps = trimmed.replace(/^https:\/\//i, '');
@@ -153,7 +165,7 @@ export function buildContactUri({ did, name, syncUrls }: ContactCardParams): str
   if (syncUrls && syncUrls.length > 0) {
     const valid = syncUrls
       .map(s => s.trim())
-      .filter(s => !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) || /^https?:\/\//i.test(s))
+      .filter(s => s.length > 0 && hasAllowedSyncSchemeOrHost(s))
       .map(compactSyncUrlForUri)
       .filter(Boolean)
       .slice(0, 2);
@@ -228,7 +240,7 @@ export function parseContactCard(input: string): ParsedContactCard | null {
       const rawSync = searchParams.getAll('sync');
       const syncUrls = rawSync
         .map(s => s.trim())
-        .filter(s => s.length > 0 && (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) || /^https?:\/\//i.test(s)))
+        .filter(s => s.length > 0 && hasAllowedSyncSchemeOrHost(s))
         .map(s => normalizeSyncUrlInput(s))
         .filter(Boolean)
         .slice(0, 2);
@@ -573,6 +585,9 @@ export function normalizeSyncUrlInput(raw: string): string {
 
   const embeddedUrl = trimmed.match(/https?:\/\/[^\s<>"'`„“”‚‘’«»‹›]+/i);
   let s = embeddedUrl ? embeddedUrl[0].replace(/[.,;:!?)\]"'`„“”‚‘’«»‹›]+$/, '') : trimmed;
+  if (!hasAllowedSyncSchemeOrHost(s)) {
+    return '';
+  }
 
   if (!s.includes('://')) {
     s = 'https://' + s;
@@ -615,6 +630,21 @@ export function normalizeSyncUrlInput(raw: string): string {
     canonicalPath = `${cleanPath}/sync.php`;
   }
 
-  return `${scheme}${authority}${canonicalPath}`;
+  const normalized = `${scheme}${authority}${canonicalPath}`;
+  try {
+    const parsed = new URL(normalized);
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+      !parsed.hostname ||
+      parsed.username ||
+      parsed.password
+    ) {
+      return '';
+    }
+  } catch {
+    return '';
+  }
+
+  return normalized;
 }
 
