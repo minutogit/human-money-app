@@ -261,6 +261,9 @@ pub(crate) async fn check_revocations(
                                 && drop_pub_matches(&ps.drop_pub, &notice.drop_pub)
                             {
                                 apply_revocation_notice(ps, &notice, now_secs);
+                                if is_endpoint_revoked(&ps.status) {
+                                    ps.enabled = false;
+                                }
                                 revoked_own_syncs.push(FrontendSyncDescriptor {
                                     write_url: ps.write_url.clone(),
                                     read_url: ps.read_url.clone(),
@@ -1433,15 +1436,11 @@ pub async fn save_public_sync_impl(
                         )));
                     }
                     if crate::state::is_revocation_effective(existing, now_secs) {
-                        if !stored.status.eq_ignore_ascii_case("revoked")
-                            || stored.sunset_at.is_none()
-                        {
-                            stored.sunset_at = existing.sunset_at;
-                            stored.revocation_reason = existing.revocation_reason.clone();
-                            stored.replacement = existing.replacement.clone();
-                        }
                         stored.status = "revoked".to_string();
                         stored.enabled = false;
+                        stored.sunset_at = existing.sunset_at;
+                        stored.revocation_reason = existing.revocation_reason.clone();
+                        stored.replacement = existing.replacement.clone();
                     } else if existing.status.eq_ignore_ascii_case("deprecating")
                         && info_opt.is_none()
                     {

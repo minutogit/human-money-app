@@ -1076,6 +1076,10 @@ pub fn apply_revocation_notice<T: SyncRevocationFields>(
     notice: &crate::sync_client::SyncRevocationNotice,
     now_secs: u64,
 ) {
+    if is_revocation_effective(ep, now_secs) {
+        *ep.status_mut() = "revoked".to_string();
+        return;
+    }
     *ep.status_mut() = if now_secs >= notice.effective_at {
         "revoked".to_string()
     } else {
@@ -1128,7 +1132,6 @@ pub fn apply_revocation_notice_to_address_book(
 ) -> bool {
     let old_norm = crate::services::common::normalize_sync_url(old_read_url);
     let notice_pub = notice.drop_pub.trim().to_lowercase();
-    let is_revoked_now = now_secs >= notice.effective_at;
     let mut updated = false;
 
     for contact in address_book.contacts.values_mut() {
@@ -1168,8 +1171,9 @@ pub fn apply_revocation_notice_to_address_book(
             {
                 updated = true;
             }
+            let is_revoked_now = is_endpoint_revoked(&ep.status);
 
-            if let Some(ref rep) = notice.replacement {
+            if let Some(ref rep) = ep.replacement {
                 let rep_r = crate::services::common::normalize_sync_url(&rep.read_url);
                 let rep_w = crate::services::common::normalize_sync_url(&rep.write_url);
                 let ep_r = crate::services::common::normalize_sync_url(&ep.read_url);
