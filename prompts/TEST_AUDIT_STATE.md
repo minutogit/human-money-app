@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `eb5ad08`
-- **Total Test Files:** 165 | **Total Test Functions:** 1562
+- **Updated at HEAD:** `961e6ec`
+- **Total Test Files:** 165 | **Total Test Functions:** 1568
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -147,14 +147,14 @@
 | `src/components/transfer/__tests__/SendView.test.tsx` | P3 | 27 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 27/27 (975 pass)`, `tsc/lint 0`; replaced `toBeDefined()` & `amountInput!`; Revert-Red `SendView.tsx` |
 | `src/components/transfer/__tests__/TransactionHistoryView.test.tsx` | P3 | 13 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 13/13 (975 pass)`, `tsc/lint 0`; replaced `toBeDefined()`/`!`, empty CTA/`getHistory` error & CSV cancel; Revert-Red `TransactionHistoryView.tsx` |
 | `src/components/transfer/__tests__/TransferSuccessView.test.tsx` | P3 | 6 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 6/6 (975 pass)`, `tsc/lint 0`; save/cancel skip `writeFile` + Finish `onDone` & failed redeposit error; Revert-Red `TransferSuccessView.tsx` |
-| `src/components/ui/__tests__/HelpModal.test.tsx` | P3 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/ui/__tests__/InfoHint.test.tsx` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/ui/__tests__/NewPrimitives.test.tsx` | P3 | 9 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/ui/__tests__/PageLayout.test.tsx` | P3 | 21 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/ui/__tests__/QrScannerModal.test.tsx` | P3 | 2 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/ui/__tests__/TrustBadge.test.tsx` | P3 | 9 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/ui/__tests__/UiModePrimitives.test.tsx` | P3 | 6 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/ui/__tests__/UiPrimitives.test.tsx` | P3 | 28 | 0/0/0 | ⚪ Pending | — | — |
+| `src/components/ui/__tests__/HelpModal.test.tsx` | P3 | 5 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 5/5 (981 pass)`, `tsc/lint 0`; `try/finally` `dispatchSpy` + exact `CustomEvent.detail` & closed/reopen reset; Revert-Red `HelpModal.tsx` |
+| `src/components/ui/__tests__/InfoHint.test.tsx` | P3 | 4 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 4/4 (981 pass)`, `tsc/lint 0`; inline/banner variant assertions + unknown topic null guard; Revert-Red `InfoHint.tsx` |
+| `src/components/ui/__tests__/NewPrimitives.test.tsx` | P3 | 10 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 10/10 (981 pass)`, `tsc/lint 0`; `CopyButton` `stopPropagation` vs bubbling; Revert-Red `CopyButton.tsx` |
+| `src/components/ui/__tests__/PageLayout.test.tsx` | P3 | 21 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 21/21 (981 pass)`, `tsc/lint 0`; fixed placebo `helpTopic` test to open `HelpModal` & assert omission when absent; Revert-Red `PageOptionsPanel.tsx` |
+| `src/components/ui/__tests__/QrScannerModal.test.tsx` | P3 | 3 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 3/3 (981 pass)`, `tsc/lint 0`; closed render/Close btn, clipboard errors & `BarcodeDetector`/`bitmap.close()` QR image scan; Revert-Red `QrScannerModal.tsx` |
+| `src/components/ui/__tests__/TrustBadge.test.tsx` | P3 | 11 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 11/11 (981 pass)`, `tsc/lint 0`; popover toggle-close, `binaryTrust` mode & `blockedByOffender` precedence invariant; Revert-Red `TrustBadge.tsx` |
+| `src/components/ui/__tests__/UiModePrimitives.test.tsx` | P3 | 6 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 6/6 (981 pass)`, `tsc/lint 0`; `PresetOrCustom` `onChange` & `aria-pressed` state checks; Revert-Red `PresetOrCustom.tsx` |
+| `src/components/ui/__tests__/UiPrimitives.test.tsx` | P3 | 28 | 0/0/0 | 🟢 Verified | `961e6ec` | `scan 0/0/0/0`, `vitest 28/28 (981 pass)`, `tsc/lint 0`; `AlertBanner` `danger`/no-dismiss & `PageErrorState` no-retry checks; Revert-Red `AlertBanner.tsx` |
 | `src/components/voucher/__tests__/ExportSigningRequestModal.test.tsx` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/voucher/__tests__/TimelineSection.test.tsx` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/voucher/__tests__/VoucherBasicsForm.test.tsx` | P3 | 5 | 0/0/0 | 🟢 Verified | `eb5ad08` | `scan 0/0/0/0`, `vitest 5/5 (975 pass)`, `tsc/lint 0`; replaced `toBeDefined()`, callbacks/error border & expert validity change; Revert-Red `VoucherBasicsForm.tsx` |
