@@ -1,8 +1,8 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `3ea9735`
-- **Total Test Files:** 165 | **Total Test Functions:** 1522
+- **Updated at HEAD:** `75f3986`
+- **Total Test Files:** 165 | **Total Test Functions:** 1538
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
@@ -126,13 +126,13 @@
 | `src-tauri/src/lib.rs` | P3 | 6 | 0/0/0 | 🟢 Verified | `3ea9735` | `scan 0/0/0/0`, `6/6` + `445/445` lib, `clippy` clean; `TempDirGuard` replaces `remove_dir_all` discards, boundary/size/`constant_time_eq`/`Interrupted`+`BrokenPipe`/desktop-entry checks; `cargo mutants` `55/55` testable caught (`2 unviable`, `3` equiv: line 298 wall-clock, line 282 JSON leading `\n`, line 157 early-out `--` prefix) |
 | `src-tauri/src/models/error.rs` | P3 | 11 | 0/0/0 | 🟢 Verified | `3ea9735` | `scan 0/0/0/0`, `11/11` + `445/445` lib, `clippy` clean; Fail-First RED->GREEN Bug #14 `c1fcda1` `extract_two_labeled_values` field-order fix + `MarketError`/`WotError`/`SyncClientError`/`AppFacadeError`/`classify_error` matrix; `cargo mutants` `45/45` non-equiv caught (`7 unviable`, `6` equivalent `From` arms) |
 | `src-tauri/src/state/mod.rs` | P3 | 0 | 0/0/0 | 🟢 Verified | `545cb50` | `0 inline tests; SyncWakeRequest::merge|is_empty & app_state_err covered by verified sibling state/tests.rs; cargo mutants 19/19 viable caught (1 unviable)` |
-| `src/__tests__/AppLaunchQueue.test.tsx` | P3 | 4 | 0/0/0 | ⚪ Pending | — | — |
-| `src/__tests__/beginnerFlows.test.tsx` | P3 | 8 | 0/0/0 | ⚪ Pending | — | — |
-| `src/__tests__/uiModeLint.test.ts` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/contacts/__tests__/AddContactModal.test.tsx` | P3 | 10 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/contacts/__tests__/AddressBook.test.tsx` | P3 | 23 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/contacts/__tests__/ContactDialog.test.tsx` | P3 | 10 | 0/0/0 | ⚪ Pending | — | — |
-| `src/components/contacts/__tests__/TrustLevelRadioCards.test.tsx` | P3 | 6 | 0/0/0 | ⚪ Pending | — | — |
+| `src/__tests__/AppLaunchQueue.test.tsx` | P3 | 7 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 7/7 (98/98 files, 951/951 pass)`, `tsc/lint 0`; covered `recovery-reply`, card `accepted`/`rejected_offender`/auth-cancel, `GuardianReleaseModal` `recovery-req` & unreadable file; Revert-Red `App.tsx` |
+| `src/__tests__/beginnerFlows.test.tsx` | P3 | 8 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 8/8 (951 pass)`, `tsc/lint 0`; fixed `unmountChecklist`, `getBackupStatus`, `patchUiPreferences` persistence & Task 7 confirm dialog / negative `create_voucher`; Revert-Red `TechId.tsx` |
+| `src/__tests__/uiModeLint.test.ts` | P3 | 2 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 2/2 (951 pass)`, `tsc/lint 0`; positive baseline `files.length > 50`, allowlist existence check & escape-hatch regex test; Revert-Red `TrustLevelRadioCards.tsx` `useUiMode` |
+| `src/components/contacts/__tests__/AddContactModal.test.tsx` | P3 | 15 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 15/15 (951 pass)`, `tsc/lint 0`; own-DID block, `humoco://contact` multi-word name+syncs, H1 `hmc_grant_*` redaction, 4 rejection statuses, empty paste & stale unmount; Revert-Red `AddContactModal.tsx` |
+| `src/components/contacts/__tests__/AddressBook.test.tsx` | P3 | 25 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 25/25 (951 pass)`, `tsc/lint 0`; fixed stale `get_drop_overview_status` mock -> `get_sync_overview_status`, added delete cancel & error paths; Revert-Red `WotNetworkOptionsPanel.tsx` |
+| `src/components/contacts/__tests__/ContactDialog.test.tsx` | P3 | 13 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 13/13 (951 pass)`, `tsc/lint 0`; covered `isOpen=false`, `probePublicSync` error, cancel sync-delete & rejected `onSave` error state; Revert-Red `ContactDialog.tsx` `isExactSelf` |
+| `src/components/contacts/__tests__/TrustLevelRadioCards.test.tsx` | P3 | 8 | 0/0/0 | 🟢 Verified | `75f3986` | `scan 0/0/0/0`, `vitest 8/8 (951 pass)`, `tsc/lint 0`; removed `.closest('button')!` & added radiogroup `aria-checked`, `idPrefix`, `onChange(null)` & `allowedLevels+allowUnrated`; Revert-Red `TrustLevelRadioCards.tsx` |
 | `src/components/send/__tests__/PrivacyToggle.test.tsx` | P3 | 3 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/settings/__tests__/SettingsView.test.tsx` | P3 | 16 | 0/0/0 | ⚪ Pending | — | — |
 | `src/components/shell/__tests__/GlobalFileDropZone.test.tsx` | P3 | 1 | 0/0/0 | ⚪ Pending | — | — |
